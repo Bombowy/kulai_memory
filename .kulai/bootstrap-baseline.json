@@ -1,0 +1,131 @@
+{
+  "files": [
+    {
+      "content_sha256": "17a1fea138019b914b3b56222a0e88373f44a18db02433fce2890b94bb7a4e17",
+      "git_mode": "100644",
+      "relative_path": ".gitignore"
+    },
+    {
+      "content_sha256": "68551058eb14fb50e3d76c15cd2a607ef7bb73f7490cd811eb19cf61eb8fef2a",
+      "git_mode": "100644",
+      "relative_path": ".gitmodules"
+    },
+    {
+      "content_sha256": "d65e663e2451512167f91902ea8e6ba2a5c79cf09b9b10f90dbdd40be2084a5e",
+      "git_mode": "100644",
+      "relative_path": ".kulai/migrations.json"
+    },
+    {
+      "content_sha256": "671e0ee0ae91101a4f417e2d28472161f441662a79bf9659c79845e869901a47",
+      "git_mode": "100644",
+      "relative_path": "README.md"
+    },
+    {
+      "content_sha256": "10b08c6118c5cd61d09608357e01d44f2a6e24ffa8990cb776ecf569de1720dd",
+      "git_mode": "100644",
+      "relative_path": "backend/.env.example"
+    },
+    {
+      "content_sha256": "78253b62125ae1b9475ba7145dfa681434222ddd98fcb9cdb09f11a87cdd755e",
+      "git_mode": "100644",
+      "relative_path": "backend/README.md"
+    },
+    {
+      "content_sha256": "77720a47a1ca4da8a4603b94a6dee27da971c92d645be56c8f281dd3364e1444",
+      "git_mode": "100644",
+      "relative_path": "backend/alembic.ini"
+    },
+    {
+      "content_sha256": "3fcd9c608f21ff8e5da7165a7974275843e29f7063889027371fdc37ab20e563",
+      "git_mode": "100644",
+      "relative_path": "backend/migrations/env.py"
+    },
+    {
+      "content_sha256": "6d554cb537d31508c470023f15e6bb018a1772c1707230dee829b60d80087a9e",
+      "git_mode": "100644",
+      "relative_path": "backend/migrations/script.py.mako"
+    },
+    {
+      "content_sha256": "803b94e00216586cbd8cedda89f5e032f2c8c24d82905b333b193430b89bd720",
+      "git_mode": "100644",
+      "relative_path": "backend/migrations/versions/kvectorstorepg_0001_initial.py"
+    },
+    {
+      "content_sha256": "fbd163a381998795445bcbe609fd3dd98a18dd8f173230549383039eb2584653",
+      "git_mode": "100644",
+      "relative_path": "backend/pyproject.toml"
+    },
+    {
+      "content_sha256": "16e86d588e15a7e43d0599cb290d4df47699cadeaadec4ebc7d3df27062be318",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/__init__.py"
+    },
+    {
+      "content_sha256": "7e0d0dc3d27db7c570de5388473a37453d4ef026ae92605922c80f827d2de070",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/api/__init__.py"
+    },
+    {
+      "content_sha256": "ae6e4f64a9887a88d43a187e61c01955fe1fab3777c0e6275f1203454d1a85fd",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/api/health.py"
+    },
+    {
+      "content_sha256": "4d86599259b9b109f87973e95ee43e6f046c2958176e6a87635905b3ca75aa50",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/app_factory.py"
+    },
+    {
+      "content_sha256": "ded71f9f9f551dbd2ec867e715c1636eb6fe730c1f42fdc09e7de40e78188ca6",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/deployment.py"
+    },
+    {
+      "content_sha256": "19f4b040eb1f0ba0d6480b7a8cec7b1b626f64d66ea636e2e6d71a4fafe07f87",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/main.py"
+    },
+    {
+      "content_sha256": "53f86b388589d653778e3f5bfe345b545a83bd8a9fc1ae3a4871ccc5625c423a",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/orm_models.py"
+    },
+    {
+      "content_sha256": "c5165406b2c18992ba4c91c05acf1af303cc21fd4e03201f0d80dc222ba720a1",
+      "git_mode": "100644",
+      "relative_path": "backend/src/kulai_memory/settings.py"
+    },
+    {
+      "content_sha256": "cbc29f40d274eab58735b7e94355ce4432b7db8064e9190a334507782887dd71",
+      "git_mode": "100644",
+      "relative_path": "backend/tests/test_app.py"
+    },
+    {
+      "content_sha256": "d66f4ffda421763a44ccf8755c2da2b15cf5371258812310fd2364e1711c1a20",
+      "git_mode": "100644",
+      "relative_path": "compose.yaml"
+    },
+    {
+      "content_sha256": "25a3ce2c8c5481c3b24bc738d2e7a02d409dd1222e4b7f293dc481552d2ca0a7",
+      "git_mode": "100644",
+      "relative_path": "frontend/README.md"
+    },
+    {
+      "content_sha256": "708ffa6b098b8465dd1f9544527cbac18071002a9c4313faad9e5360ab8facbd",
+      "git_mode": "100644",
+      "relative_path": "kulai.project.json"
+    },
+    {
+      "content_sha256": "2782b3956e8fb89c51bf9640a3fefb2f185612b4a4f5bdd4d5b4cfe07754577d",
+      "git_mode": "100644",
+      "relative_path": "scripts/dev.py"
+    },
+    {
+      "content_sha256": "b602be309e7aa36cde0c82deacf15a124ab80bcf28f0de83ed8230f951330b66",
+      "git_mode": "100644",
+      "relative_path": "scripts/migrate.py"
+    }
+  ],
+  "gitlink_commit": "aa5b4bc93d3b05cd84fcf681f54d848f74d630c5",
+  "schema_version": 1
+}

@@ -1,0 +1,3 @@
+[submodule "vendor/kulai_modules"]
+	path = vendor/kulai_modules
+	url = https://github.com/Bombowy/KulAI_modules.git

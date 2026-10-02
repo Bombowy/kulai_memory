@@ -1,0 +1,36 @@
+"""Environment-backed host application settings."""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseSettings):
+    """Minimal settings required by the Task 8 runtime."""
+
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_ROOT / ".env", env_prefix="", extra="ignore"
+    )
+
+    app_name: str = "KulAI Memory"
+    app_env: str = "dev"
+    debug: bool = False
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_user: str = "kulai"
+    db_password: str = "replace-me"
+    db_name: str = "kulai_memory"
+    database_url: str | None = None
+    kulai_vector_dimension: int | None = Field(default=None, gt=0)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return one immutable-by-convention settings snapshot."""
+
+    return Settings()

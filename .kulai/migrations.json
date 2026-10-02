@@ -1,0 +1,25 @@
+{
+  "contributors": [
+    "kulai-vector-store-pgvector"
+  ],
+  "effective_head": "kvectorstorepg_0001",
+  "generated_merge_revision": null,
+  "graph_fingerprint": "63d49b42e88ed475bdf83983e34ef4b4c9a5615eb83d1f9b401de194ccdcc1f3",
+  "kulai_commit": "aa5b4bc93d3b05cd84fcf681f54d848f74d630c5",
+  "required_configuration": [
+    {
+      "alembic_x_argument": "kulai_vector_dimension",
+      "environment": "KULAI_VECTOR_DIMENSION",
+      "secret": false,
+      "value_type": "positive_integer"
+    }
+  ],
+  "revision_count": 1,
+  "revision_fingerprints": {
+    "kvectorstorepg_0001": "803b94e00216586cbd8cedda89f5e032f2c8c24d82905b333b193430b89bd720"
+  },
+  "schema_version": 1,
+  "source_heads": [
+    "kvectorstorepg_0001"
+  ]
+}

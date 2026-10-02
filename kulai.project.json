@@ -1,0 +1,26 @@
+{
+  "kulai": {
+    "commit": "aa5b4bc93d3b05cd84fcf681f54d848f74d630c5",
+    "repository_url": "https://github.com/Bombowy/KulAI_modules.git",
+    "requested_ref": "main"
+  },
+  "modules": {
+    "directly_selected": [
+      "kulai-db",
+      "kulai-fastapi-core",
+      "kulai-fastapi-health",
+      "kulai-provider-ollama",
+      "kulai-provider-ollama-embeddings",
+      "kulai-provider-whisper",
+      "kulai-rag",
+      "kulai-tasks",
+      "kulai-vector-store-pgvector"
+    ]
+  },
+  "project": {
+    "name": "KulAI Memory",
+    "slug": "kulai_memory"
+  },
+  "schema_version": 1,
+  "source_template": "blank"
+}
