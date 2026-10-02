@@ -1,296 +1,119 @@
-Raport: TASK 2/7 — KulAI Memory domain, PostgreSQL persistence i pierwsza migracja hosta
-Data: 2026-10-02 (Europe/Warsaw)
-
-DECYZJA: OK DO COMMITA
-
-1. Stan zastany
-
-- Repozytorium przed zmianami było czyste na main, zgodnym z origin/main.
-- Vendor pozostał na:
-  d0142285557ed220b75cfab436fb40f1c63a15e9 vendor/kulai_modules
-- TASK 1 dostarczył transport-neutralny VoiceSession, EventSink i katalog eventów.
-- Application core nie miał domeny Memory ani portu persistence.
-- Host rejestrował wyłącznie model kulai_vector_records z modułu pgvector.
-- .kulai/migrations.json opisuje generowany graf reusable modules. Nie zmieniono go.
-- Nie zmieniono vendora ani istniejącej migracji kvectorstorepg_0001.
-
-2. Rzeczywisty stan Alembica przed implementacją
-
-- Początkowy scripts/migrate.py heads:
-  kvectorstorepg_0001
-- Początkowy scripts/migrate.py current:
-  kvectorstorepg_0001 (head)
-- Diagnostyka READ ONLY przed zmianami:
-  alembic_version istnieje;
-  kulai_vector_records istnieje;
-  extension vector istnieje w wersji 0.8.6;
-  alembic_version.version_num = kvectorstorepg_0001.
-
-3. Memory domain
-
-- Memory jest niemutowalnym modelem Pydantic niezależnym od transportu i SQLAlchemy.
-- Pola:
-  id: UUID, generowany przez uuid4;
-  content: str;
-  source_kind: MemorySourceKind;
-  session_id: UUID | None;
-  metadata: dict[str, JsonValue];
-  created_at: timezone-aware datetime znormalizowany do UTC.
-- MemorySourceKind ma obecnie semantyczną wartość voice. Desktop i mobile nie są
-  rodzajami pamięci.
-- content odrzuca pusty i whitespace-only input, ale zachowuje właściwą treść wraz
-  z jej niepustymi whitespace.
-- metadata wymaga obiektu JSON, stringowych kluczy, rekursywnie zgodnych wartości
-  oraz skończonych liczb.
-- Nie dodano updated_at, ponieważ obecny use case nie ma operacji update.
-- Nie dodano embeddingu, klasyfikacji, topics, sentiment ani innych pól przyszłych.
-
-4. Publiczne application API
-
-- Memory
-- MemorySourceKind
-- MemoryRepository
-- MemoryService
-- MemoryPersistenceError
-
-MemoryService:
-
-  MemoryService(repository=repository)
-  await create_memory(
-      content=...,
-      source_kind="voice",
-      session_id=...,
-      metadata=...,
-  )
-  await get_memory(memory_id)
-  await list_recent_memories(limit=50)
-
-- list_recent_memories przyjmuje limit od 1 do 100.
-- Wyniki recent są uporządkowane po created_at DESC i id DESC.
-- VoiceSession i kontrakt eventów z TASK 1 nie zostały zmienione.
-- Nie podłączono jeszcze transcript.final do MemoryService.
-
-5. MemoryRepository contract
-
-Transport-neutralny runtime-checkable Protocol definiuje:
-
-  async create(memory: Memory) -> Memory
-  async get_by_id(memory_id: UUID) -> Memory | None
-  async list_recent(limit: int) -> tuple[Memory, ...]
-
-Port operuje wyłącznie na domenowym Memory. Nie ujawnia AsyncSession, ORM ani
-obiektów SQLAlchemy.
-
-6. PostgreSQL repository
-
-- PostgresMemoryRepository znajduje się poza application core w
-  kulai_memory.persistence.
-- Konstruktor przyjmuje caller-owned AsyncSession.
-- create wykonuje add + flush.
-- get_by_id i list_recent używają SQLAlchemy async select.
-- ORM MemoryDb jest mapowany na domenowy Memory przed zwróceniem wyniku.
-- Błędy infrastruktury są mapowane na bezpieczny MemoryPersistenceError, a
-  oryginalny wyjątek pozostaje w __cause__ dla loggera/hosta.
-- Adapter nie wykonuje commit ani rollback.
-- Dodano bezpośrednie zależności hosta:
-  kulai_db>=0.1.0
-  sqlalchemy[asyncio]>=2.0,<3.0
-- Nie instalowano nowych bibliotek; zależności były już dostępne w .venv.
-
-7. Transaction ownership
-
-Zastosowano kanoniczny wzorzec kulai_db:
-
-  caller/use case
-      -> AsyncSession transaction
-      -> MemoryService
-      -> PostgresMemoryRepository
-      -> flush
-      -> caller commit/rollback
-
-Repository i service nie ukrywają granicy transakcji.
-
-8. Schema memories
-
-Tabela memories:
+# TASK 2.5C — Final reproducibility guard
 
-- id UUID PRIMARY KEY, NOT NULL, bez server-side generatora;
-- content TEXT NOT NULL;
-- source_kind VARCHAR(32) NOT NULL;
-- session_id UUID NULL;
-- metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
-- created_at TIMESTAMPTZ NOT NULL DEFAULT now().
+Data wykonania: 2026-10-02
+Repozytorium: `C:\Bombowy\Projekty\kulai_memory`
+Branch: `main`
 
-Indeksy:
+## Cel i zakres
 
-- memories_pkey na id;
-- ix_memories_created_at na created_at, wynikający z list_recent.
+Rozszerzono istniejący test:
 
-Nie ma kolumny embedding ani FK do kulai_vector_records.
+`tests/test_reproducibility.py::test_current_manifest_matches_gitlink`
 
-9. ORM registration
+Zmiana dotyczy wyłącznie guardu reprodukowalności. Nie zmieniono vendora, SHA manifestu, migracji, bazy danych, backup/restore ani kodu STT. Nie wykonano commit ani push.
 
-- MemoryDb korzysta ze wspólnego kulai_db.Base.
-- kulai_memory.orm_models.register_orm_models() jawnie rejestruje hostowy MemoryDb,
-  a następnie zachowuje dotychczasową rejestrację pgvector z dimension=1024.
-- Base.metadata zawiera memories i kulai_vector_records.
-- Nie użyto Base.metadata.create_all().
-
-10. Migracja hosta
-
-- Plik:
-  backend/migrations/versions/kulai_memory_0001_create_memories.py
-- revision:
-  kulai_memory_0001
-- down_revision:
-  kvectorstorepg_0001
-- branch_labels:
-  None
-- Upgrade tworzy tylko memories i ix_memories_created_at.
-- Downgrade jest zdefiniowany w source, ale nie został wykonany.
-- Nie zmieniono kvectorstorepg_0001.
-- alembic check po upgrade:
-  No new upgrade operations detected.
-
-11. Dodane i zmienione pliki
-
-- backend/src/kulai_memory/application/memory.py
-  Memory domain, MemorySourceKind, MemoryService i bezpieczny błąd.
-- backend/src/kulai_memory/application/ports.py
-  MemoryRepository Protocol.
-- backend/src/kulai_memory/application/__init__.py
-  Publiczne eksporty Memory API.
-- backend/src/kulai_memory/persistence/__init__.py
-  Publiczne API adaptera.
-- backend/src/kulai_memory/persistence/models.py
-  Prywatny model MemoryDb.
-- backend/src/kulai_memory/persistence/repository.py
-  PostgresMemoryRepository.
-- backend/src/kulai_memory/orm_models.py
-  Rejestracja modelu hosta oraz istniejącego pgvector.
-- backend/migrations/versions/kulai_memory_0001_create_memories.py
-  Pierwsza migracja hosta.
-- backend/tests/test_memory.py
-  Testy domeny, service i fake repository.
-- backend/tests/test_memory_persistence.py
-  Testy adaptera, transaction ownership, ORM i grafu migracji.
-- backend/tests/test_application_boundaries.py
-  Rozszerzona ochrona application core przed importami infrastruktury.
-- backend/pyproject.toml
-  Jawne zależności persistence.
-- backend/README.md
-  Krótka dokumentacja Memory i transakcji.
-- wynik.txt
-  Niniejszy raport.
-
-12. Focused tests
-
-Domain/service/boundary:
-
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pytest tests/test_memory.py tests/test_application_boundaries.py -q
-
-Wynik:
-  16 passed in 0.13s
-
-Persistence/ORM/Alembic:
-
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pytest tests/test_memory_persistence.py -q
-
-Wynik końcowy:
-  5 passed in 0.54s
-
-13. Pełne testy host application
-
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pytest tests -q
-
-Wynik:
-  30 passed, 1 warning in 0.63s
-
-Warning pochodzi z istniejącego starlette.testclient i deprecated aliasu
-anyio.abc.BlockingPortal. Nie pochodzi z Memory domain ani persistence.
-
-14. pip check
-
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pip check
-
-Wynik:
-  No broken requirements found.
-
-15. git diff --check
-
-- Kod wyjścia: 0.
-- Brak błędów whitespace.
-- Git wyświetla wyłącznie informacje o przyszłej konwersji LF do CRLF dla
-  istniejących śledzonych plików.
-
-16. Realna migracja lokalnego PostgreSQL
-
-- Początkowy head przed dodaniem migracji:
-  kvectorstorepg_0001
-- Początkowy DB current:
-  kvectorstorepg_0001 (head)
-- heads po dodaniu migracji, przed upgrade:
-  kulai_memory_0001
-- current bezpośrednio przed upgrade:
-  kvectorstorepg_0001
-- scripts/migrate.py upgrade:
-  kod wyjścia 0, sukces
-- current po upgrade:
-  kulai_memory_0001 (head)
-
-Nie wykonano downgrade, resetu, create_all, usuwania tabel ani danych.
-
-17. Realny PostgreSQL smoke test
-
-- Użyto istniejącego backend/.env i kulai_db.
-- Utworzono Memory przez MemoryService i PostgresMemoryRepository.
-- Potwierdzono get_by_id oraz obecność w list_recent.
-- Repository wykonało flush w jawnej transakcji callera.
-- Transakcję diagnostyczną wycofano.
-- Osobna sesja potwierdziła, że testowego rekordu nie ma po rollback.
-- Nie pozostawiono sztucznego Memory w bazie.
-- Nie pokazano hasła ani URL bazy.
-
-18. READ-ONLY verification po migracji
-
-W transakcji SET TRANSACTION READ ONLY potwierdzono:
-
-- alembic_version = kulai_memory_0001;
-- memories istnieje;
-- id = uuid, NOT NULL, primary key;
-- content = text, NOT NULL;
-- source_kind = character varying/varchar, NOT NULL;
-- session_id = uuid, NULL;
-- metadata_json = jsonb, NOT NULL, default '{}'::jsonb;
-- created_at = timestamptz, NOT NULL, default now();
-- indeksy: ix_memories_created_at, memories_pkey;
-- kulai_vector_records nadal istnieje;
-- extension vector nadal istnieje w wersji 0.8.6.
-
-19. Końcowy git status
-
-  M backend/README.md
-  M backend/pyproject.toml
-  M backend/src/kulai_memory/application/__init__.py
-  M backend/src/kulai_memory/application/ports.py
-  M backend/src/kulai_memory/orm_models.py
-  M backend/tests/test_application_boundaries.py
-  M wynik.txt
-  ?? backend/migrations/versions/kulai_memory_0001_create_memories.py
-  ?? backend/src/kulai_memory/application/memory.py
-  ?? backend/src/kulai_memory/persistence/
-  ?? backend/tests/test_memory.py
-  ?? backend/tests/test_memory_persistence.py
-
-- vendor/kulai_modules: bez zmian.
-- Nie wykonano commit ani push.
-
-20. Zakres pozostawiony na kolejne taski
-
-- TASK 3: STT/Whisper i późniejsze wywołanie MemoryService po transcript.final.
-- TASK 5: embedding generation, zapis do kulai_vector_records, stabilny namespace
-  memories i mapowanie str(Memory.id) -> record_id.
-- Brak automatycznej integracji VoiceSession z persistence.
-- Brak HTTP/WebSocket/UI, semantic search, RAG, klasyfikacji i kolejek.
-
-OK DO COMMITA
+## Poprzedni invariant
+
+Test sprawdzał jedynie:
+
+```text
+manifest current pin == gitlink commit
+```
+
+Nie sprawdzał rzeczywistego `HEAD` checkoutu `vendor/kulai_modules` ani lokalnych zmian w jego working tree. Editable/local source mógł więc wskazywać inny commit lub zawierać niezarejestrowane modyfikacje mimo zgodności manifestu z gitlinkiem.
+
+## Nowy invariant
+
+Test deterministycznie wymaga:
+
+```text
+manifest current pin
+    ==
+gitlink commit zapisany w indeksie hosta
+    ==
+rzeczywisty vendor HEAD
+
+oraz
+
+vendor working tree == clean
+```
+
+Test wykonuje następujące kontrole:
+
+1. `git ls-files --stage -- vendor/kulai_modules` musi zwrócić wpis vendora.
+2. Wpis musi mieć tryb Git `160000`, czyli być prawdziwym gitlinkiem.
+3. Ścieżka z indeksu musi być dokładnie `vendor/kulai_modules`.
+4. Katalog vendora musi istnieć.
+5. `git -C vendor/kulai_modules rev-parse --show-toplevel` musi wskazywać sam katalog vendora, co zapobiega przypadkowemu odziedziczeniu nadrzędnego repo przy niezainicjalizowanym submodule.
+6. `kulai.project.json["kulai"]["commit"]` musi być równy SHA gitlinka.
+7. `git -C vendor/kulai_modules rev-parse HEAD` musi być równy temu samemu SHA.
+8. `git -C vendor/kulai_modules status --porcelain` musi zwrócić pusty wynik, również dla plików nieśledzonych.
+
+Brak Git, brak katalogu, niezainicjalizowany submodule, błędny tryb, rozbieżność SHA lub brudny vendor powodują czytelny assertion/error. Test nie skipuje brakującego vendora i nie hardkoduje żadnego SHA.
+
+## Rzeczywisty stan vendora
+
+- manifest SHA: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
+- gitlink mode: `160000`;
+- gitlink SHA: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
+- vendor HEAD: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
+- vendor top-level: `C:/Bombowy/Projekty/kulai_memory/vendor/kulai_modules`;
+- `git status --porcelain` vendora: pusty;
+- vendor working tree clean: TAK.
+
+Nowy invariant jest spełniony.
+
+## Zmienione pliki
+
+- `tests/test_reproducibility.py` — rozszerzony guard manifest/gitlink/checkout/clean working tree oraz czytelne błędy poleceń Git.
+- `wynik.txt` — niniejszy raport TASK 2.5C.
+
+Pozostałe niezacommitowane pliki po TASK 2.5B zachowano bez niezwiązanych zmian.
+
+## Walidacja
+
+Użyty interpreter:
+
+`C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe`
+
+Wyniki:
+
+- focused `python -m pytest tests/test_reproducibility.py -q`: `5 passed in 0.39s`;
+- wszystkie root tests `python -m pytest tests -q`: `37 passed in 1.09s`;
+- wszystkie backend tests `python -m pytest backend/tests -q`: `30 passed, 2 skipped, 1 warning in 0.78s`;
+- backend warning: istniejące ostrzeżenie deprecation Starlette TestClient/anyio;
+- `python -m pip check`: `No broken requirements found.`;
+- `git diff --check`: PASS; widoczne są wyłącznie informacyjne ostrzeżenia Git o przyszłej konwersji LF do CRLF;
+- vendor gitlink/submodule status: `d0142285557ed220b75cfab436fb40f1c63a15e9`, clean.
+
+## Końcowy stan Git
+
+Branch pozostaje `main`, zgodny z `origin/main` na ostatnim commitcie. Nie wykonano commit ani push.
+
+Zmodyfikowane tracked files odziedziczone z TASK 2.5B/C:
+
+- `.gitignore`
+- `README.md`
+- `backend/README.md`
+- `compose.yaml`
+- `kulai.project.json`
+- `wynik.txt`
+
+Nowe/untracked paths odziedziczone z TASK 2.5B/C:
+
+- `backend/src/kulai_memory/database_safety.py`
+- `backend/tests/integration/`
+- `docs/`
+- `scripts/db_backup.py`
+- `scripts/db_backup_restore_drill.py`
+- `scripts/db_doctor.py`
+- `scripts/db_restore_smoke.py`
+- `scripts/postgres.py`
+- `tests/test_database_tools.py`
+- `tests/test_reproducibility.py`
+
+Nie rozpoczęto TASK 3A.
+
+## Decyzja
+
+**OK DO COMMITA**

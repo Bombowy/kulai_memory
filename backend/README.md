@@ -41,3 +41,15 @@ Host package: `kulai_memory`.
 The core FastAPI runtime and `/health` endpoint are generated. KulAI modules remain pinned by `../kulai.project.json` and the `../vendor/kulai_modules` submodule. Auth and business wiring are not generated yet.
 
 ASGI entry point: `kulai_memory.main:app`. Copy `backend/.env.example` to `backend/.env` before local runtime. After Studio bootstrap, run the root `scripts/dev.py` with the project `.venv` Python.
+
+Local PostgreSQL is started only through `scripts/postgres.py`, which passes
+`backend/.env` explicitly to Compose. `scripts/db_doctor.py` performs read-only
+schema and revision checks. `scripts/db_backup.py` creates a full PostgreSQL
+custom-format dump, and `scripts/db_restore_smoke.py` restores it only into a
+randomly named, process-owned temporary database. The canonical development
+server is PostgreSQL 18. `scripts/db_backup_restore_drill.py` proves a non-empty
+round trip using owned source and restore databases without writing fixtures to
+the configured main database. See `../docs/DATA_SAFETY.md` for the invariants
+that persistence, embeddings, and future RAG work must preserve.
+`DATABASE_URL` must remain unset for the canonical local Compose workflow so
+the backend and container use the same `DB_*` values from `backend/.env`.

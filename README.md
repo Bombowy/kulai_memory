@@ -5,10 +5,15 @@ KulAI Studio project `kulai_memory`.
 ## Reproducibility
 
 - Source template: `blank`
-- Pinned KulAI commit: `aa5b4bc93d3b05cd84fcf681f54d848f74d630c5`
+- Current pinned KulAI commit: `d0142285557ed220b75cfab436fb40f1c63a15e9`
 - KulAI monorepo submodule: `vendor/kulai_modules`
 
-The manifest stores the final direct selection and exact KulAI commit. The dependency closure is reconstructed from that pinned source.
+`kulai.project.json` and the submodule gitlink define the current pin. The
+`aa5b4bc93d3b05cd84fcf681f54d848f74d630c5` value in
+`.kulai/bootstrap-baseline.json` is the immutable project-generation baseline.
+The same historical value in `.kulai/migrations.json` records the source used
+to compose the reusable `kvectorstorepg_0001` migration. It changes only when
+that reusable migration graph is deliberately recomposed.
 
 ## Direct modules
 
@@ -39,4 +44,49 @@ Core FastAPI runtime generated. The ASGI entry point is `kulai_memory.main:app`,
 
 ## Bootstrap and local run
 
-Use KulAI Studio's project detail page to create the isolated `.venv`, install and verify the project, run generated tests, and create the initial local commit. No push is performed. Copy `backend/.env.example` to `backend/.env` before local runtime (`Copy-Item backend\.env.example backend\.env` on Windows or `cp backend/.env.example backend/.env` on POSIX). For database-resolved projects, run `docker compose up -d`; Compose provides PostgreSQL infrastructure only and does not run schema migrations. After bootstrap, run `.venv` Python with `scripts/dev.py`; the server binds to `127.0.0.1`.
+Use KulAI Studio's project detail page to create the isolated `.venv`, install
+and verify the project, run generated tests, and create the initial local
+commit. Copy `backend/.env.example` to `backend/.env` before local runtime.
+
+The canonical local PostgreSQL commands are:
+
+```text
+.venv\Scripts\python.exe scripts\postgres.py up
+.venv\Scripts\python.exe scripts\postgres.py status
+.venv\Scripts\python.exe scripts\postgres.py down
+```
+
+The wrapper always passes `--env-file backend/.env` to Compose. `down` preserves
+the named data volume. For this workflow, keep `DATABASE_URL` unset and use the
+single `DB_*` configuration in `backend/.env`; ambient database environment
+overrides are rejected. Compose provides PostgreSQL 18 with pgvector, matching
+the canonical backup/restore major, and does not run schema migrations. Run
+migrations explicitly, then verify the database:
+
+```text
+.venv\Scripts\python.exe scripts\migrate.py upgrade
+.venv\Scripts\python.exe scripts\db_doctor.py
+```
+
+Create a full custom-format PostgreSQL backup and verify it in an automatically
+owned temporary database with:
+
+```text
+.venv\Scripts\python.exe scripts\db_backup.py --output <backup.dump>
+.venv\Scripts\python.exe scripts\db_restore_smoke.py <backup.dump>
+.venv\Scripts\python.exe scripts\db_backup_restore_drill.py
+```
+
+Backups can contain all user data and should be stored outside the repository.
+The backup tool requires compatible PostgreSQL client tools (`pg_dump` and, for
+the restore smoke, `pg_restore`, `createdb`, and `dropdb`). It never installs
+them. The real repository integration tests are opt-in and accept only a
+loopback development/test database:
+
+```text
+$env:KULAI_RUN_POSTGRES_INTEGRATION = "1"
+.venv\Scripts\python.exe -m pytest backend\tests\integration -q
+```
+
+After bootstrap, run `.venv` Python with `scripts/dev.py`; the server binds to
+`127.0.0.1`. The data-safety contract is in `docs/DATA_SAFETY.md`.
