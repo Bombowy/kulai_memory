@@ -1,0 +1,124 @@
+Raport: aktualizacja vendor/kulai_modules i realny test migracji KulAI Memory
+Data: 2026-10-02 (Europe/Warsaw)
+
+DECYZJA: OK DO COMMITA
+
+1. Stan repozytorium i aktualizacja vendora
+
+- Repozytorium główne przed rozpoczęciem: czyste, branch main zgodny z origin/main.
+- vendor/kulai_modules jest submodułem Git.
+- Origin: https://github.com/Bombowy/KulAI_modules.git
+- Zdalny branch domyślny: main.
+- Stary SHA: aa5b4bc93d3b05cd84fcf681f54d848f74d630c5
+- Nowy SHA: d0142285557ed220b75cfab436fb40f1c63a15e9
+- Nowy commit: fix(kulai_db): install SQLAlchemy asyncio dependencies
+- Komendy aktualizacyjne wykonane wewnątrz submodułu:
+  git fetch --prune origin
+  git checkout --detach d0142285557ed220b75cfab436fb40f1c63a15e9
+- Submoduł po aktualizacji jest czysty i pozostaje w oczekiwanym detached HEAD.
+
+2. Kontrakt zależności kulai_db
+
+- vendor/kulai_modules/kulai_db/pyproject.toml zawiera:
+  sqlalchemy[asyncio]>=2.0,<3.0
+- Nie zawiera bezpośredniej zależności runtime od greenlet.
+- Przed odświeżeniem instalacji greenlet nie występował w .venv.
+
+3. Instalacja Pythona
+
+- Użyty interpreter:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe
+- Wersja interpretera: Python 3.13.15
+- Wykonana komenda:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pip install --upgrade -e .\vendor\kulai_modules\kulai_db
+- Nie wykonano pip install greenlet ani żadnej innej bezpośredniej instalacji greenlet.
+- Pip wykazał następujący łańcuch:
+  Collecting greenlet>=1 (from sqlalchemy[asyncio]<3.0,>=2.0->kulai_db==0.1.0)
+- Wynik instalacji:
+  Successfully installed greenlet-3.5.6 kulai_db-0.1.0
+- Zainstalowane metadane kulai_db zawierają:
+  sqlalchemy[asyncio]<3.0,>=2.0
+
+4. Weryfikacja środowiska
+
+- python -m pip check:
+  No broken requirements found.
+- greenlet wersja: 3.5.6
+- greenlet źródło:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Lib\site-packages\greenlet\__init__.py
+- kulai_db źródło:
+  C:\Bombowy\Projekty\kulai_memory\vendor\kulai_modules\kulai_db\src\kulai_db\__init__.py
+- kulai_db direct_url.json:
+  {"dir_info": {"editable": true}, "url": "file:///C:/Bombowy/Projekty/kulai_memory/vendor/kulai_modules/kulai_db"}
+- Import kulai_db wskazuje na aktualny vendor projektu, nie na instalację globalną ani inne repozytorium.
+
+5. Test migracji
+
+- Komenda:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py heads
+  Kod wyjścia: 0
+  Wynik: kvectorstorepg_0001
+
+- Pierwszy current:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py current
+  Kod wyjścia: 0
+  Wynik: pusty, czyli baza nie miała jeszcze zapisanej rewizji Alembica.
+
+- Pierwszy upgrade:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py upgrade
+  Kod wyjścia: 1
+  Wynik wrappera: Migration command failed.
+
+- Diagnostyka bez wrappera:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini -x kulai_vector_dimension=1024 upgrade head
+  Rzeczywista przyczyna:
+  asyncpg.exceptions.FeatureNotSupportedError: extension "vector" is not available
+  PostgreSQL działał i przyjmował połączenia, a wykonanie dochodziło poprawnie przez SQLAlchemy asyncio i greenlet_spawn. Niezależnym blockerem był brak serwerowych plików rozszerzenia pgvector.
+
+6. Lokalny bootstrap pgvector
+
+- Lokalny serwer: PostgreSQL 18.6, usługa postgresql-x64-18.
+- Docker nie był dostępny, a winget nie udostępniał paczki pgvector.
+- Zainstalowano oficjalne Visual Studio Build Tools 2022 17.14.41 z workloadem C++:
+  winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --accept-source-agreements --accept-package-agreements --silent --override "--wait --quiet --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+- Pobrano oficjalny pgvector v0.8.6 z https://github.com/pgvector/pgvector.git do katalogu tymczasowego.
+- Zbudowano pgvector komendą nmake /NOLOGO /F Makefile.win z PGROOT=C:\Program Files\PostgreSQL\18 w środowisku x64 Visual Studio Build Tools.
+- Zainstalowano vector.dll, vector.control, pliki SQL i nagłówki do istniejącej instalacji PostgreSQL 18 zgodnie z celem install z Makefile.win.
+- Nie restartowano serwera, nie usuwano ani nie resetowano żadnych danych.
+
+7. Ponowiony upgrade i wynik końcowy
+
+- Ponowiony upgrade wrapperem:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py upgrade
+  Kod wyjścia: 0
+  Wynik: sukces.
+
+- Końcowy current:
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py current
+  Kod wyjścia: 0
+  Wynik: kvectorstorepg_0001 (head)
+
+- Diagnostyka PostgreSQL wykonana w transakcji READ ONLY:
+  alembic_version istnieje.
+  kulai_vector_records istnieje.
+  alembic_version.version_num = kvectorstorepg_0001.
+  Rozszerzenie vector istnieje w wersji 0.8.6.
+
+8. Blockery i ograniczenia
+
+- Brak dalszych blockerów.
+- Naprawa greenlet została potwierdzona przez rzeczywiste wykonanie migracji asynchronicznej.
+- Nie wykonano commit, push, force reset, downgrade, usuwania bazy, tabel ani danych.
+- Nie zmieniano niezwiązanych plików projektu.
+
+9. Końcowy git status
+
+  ## main...origin/main
+   M vendor/kulai_modules
+  ?? wynik.txt
+
+Zmiany przeznaczone do przeglądu:
+- wskaźnik submodułu vendor/kulai_modules: aa5b4bc -> d014228
+- nowy raport wynik.txt
+
+OK DO COMMITA
