@@ -1,124 +1,187 @@
-Raport: aktualizacja vendor/kulai_modules i realny test migracji KulAI Memory
+Raport: TASK 1/7 — KulAI Memory Application Core i wspólny kontrakt Voice Session / Events
 Data: 2026-10-02 (Europe/Warsaw)
 
 DECYZJA: OK DO COMMITA
 
-1. Stan repozytorium i aktualizacja vendora
+1. Stan zastany i audyt architektury
 
-- Repozytorium główne przed rozpoczęciem: czyste, branch main zgodny z origin/main.
-- vendor/kulai_modules jest submodułem Git.
-- Origin: https://github.com/Bombowy/KulAI_modules.git
-- Zdalny branch domyślny: main.
-- Stary SHA: aa5b4bc93d3b05cd84fcf681f54d848f74d630c5
-- Nowy SHA: d0142285557ed220b75cfab436fb40f1c63a15e9
-- Nowy commit: fix(kulai_db): install SQLAlchemy asyncio dependencies
-- Komendy aktualizacyjne wykonane wewnątrz submodułu:
-  git fetch --prune origin
-  git checkout --detach d0142285557ed220b75cfab436fb40f1c63a15e9
-- Submoduł po aktualizacji jest czysty i pozostaje w oczekiwanym detached HEAD.
-
-2. Kontrakt zależności kulai_db
-
-- vendor/kulai_modules/kulai_db/pyproject.toml zawiera:
-  sqlalchemy[asyncio]>=2.0,<3.0
-- Nie zawiera bezpośredniej zależności runtime od greenlet.
-- Przed odświeżeniem instalacji greenlet nie występował w .venv.
-
-3. Instalacja Pythona
-
-- Użyty interpreter:
+- Repozytorium przed zmianami było czyste na branchu main, zgodnym z origin/main.
+- Backend zawierał wygenerowany host FastAPI, konfigurację, endpoint /health, ORM/wiring
+  oraz dwa testy hosta. Nie istniała warstwa application/core ani kontrakt sesji/eventów.
+- Desktop, mobile, WebSocket, STT, Memory, RAG i LLM nie były zaimplementowane.
+- Host wymaga Python >=3.11. Do testów użyto wyłącznie:
   C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe
-- Wersja interpretera: Python 3.13.15
-- Wykonana komenda:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pip install --upgrade -e .\vendor\kulai_modules\kulai_db
-- Nie wykonano pip install greenlet ani żadnej innej bezpośredniej instalacji greenlet.
-- Pip wykazał następujący łańcuch:
-  Collecting greenlet>=1 (from sqlalchemy[asyncio]<3.0,>=2.0->kulai_db==0.1.0)
-- Wynik instalacji:
-  Successfully installed greenlet-3.5.6 kulai_db-0.1.0
-- Zainstalowane metadane kulai_db zawierają:
-  sqlalchemy[asyncio]<3.0,>=2.0
+- W vendor/kulai_modules sprawdzono dostępne moduły, w tym kulai_transcription,
+  kulai_provider_whisper, kulai_errors, kulai_rag i moduły LLM.
+- kulai_transcription ma już provider-neutral TranscriptionProvider oraz typowane,
+  niemutowalne kontrakty żądań i wyników. Nie duplikowano tego portu w hoście.
+- Nie znaleziono istniejącego kontraktu VoiceSession, EventSink ani katalogu eventów
+  pasującego do tego zadania.
+- kulai_errors jest ogólnym kontraktem błędów z elementami HTTP/FastAPI. Core sesji
+  dostał węższy, transport-neutralny błąd aplikacyjny, bez importowania FastAPI.
+- Vendor pozostaje bez zmian:
+  d0142285557ed220b75cfab436fb40f1c63a15e9 vendor/kulai_modules
+- Nie zmieniono PostgreSQL, migracji ani wygenerowanych manifestów/pinów.
 
-4. Weryfikacja środowiska
+2. Decyzje architektoniczne
 
-- python -m pip check:
+- Dodano mały pakiet kulai_memory.application. Core zna wyłącznie standard library
+  oraz Pydantic jako bibliotekę kontraktów.
+- Transport jest odwróconą zależnością: VoiceSession emituje zdarzenia do portu
+  EventSink, a konkretny adapter implementuje ten port.
+- Eventy są niemutowalnymi modelami Pydantic z extra="forbid" i discriminatorem type.
+- Wspólna koperta zawiera schema_version=1, session_id: UUID, sequence >= 1, type
+  i typowany payload.
+- W obiekcie Python session_id pozostaje UUID. event_to_jsonable konwertuje go na
+  string i zwraca reprezentację bezpieczną dla JSON.
+- Nie dodano event busa, brokera ani zależności od FastAPI/WebSocket/UI/SQLAlchemy.
+- Pydantic dodano jako bezpośrednią zależność hosta, ponieważ publiczny core importuje
+  go bezpośrednio. Pakiet był już obecny tranzytywnie; nie instalowano nowej biblioteki.
+
+3. Dodane i zmienione pliki
+
+- backend/src/kulai_memory/application/__init__.py
+  Publiczne eksporty application core.
+- backend/src/kulai_memory/application/events.py
+  Kanoniczne typy eventów, payloady oraz event_to_jsonable.
+- backend/src/kulai_memory/application/ports.py
+  Transport-neutralny Protocol EventSink.
+- backend/src/kulai_memory/application/voice_session.py
+  VoiceSession, lifecycle oraz kontrolowane błędy.
+- backend/tests/test_voice_session.py
+  Lifecycle, identity, collector, kolejność, idempotencja i bezpieczne błędy.
+- backend/tests/test_voice_events.py
+  Pełny katalog eventów i serializacja JSON.
+- backend/tests/test_application_boundaries.py
+  Test AST blokujący zależności core od transportu, UI i bazy.
+- backend/pyproject.toml
+  Bezpośrednia deklaracja pydantic>=2.0,<3.0.
+- backend/README.md
+  Opis wspólnego core i przykład wywołania in-process.
+- wynik.txt
+  Niniejszy raport.
+
+4. Publiczne API VoiceSession
+
+  session = VoiceSession(event_sink=sink)
+  session.session_id -> UUID
+  session.state -> VoiceSessionState
+  await session.start()
+  await session.close()
+
+- start() przełącza CREATED -> ACTIVE i emituje dokładnie jeden session.ready.
+- Ponowny start w ACTIVE jest idempotentnym no-opem.
+- start po CLOSED lub FAILED zgłasza bezpieczny VoiceSessionStateError.
+- close() jest idempotentne. CREATED przechodzi bezpośrednio do CLOSED, a ACTIVE
+  przechodzi przez CLOSING do CLOSED.
+- Błąd EventSink przełącza sesję do FAILED i zgłasza
+  VoiceSessionEventDeliveryError. Oryginalny wyjątek pozostaje w __cause__ dla
+  hosta/loggera, ale nie trafia do publicznego ErrorEvent.
+- asyncio.Lock serializuje współbieżne operacje lifecycle.
+
+5. Pełny katalog event types i payloadów
+
+- session.ready — SessionReadyPayload (pusty, typowany status)
+- transcript.partial — TranscriptPartialPayload(text)
+- transcript.final — TranscriptFinalPayload(text)
+- memory.saving — MemorySavingPayload (pusty, typowany status)
+- memory.saved — MemorySavedPayload(memory_id)
+- rag.started — RagStartedPayload (pusty, typowany status)
+- rag.context — RagContextPayload(context)
+- assistant.delta — AssistantDeltaPayload(delta)
+- assistant.completed — AssistantCompletedPayload(text)
+- error — ErrorPayload(code, message, recoverable)
+
+Każdy event ma type będący jednoznacznym literalem, schema_version, session_id,
+sequence i konkretny payload. Nowy typ można później dopisać jako kolejny wariant
+unii dyskryminowanej bez zmiany transportu istniejących eventów.
+
+6. EventSink
+
+EventSink jest runtime-checkable Protocol z jedną operacją:
+
+  async emit(event: VoiceSessionEvent) -> None
+
+VoiceSession awaituje emisję, więc zachowuje kolejność wywołań i zna wynik dostawy.
+Testy używają prostego InMemoryEventSink. Nie dodano test double do kodu produkcyjnego.
+
+7. Podłączenie przyszłych adapterów
+
+- Desktop utworzy VoiceSession z DesktopEventSink i wywoła core bezpośrednio w tym
+  samym procesie. Sink przekaże zwykłe obiekty Python do granicy UI. Nie potrzeba
+  lokalnego FastAPI ani HTTP, a UI nie wykonuje SQL.
+- Adapter serwerowy na VPS utworzy tę samą klasę VoiceSession. Jego WebSocketEventSink
+  wywoła event_to_jsonable i prześle wynik jako JSON. Adapter nie przejmie logiki
+  sesji, Memory, STT ani RAG.
+- Oba adaptery korzystają z tego samego kontraktu i lifecycle.
+
+8. Decyzja dotycząca portu STT
+
+Nie dodano hostowego portu STT. Byłby obecnie martwą abstrakcją i duplikowałby
+kulai_transcription.TranscriptionProvider. W TASK 3 adapter/application service może
+wstrzyknąć istniejący TranscriptionProvider i mapować jego typowane wyniki na
+transcript.partial oraz transcript.final bez przebudowy EventSink ani kontraktu
+VoiceSession.
+
+9. Testy i walidacja
+
+Focused tests:
+
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pytest tests/test_voice_session.py tests/test_voice_events.py tests/test_application_boundaries.py -q
+
+Wynik:
+  8 passed in 0.11s
+
+Pełny zestaw testów host application:
+
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pytest tests -q
+
+Wynik:
+  10 passed, 1 warning in 0.72s
+
+Warning pochodzi z istniejącego starlette.testclient.py i dotyczy deprecated aliasu
+anyio.abc.BlockingPortal. Nie pochodzi z nowego core.
+
+Repo hosta nie ma konfiguracji Ruff, Mypy ani Pyright. Nie uruchamiano konfiguracji
+vendora na kodzie hosta. Dedykowany test AST granic architektonicznych przeszedł
+w focused i pełnym zestawie.
+
+pip check:
+
+  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m pip check
   No broken requirements found.
-- greenlet wersja: 3.5.6
-- greenlet źródło:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Lib\site-packages\greenlet\__init__.py
-- kulai_db źródło:
-  C:\Bombowy\Projekty\kulai_memory\vendor\kulai_modules\kulai_db\src\kulai_db\__init__.py
-- kulai_db direct_url.json:
-  {"dir_info": {"editable": true}, "url": "file:///C:/Bombowy/Projekty/kulai_memory/vendor/kulai_modules/kulai_db"}
-- Import kulai_db wskazuje na aktualny vendor projektu, nie na instalację globalną ani inne repozytorium.
 
-5. Test migracji
+git diff --check:
 
-- Komenda:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py heads
   Kod wyjścia: 0
-  Wynik: kvectorstorepg_0001
+  Brak błędów whitespace. Git wyświetlił wyłącznie informację o przyszłej konwersji
+  LF do CRLF dla śledzonych plików backend/README.md, backend/pyproject.toml
+  i wynik.txt.
 
-- Pierwszy current:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py current
-  Kod wyjścia: 0
-  Wynik: pusty, czyli baza nie miała jeszcze zapisanej rewizji Alembica.
+10. Zakres świadomie pozostawiony na kolejne taski
 
-- Pierwszy upgrade:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py upgrade
-  Kod wyjścia: 1
-  Wynik wrappera: Migration command failed.
-
-- Diagnostyka bez wrappera:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini -x kulai_vector_dimension=1024 upgrade head
-  Rzeczywista przyczyna:
-  asyncpg.exceptions.FeatureNotSupportedError: extension "vector" is not available
-  PostgreSQL działał i przyjmował połączenia, a wykonanie dochodziło poprawnie przez SQLAlchemy asyncio i greenlet_spawn. Niezależnym blockerem był brak serwerowych plików rozszerzenia pgvector.
-
-6. Lokalny bootstrap pgvector
-
-- Lokalny serwer: PostgreSQL 18.6, usługa postgresql-x64-18.
-- Docker nie był dostępny, a winget nie udostępniał paczki pgvector.
-- Zainstalowano oficjalne Visual Studio Build Tools 2022 17.14.41 z workloadem C++:
-  winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --accept-source-agreements --accept-package-agreements --silent --override "--wait --quiet --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-- Pobrano oficjalny pgvector v0.8.6 z https://github.com/pgvector/pgvector.git do katalogu tymczasowego.
-- Zbudowano pgvector komendą nmake /NOLOGO /F Makefile.win z PGROOT=C:\Program Files\PostgreSQL\18 w środowisku x64 Visual Studio Build Tools.
-- Zainstalowano vector.dll, vector.control, pliki SQL i nagłówki do istniejącej instalacji PostgreSQL 18 zgodnie z celem install z Makefile.win.
-- Nie restartowano serwera, nie usuwano ani nie resetowano żadnych danych.
-
-7. Ponowiony upgrade i wynik końcowy
-
-- Ponowiony upgrade wrapperem:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py upgrade
-  Kod wyjścia: 0
-  Wynik: sukces.
-
-- Końcowy current:
-  C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe scripts\migrate.py current
-  Kod wyjścia: 0
-  Wynik: kvectorstorepg_0001 (head)
-
-- Diagnostyka PostgreSQL wykonana w transakcji READ ONLY:
-  alembic_version istnieje.
-  kulai_vector_records istnieje.
-  alembic_version.version_num = kvectorstorepg_0001.
-  Rozszerzenie vector istnieje w wersji 0.8.6.
-
-8. Blockery i ograniczenia
-
+- Brak implementacji STT, audio i mikrofonu.
+- Brak WebSocketów i nowych endpointów HTTP.
+- Brak aplikacji desktopowej i mobilnej.
+- Brak modelu/migracji/persistence Memory.
+- Brak embeddingów, pgvector search, RAG, Ollamy, LLM, kolejek i workerów.
+- Brak produkcyjnego DesktopEventSink i WebSocketEventSink; obecny port jest gotową
+  granicą do ich dopisania.
+- VoiceSession emituje obecnie tylko session.ready. Pozostałe eventy są kanonicznym
+  kontraktem przygotowanym dla kolejnych tasków.
 - Brak dalszych blockerów.
-- Naprawa greenlet została potwierdzona przez rzeczywiste wykonanie migracji asynchronicznej.
-- Nie wykonano commit, push, force reset, downgrade, usuwania bazy, tabel ani danych.
-- Nie zmieniano niezwiązanych plików projektu.
 
-9. Końcowy git status
+11. Końcowy git status
 
-  ## main...origin/main
-   M vendor/kulai_modules
-  ?? wynik.txt
+  M backend/README.md
+  M backend/pyproject.toml
+  M wynik.txt
+  ?? backend/src/kulai_memory/application/
+  ?? backend/tests/test_application_boundaries.py
+  ?? backend/tests/test_voice_events.py
+  ?? backend/tests/test_voice_session.py
 
-Zmiany przeznaczone do przeglądu:
-- wskaźnik submodułu vendor/kulai_modules: aa5b4bc -> d014228
-- nowy raport wynik.txt
+- vendor/kulai_modules: bez zmian.
+- Nie wykonano commit, push, reset, migracji ani zmian bazy.
 
 OK DO COMMITA
