@@ -26,6 +26,16 @@ async def run_session(event_sink: EventSink) -> None:
 and assistant operations will use the event catalog already defined by the
 core. No HTTP server is required for in-process use.
 
+The `Memory` domain and `MemoryService` also live in `kulai_memory.application`.
+They depend only on the `MemoryRepository` port. The PostgreSQL implementation,
+`PostgresMemoryRepository`, lives in `kulai_memory.persistence` and receives a
+caller-owned SQLAlchemy `AsyncSession`. It flushes changes but never commits or
+rolls back; the desktop or server use case owns that transaction boundary.
+
+The host `memories` table stores the durable text and JSON metadata without an
+embedding. TASK 5 will write embeddings through the reusable vector store, using
+`str(Memory.id)` as its `record_id` under a stable memories namespace.
+
 Host package: `kulai_memory`.
 
 The core FastAPI runtime and `/health` endpoint are generated. KulAI modules remain pinned by `../kulai.project.json` and the `../vendor/kulai_modules` submodule. Auth and business wiring are not generated yet.

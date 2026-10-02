@@ -25,7 +25,13 @@ from .events import (
     VoiceSessionEventType,
     event_to_jsonable,
 )
-from .ports import EventSink
+from .memory import (
+    Memory,
+    MemoryPersistenceError,
+    MemoryService,
+    MemorySourceKind,
+)
+from .ports import EventSink, MemoryRepository
 from .voice_session import (
     VoiceSession,
     VoiceSessionError,
@@ -46,6 +52,11 @@ __all__ = [
     "MemorySavedPayload",
     "MemorySavingEvent",
     "MemorySavingPayload",
+    "Memory",
+    "MemoryPersistenceError",
+    "MemoryRepository",
+    "MemoryService",
+    "MemorySourceKind",
     "RagContextEvent",
     "RagContextPayload",
     "RagStartedEvent",

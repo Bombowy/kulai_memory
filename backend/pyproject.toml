@@ -9,8 +9,10 @@ description = "Generated backend for KulAI Memory"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "kulai_db>=0.1.0",
     "pydantic>=2.0,<3.0",
     "pydantic-settings>=2.0,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

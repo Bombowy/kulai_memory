@@ -9,8 +9,15 @@ APPLICATION_ROOT = (
 )
 FORBIDDEN_IMPORT_ROOTS = {
     "aiohttp",
+    "alembic",
+    "asyncpg",
     "fastapi",
     "httpx",
+    "kulai_db",
+    "kulai_vector_store_pgvector",
+    "pgvector",
+    "psycopg",
+    "psycopg2",
     "PyQt6",
     "PySide6",
     "requests",
