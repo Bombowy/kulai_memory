@@ -3,9 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 APPLICATION_ROOT = (
-    Path(__file__).resolve().parents[1] / "src" / "kulai_memory" / "application"
+        Path(__file__).resolve().parents[1] / "src" / "kulai_memory" / "application"
 )
 FORBIDDEN_IMPORT_ROOTS = {
     "aiohttp",
@@ -14,7 +13,9 @@ FORBIDDEN_IMPORT_ROOTS = {
     "fastapi",
     "httpx",
     "kulai_db",
+    "kulai_provider_whisper",
     "kulai_vector_store_pgvector",
+    "faster_whisper",
     "pgvector",
     "psycopg",
     "psycopg2",
@@ -44,5 +45,20 @@ def test_application_core_has_no_transport_ui_or_database_imports() -> None:
             for module in modules:
                 if module.split(".", maxsplit=1)[0] in FORBIDDEN_IMPORT_ROOTS:
                     violations.append(f"{path.name}:{node.lineno}: {module}")
+
+    assert violations == []
+
+
+def test_voice_session_has_no_memory_or_persistence_coupling() -> None:
+    path = APPLICATION_ROOT / "voice_session.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        if node.level and node.module in {"memory", "persistence"}:
+            violations.append(node.module)
+        if node.module.startswith("kulai_memory.persistence"):
+            violations.append(node.module)
 
     assert violations == []

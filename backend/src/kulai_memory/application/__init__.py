@@ -32,12 +32,14 @@ from .memory import (
     MemorySourceKind,
 )
 from .ports import EventSink, MemoryRepository
+from .transcription import TranscriptionService
 from .voice_session import (
     VoiceSession,
     VoiceSessionError,
     VoiceSessionEventDeliveryError,
     VoiceSessionState,
     VoiceSessionStateError,
+    VoiceSessionTranscriptionError,
 )
 
 __all__ = [
@@ -67,6 +69,7 @@ __all__ = [
     "TranscriptFinalPayload",
     "TranscriptPartialEvent",
     "TranscriptPartialPayload",
+    "TranscriptionService",
     "VoiceSession",
     "VoiceSessionError",
     "VoiceSessionEvent",
@@ -74,5 +77,6 @@ __all__ = [
     "VoiceSessionEventType",
     "VoiceSessionState",
     "VoiceSessionStateError",
+    "VoiceSessionTranscriptionError",
     "event_to_jsonable",
 ]

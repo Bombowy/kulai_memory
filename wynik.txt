@@ -1,119 +1,262 @@
-# TASK 2.5C — Final reproducibility guard
+# TASK 3A — KulAI Memory real STT / Whisper vertical slice
 
-Data wykonania: 2026-10-02
+Data wykonania: 2026-10-05
 Repozytorium: `C:\Bombowy\Projekty\kulai_memory`
 Branch: `main`
 
-## Cel i zakres
+## 1. Stan repo przed zmianami
 
-Rozszerzono istniejący test:
+- Root working tree był czysty; nie było niezacommitowanych zmian TASK 2.5.
+- Ostatni commit: `e3838b1 feat: harden database reproducibility and recovery`.
+- Submodule `vendor/kulai_modules` był clean i w detached HEAD.
+- Nie wykonano commit ani push.
 
-`tests/test_reproducibility.py::test_current_manifest_matches_gitlink`
+## 2. Vendor SHA i reprodukowalność
 
-Zmiana dotyczy wyłącznie guardu reprodukowalności. Nie zmieniono vendora, SHA manifestu, migracji, bazy danych, backup/restore ani kodu STT. Nie wykonano commit ani push.
+Trzy źródła SHA były i pozostały zgodne:
 
-## Poprzedni invariant
+- `kulai.project.json`: `d0142285557ed220b75cfab436fb40f1c63a15e9`
+- gitlink: `d0142285557ed220b75cfab436fb40f1c63a15e9`
+- vendor HEAD: `d0142285557ed220b75cfab436fb40f1c63a15e9`
 
-Test sprawdzał jedynie:
+Vendor working tree pozostał clean. Focused reproducibility tests: `5 passed`.
 
-```text
-manifest current pin == gitlink commit
-```
+## 3. Przeanalizowane reusable STT APIs
 
-Nie sprawdzał rzeczywistego `HEAD` checkoutu `vendor/kulai_modules` ani lokalnych zmian w jego working tree. Editable/local source mógł więc wskazywać inny commit lub zawierać niezarejestrowane modyfikacje mimo zgodności manifestu z gitlinkiem.
+Przeczytano public API, README, implementację i testy modułów
+`kulai_transcription` oraz `kulai_provider_whisper`, w tym:
 
-## Nowy invariant
+- `TranscriptionProvider`, `TranscriptionRequest`, `TranscriptionResult`;
+- `AudioBytesInput`, `AudioPathInput`;
+- `TranscriptionMode`, `TranscriptionTimestampMode`;
+- `kulai_transcription.transcribe` i typed errors;
+- `WhisperProviderConfig`, `WhisperTranscriptionProvider`;
+- lazy model load, serializację provider lockiem, `asyncio.to_thread` oraz semantykę cancellation.
 
-Test deterministycznie wymaga:
+Host nie tworzy drugiego transcription core.
 
-```text
-manifest current pin
-    ==
-gitlink commit zapisany w indeksie hosta
-    ==
-rzeczywisty vendor HEAD
+## 4. Architektura hostowego flow
 
-oraz
+Przepływ ma postać:
 
-vendor working tree == clean
-```
+`AudioBytesInput/AudioPathInput -> TranscriptionService -> kulai_transcription.transcribe -> injected TranscriptionProvider -> Whisper provider -> TranscriptionResult -> VoiceSession -> transcript.final`
 
-Test wykonuje następujące kontrole:
+`kulai_memory.application` pozostaje transport-neutralne i nie importuje FastAPI,
+WebSocket, SQLAlchemy, UI, `kulai_provider_whisper` ani `faster_whisper`.
+Konkretna fabryka Whisper znajduje się w `kulai_memory.whisper_provider` poza core.
 
-1. `git ls-files --stage -- vendor/kulai_modules` musi zwrócić wpis vendora.
-2. Wpis musi mieć tryb Git `160000`, czyli być prawdziwym gitlinkiem.
-3. Ścieżka z indeksu musi być dokładnie `vendor/kulai_modules`.
-4. Katalog vendora musi istnieć.
-5. `git -C vendor/kulai_modules rev-parse --show-toplevel` musi wskazywać sam katalog vendora, co zapobiega przypadkowemu odziedziczeniu nadrzędnego repo przy niezainicjalizowanym submodule.
-6. `kulai.project.json["kulai"]["commit"]` musi być równy SHA gitlinka.
-7. `git -C vendor/kulai_modules rev-parse HEAD` musi być równy temu samemu SHA.
-8. `git -C vendor/kulai_modules status --porcelain` musi zwrócić pusty wynik, również dla plików nieśledzonych.
+## 5. Nowe i zmienione pliki
 
-Brak Git, brak katalogu, niezainicjalizowany submodule, błędny tryb, rozbieżność SHA lub brudny vendor powodują czytelny assertion/error. Test nie skipuje brakującego vendora i nie hardkoduje żadnego SHA.
+Nowe:
 
-## Rzeczywisty stan vendora
+- `backend/src/kulai_memory/application/transcription.py`
+- `backend/src/kulai_memory/whisper_provider.py`
+- `backend/tests/test_transcription.py`
+- `backend/tests/test_whisper_provider.py`
+- `backend/tests/integration/test_whisper.py`
+- `scripts/stt_smoke.py`
 
-- manifest SHA: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
-- gitlink mode: `160000`;
-- gitlink SHA: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
-- vendor HEAD: `d0142285557ed220b75cfab436fb40f1c63a15e9`;
-- vendor top-level: `C:/Bombowy/Projekty/kulai_memory/vendor/kulai_modules`;
-- `git status --porcelain` vendora: pusty;
-- vendor working tree clean: TAK.
+Zmienione:
 
-Nowy invariant jest spełniony.
-
-## Zmienione pliki
-
-- `tests/test_reproducibility.py` — rozszerzony guard manifest/gitlink/checkout/clean working tree oraz czytelne błędy poleceń Git.
-- `wynik.txt` — niniejszy raport TASK 2.5C.
-
-Pozostałe niezacommitowane pliki po TASK 2.5B zachowano bez niezwiązanych zmian.
-
-## Walidacja
-
-Użyty interpreter:
-
-`C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe`
-
-Wyniki:
-
-- focused `python -m pytest tests/test_reproducibility.py -q`: `5 passed in 0.39s`;
-- wszystkie root tests `python -m pytest tests -q`: `37 passed in 1.09s`;
-- wszystkie backend tests `python -m pytest backend/tests -q`: `30 passed, 2 skipped, 1 warning in 0.78s`;
-- backend warning: istniejące ostrzeżenie deprecation Starlette TestClient/anyio;
-- `python -m pip check`: `No broken requirements found.`;
-- `git diff --check`: PASS; widoczne są wyłącznie informacyjne ostrzeżenia Git o przyszłej konwersji LF do CRLF;
-- vendor gitlink/submodule status: `d0142285557ed220b75cfab436fb40f1c63a15e9`, clean.
-
-## Końcowy stan Git
-
-Branch pozostaje `main`, zgodny z `origin/main` na ostatnim commitcie. Nie wykonano commit ani push.
-
-Zmodyfikowane tracked files odziedziczone z TASK 2.5B/C:
-
-- `.gitignore`
-- `README.md`
+- `backend/src/kulai_memory/application/voice_session.py`
+- `backend/src/kulai_memory/application/__init__.py`
+- `backend/src/kulai_memory/settings.py`
+- `backend/pyproject.toml`
+- `backend/.env.example`
 - `backend/README.md`
-- `compose.yaml`
-- `kulai.project.json`
+- `backend/tests/test_voice_session.py`
+- `backend/tests/test_application_boundaries.py`
 - `wynik.txt`
 
-Nowe/untracked paths odziedziczone z TASK 2.5B/C:
+## 6. Dependency contract
 
-- `backend/src/kulai_memory/database_safety.py`
-- `backend/tests/integration/`
-- `docs/`
-- `scripts/db_backup.py`
-- `scripts/db_backup_restore_drill.py`
-- `scripts/db_doctor.py`
-- `scripts/db_restore_smoke.py`
-- `scripts/postgres.py`
-- `tests/test_database_tools.py`
-- `tests/test_reproducibility.py`
+Host deklaruje bezpośrednio:
 
-Nie rozpoczęto TASK 3A.
+- `kulai-transcription>=0.1.0`
+- `kulai-provider-whisper>=0.1.0`
+- `av>=11,<19`
 
-## Decyzja
+Constraint PyAV jest potrzebny, ponieważ faster-whisper 1.2.1 używa argumentu
+usuniętego w PyAV 19. Aktualne `.venv` odświeżono przez editable reinstall;
+PyAV ma wersję 18.1.0. `pip check`: `No broken requirements found`.
+
+Źródła importów:
+
+- `kulai_transcription`: editable vendor package;
+- `kulai_provider_whisper`: editable vendor package;
+- `faster_whisper`: `.venv` site-packages.
+
+## 7. Publiczne API application transcription
+
+Dodano `TranscriptionService(provider=...)` oraz:
+
+`await service.transcribe(request=TranscriptionRequest(...)) -> TranscriptionResult`
+
+Serwis deleguje do istniejącego `kulai_transcription.transcribe`, zachowując
+request, input type, language hint, mode i timestamp mode bez duplikowania
+walidacji reusable modułu.
+
+## 8. Zmiana VoiceSession
+
+`VoiceSession` przyjmuje opcjonalny `TranscriptionService`. Aktywna sesja może
+wykonać `await session.transcribe(request=...)`. Metoda zwraca pełny
+`TranscriptionResult` i po sukcesie emituje dokładnie jeden `transcript.final`.
+Nie emituje sztucznych `transcript.partial`.
+
+## 9. Concurrency semantics
+
+Jeden lifecycle lock obejmuje start, transcribe i close:
+
+- równoległe transkrypcje tej samej sesji są serializowane;
+- ich eventy mają deterministyczne, unikalne sequence numbers;
+- `close()` wywołane podczas aktywnego await inference czeka na zakończenie
+  requestu i emisję final eventu, a następnie zamyka sesję;
+- nie dodano task queue.
+
+## 10. Cancellation semantics
+
+- `asyncio.CancelledError` propaguje i nie jest mapowany na transcription failure;
+- cancellation podczas oczekiwania na providera pozostawia sesję ACTIVE;
+- nie powstaje `transcript.final` ani żaden zapis;
+- native CTranslate2 worker może dokończyć pracę w tle i nie jest siłowo
+  zatrzymywany;
+- po cancellation caller może zamknąć sesję; zamknięcie nie udaje zatrzymania
+  już uruchomionego kodu native.
+
+Cancellation podczas samego event delivery oznacza FAILED, ponieważ wynik nie
+został niezawodnie dostarczony.
+
+## 11. Silence semantics
+
+Pusty `TranscriptionResult.text` jest poprawnym wynikiem. VoiceSession emituje
+wtedy `transcript.final` z pustym tekstem. Nie jest to błąd providera.
+
+## 12. Error safety
+
+Provider failure jest mapowany na `VoiceSessionTranscriptionError` z bezpieczną,
+stałą wiadomością. Oryginalny typed error pozostaje jako `__cause__`. Host nie
+loguje audio, ścieżki, transcriptu, raw provider payload ani raw exception.
+
+Test z `password=top-secret`, `PRIVATE_TRANSCRIPT_SENTINEL` i prywatną ścieżką
+potwierdza brak tych wartości w publicznym wyjątku oraz publicznym error event.
+
+## 13. Event ordering
+
+Operacje VoiceSession, a nie ręczne `sink.emit`, potwierdzają kolejność:
+
+- jeden request: `1 session.ready`, `2 transcript.final`;
+- dwa requesty: `1 session.ready`, `2 transcript.final`, `3 transcript.final`.
+
+## 14. Whisper config
+
+Dodano tylko używane ustawienia:
+
+- `KULAI_WHISPER_MODEL` — default `large-v3`;
+- `KULAI_WHISPER_DEVICE` — default `cuda`;
+- `KULAI_WHISPER_COMPUTE_TYPE` — default `int8_float16`.
+
+Nie dodano lokalnych ścieżek modeli ani sekretów. Nie ma CPU fallbacku.
+
+## 15–23. Realny target smoke
+
+- model ID: `large-v3`;
+- cache: model był już cached;
+- device: `cuda`;
+- compute type: `int8_float16`;
+- model load/decode/inference: PASS po udostępnieniu istniejących bibliotek
+  CUDA 12 w `PATH` wyłącznie dla procesu testowego;
+- pierwszy inference: 6.460 s;
+- drugi inference: 0.465 s;
+- drugi call użył tego samego provider i model instance: tak;
+- wynik: `TranscriptionResult`;
+- language: `nn`;
+- duration: 1.0 s;
+- segment count: 1;
+- transcript character count: 27;
+- transcript content: nie zapisano w raporcie.
+
+## 24. Host stt_smoke
+
+`scripts/stt_smoke.py` tworzy i usuwa temp PCM WAV, uruchamia pełny host flow
+dwa razy na tym samym provider instance, waliduje wynik oraz sequence eventów i
+wypisuje wyłącznie bezpieczne metryki. Z `--audio` może jawnie pokazać transcript
+lokalnemu użytkownikowi.
+
+Wynik targetowego uruchomienia z process-local CUDA library path: `STT smoke PASS`.
+Zwykły shell bez wymaganych CUDA DLL w `PATH` kończy się bezpiecznym FAIL na
+etapie decode. Potwierdzony brakujący runtime element to `cublas64_12.dll`.
+
+## 25. Opt-in Whisper integration
+
+`KULAI_RUN_WHISPER_INTEGRATION=1` używa tej samej fabryki, serwisu i VoiceSession.
+Realny wynik: `1 passed in 6.51s`. Bez flagi test jest skipped. Opcjonalna próbka
+mowy może pochodzić z `KULAI_WHISPER_AUDIO`; test nie wypisuje ścieżki ani tekstu.
+
+## 26–31. Walidacja automatyczna
+
+- focused transcription/application tests: `20 passed`;
+- backend tests bez opt-in: `43 passed, 3 skipped, 1 warning`;
+- root tests: `37 passed`;
+- cały root pytest: `80 passed, 3 skipped, 1 warning`;
+- warning: istniejący Starlette/AnyIO deprecation warning;
+- `pip check`: PASS;
+- `git diff --check`: PASS;
+- reproducibility tests: `5 passed`;
+- `db_doctor`: wszystkie checks OK, w tym read-only transaction, PostgreSQL
+  18.6, vector 0.8.6, aktualny Alembic head i dimension 1024.
+
+Nie wykonywano backup/restore drill, ponieważ TASK 3A nie zmienia persistence.
+
+## 32–34. Brak persistence side effects
+
+Przed realnym smoke:
+
+- memories: 0
+- kulai_vector_records: 0
+
+Po realnym smoke i opt-in integration:
+
+- memories: 0
+- kulai_vector_records: 0
+
+Test runtime podstawia fail-fast pułapki pod `MemoryService.create_memory` i
+tworzenie SQLAlchemy engine; hostowy STT ich nie dotyka. Nie wykonano embeddingu,
+pgvector, RAG, Ollamy, migracji ani zmian schematu.
+
+## 35. Git status
+
+Working tree zawiera wyłącznie pliki TASK 3A wymienione w sekcji 5 oraz
+dozwolony raport `wynik.txt`. Vendor pozostaje clean. Nie wykonano commit/push.
+
+## 36. Ograniczenia i decyzja środowiskowa
+
+1. Bieżący zwykły `PATH` Windows nie udostępnia `cublas64_12.dll`. Kod, model i
+   GPU działają po dodaniu istniejącego lokalnego katalogu CUDA 12 tylko do
+   środowiska procesu. Nie zmieniano driverów ani systemowego CUDA i nie
+   zastosowano CPU fallbacku.
+2. faster-whisper 1.2.1 wymaga obecnie PyAV <19; host jawnie deklaruje ten
+   constraint.
+3. Segment timestamps są przekazywane i sprawdzone fake providerem. Dla bardzo
+   krótkiej syntetycznej ciszy realny provider zwrócił ValidationError w trybie
+   SEGMENT, dlatego model/decode smoke używa poprawnego trybu NONE. Nie zmieniano
+   vendora.
+4. Po odrzuconej przez automatyczny reviewer próbie bezpiecznego usunięcia
+   wcześniejszego tymczasowego katalogu diagnostycznego pozostał poza repo
+   katalog `C:\Users\patry\AppData\Local\Temp\kulai-stt-av18-1791172267486`.
+   Zawiera wyłącznie rozpakowany wheel PyAV 18.1.0 i nie wpływa na repo ani venv.
+
+## 37. Zakres TASK 3B
+
+TASK 3B powinien dopiero zdefiniować decyzję produktową dla ciszy, utworzyć
+Memory z zaakceptowanego final transcriptu, przejąć transaction boundary i
+potwierdzić persistence. Embeddings, pgvector i RAG pozostają osobnymi dalszymi
+etapami. Mobile/WebSocket pozostaje przyszłym adapterem do tego samego core.
+
+## 38. Decyzja
 
 **OK DO COMMITA**
+
+Kod spełnia quality gate: realne importy, model load, GPU decode/inference,
+host application flow, `transcript.final`, brak side effects DB i pełny zwykły
+test suite przeszły. Pozostaje jawny wymóg środowiskowy ustawienia CUDA DLL w
+process `PATH`; nie jest to błąd kodu TASK 3A.

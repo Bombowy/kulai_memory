@@ -6,8 +6,17 @@ import asyncio
 from enum import Enum
 from uuid import UUID, uuid4
 
-from .events import ErrorEvent, ErrorPayload, SessionReadyEvent
+from kulai_transcription import TranscriptionRequest, TranscriptionResult
+
+from .events import (
+    ErrorEvent,
+    ErrorPayload,
+    SessionReadyEvent,
+    TranscriptFinalEvent,
+    TranscriptFinalPayload,
+)
 from .ports import EventSink
+from .transcription import TranscriptionService
 
 
 class VoiceSessionState(str, Enum):
@@ -53,11 +62,22 @@ class VoiceSessionEventDeliveryError(VoiceSessionError):
     safe_message = "The voice session could not deliver an event."
 
 
+class VoiceSessionTranscriptionError(VoiceSessionError):
+    code = "voice_session.transcription_failed"
+    safe_message = "The voice session could not transcribe audio."
+
+
 class VoiceSession:
     """Transport-neutral lifecycle for one logical user session."""
 
-    def __init__(self, *, event_sink: EventSink) -> None:
+    def __init__(
+        self,
+        *,
+        event_sink: EventSink,
+        transcription_service: TranscriptionService | None = None,
+    ) -> None:
         self._event_sink = event_sink
+        self._transcription_service = transcription_service
         self._session_id = uuid4()
         self._state = VoiceSessionState.CREATED
         self._sequence = 0
@@ -108,6 +128,48 @@ class VoiceSession:
 
             self._state = VoiceSessionState.CLOSING
             self._state = VoiceSessionState.CLOSED
+
+    async def transcribe(
+        self, *, request: TranscriptionRequest
+    ) -> TranscriptionResult:
+        """Transcribe once and emit exactly one final transcript event.
+
+        The lifecycle lock serializes transcription calls and makes ``close()``
+        wait for an in-flight provider call. Cancellation while awaiting the
+        provider leaves the session active and emits no event.
+        """
+
+        async with self._lifecycle_lock:
+            if self._state is not VoiceSessionState.ACTIVE:
+                raise VoiceSessionStateError()
+
+            if self._transcription_service is None:
+                self._state = VoiceSessionState.FAILED
+                raise VoiceSessionTranscriptionError()
+
+            try:
+                result = await self._transcription_service.transcribe(request=request)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._state = VoiceSessionState.FAILED
+                raise VoiceSessionTranscriptionError() from exc
+
+            event = TranscriptFinalEvent(
+                session_id=self._session_id,
+                sequence=self._next_sequence(),
+                payload=TranscriptFinalPayload(text=result.text),
+            )
+            try:
+                await self._event_sink.emit(event)
+            except asyncio.CancelledError:
+                self._state = VoiceSessionState.FAILED
+                raise
+            except Exception as exc:
+                self._state = VoiceSessionState.FAILED
+                raise VoiceSessionEventDeliveryError() from exc
+
+            return result
 
     def _next_sequence(self) -> int:
         self._sequence += 1

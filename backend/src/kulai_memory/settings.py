@@ -6,12 +6,11 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    """Minimal settings required by the Task 8 runtime."""
+    """Environment-backed host runtime settings."""
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_ROOT / ".env", env_prefix="", extra="ignore"
@@ -27,6 +26,9 @@ class Settings(BaseSettings):
     db_name: str = "kulai_memory"
     database_url: str | None = None
     kulai_vector_dimension: int | None = Field(default=None, gt=0)
+    kulai_whisper_model: str = "large-v3"
+    kulai_whisper_device: str = "cuda"
+    kulai_whisper_compute_type: str = "int8_float16"
 
 
 @lru_cache(maxsize=1)

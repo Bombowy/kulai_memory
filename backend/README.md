@@ -22,9 +22,34 @@ async def run_session(event_sink: EventSink) -> None:
     await session.close()
 ```
 
-`VoiceSession.start()` emits `session.ready`. Future transcription, memory, RAG,
-and assistant operations will use the event catalog already defined by the
-core. No HTTP server is required for in-process use.
+`VoiceSession.start()` emits `session.ready`. An active session can run one-shot
+speech-to-text through the provider-neutral `TranscriptionService` in
+`kulai_memory.application.transcription`. It returns the complete
+`TranscriptionResult` and emits one `transcript.final`; an empty final text is a
+valid result for silence. Real `transcript.partial` events are not implemented
+because the current provider has no streaming partial contract.
+
+The concrete `WhisperTranscriptionProvider` is created outside the application
+core by `kulai_memory.whisper_provider`. Its host configuration is read from:
+
+- `KULAI_WHISPER_MODEL` (default `large-v3`)
+- `KULAI_WHISPER_DEVICE` (default `cuda`)
+- `KULAI_WHISPER_COMPUTE_TYPE` (default `int8_float16`)
+
+For `cuda`, the CUDA 12 runtime libraries required by CTranslate2 must be
+discoverable through the process `PATH`. The host does not fall back to CPU.
+
+Run the real local path with `python scripts/stt_smoke.py`, optionally adding
+`--audio <path> --language pl`. The no-argument form creates and removes a short
+temporary PCM WAV and checks model load, decode, inference, result mapping, and
+event delivery. Run the opt-in pytest integration with
+`KULAI_RUN_WHISPER_INTEGRATION=1 python -m pytest backend/tests/integration/test_whisper.py`.
+`KULAI_WHISPER_AUDIO` can point that test at a local speech sample.
+
+TASK 3A does not persist audio or transcripts and does not call `MemoryService`.
+A later mobile/WebSocket adapter will translate incoming audio bytes into the
+same application request used by the in-process desktop path. No HTTP server is
+required for in-process use.
 
 The `Memory` domain and `MemoryService` also live in `kulai_memory.application`.
 They depend only on the `MemoryRepository` port. The PostgreSQL implementation,

@@ -4,10 +4,20 @@ import asyncio
 from uuid import UUID
 
 import pytest
+from kulai_transcription import (
+    AudioBytesInput,
+    AudioInputKind,
+    TranscriptionCapabilities,
+    TranscriptionMode,
+    TranscriptionRequest,
+    TranscriptionResult,
+)
 
 from kulai_memory.application import (
     EventSink,
     SessionReadyEvent,
+    TranscriptFinalEvent,
+    TranscriptionService,
     VoiceSession,
     VoiceSessionEvent,
     VoiceSessionEventDeliveryError,
@@ -30,6 +40,25 @@ class FailingEventSink:
     async def emit(self, event: VoiceSessionEvent) -> None:
         del event
         raise RuntimeError("password=top-secret")
+
+
+class OrderedProvider:
+    provider_id = "ordered-fake"
+    capabilities = TranscriptionCapabilities(
+        input_kinds=frozenset({AudioInputKind.BYTES}),
+        modes=frozenset({TranscriptionMode.TRANSCRIBE}),
+    )
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
+        self.call_count += 1
+        return TranscriptionResult(
+            text=f"result-{self.call_count}",
+            provider_id=self.provider_id,
+            mode=request.mode,
+        )
 
 
 def test_session_has_stable_unique_identity_and_structural_sink() -> None:
@@ -65,14 +94,23 @@ def test_start_emits_ready_and_concurrent_starts_are_idempotent() -> None:
 def test_events_remain_in_awaited_emission_order() -> None:
     async def scenario() -> None:
         sink = InMemoryEventSink()
-        session = VoiceSession(event_sink=sink)
+        provider = OrderedProvider()
+        service = TranscriptionService(provider=provider)
+        session = VoiceSession(event_sink=sink, transcription_service=service)
+        request = TranscriptionRequest(audio=AudioBytesInput(data=b"audio"))
 
         await session.start()
-        await sink.emit(
-            SessionReadyEvent(session_id=session.session_id, sequence=2)
-        )
+        await session.transcribe(request=request)
+        await session.transcribe(request=request)
 
-        assert [event.sequence for event in sink.events] == [1, 2]
+        assert [event.sequence for event in sink.events] == [1, 2, 3]
+        assert [type(event) for event in sink.events] == [
+            SessionReadyEvent,
+            TranscriptFinalEvent,
+            TranscriptFinalEvent,
+        ]
+        assert sink.events[1].payload.text == "result-1"
+        assert sink.events[2].payload.text == "result-2"
 
     asyncio.run(scenario())
 
