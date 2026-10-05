@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Generated backend for KulAI Memory"
 requires-python = ">=3.11"
 dependencies = [
-    "av>=11,<19",
     "fastapi>=0.115,<1.0",
     "kulai_db>=0.1.0",
     "kulai-provider-whisper>=0.1.0",

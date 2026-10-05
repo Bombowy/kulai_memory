@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -9,6 +10,23 @@ from kulai_memory.settings import Settings
 from kulai_memory.whisper_provider import create_whisper_transcription_provider
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_ROOT.parent
+VENDOR_PROVIDER_METADATA = (
+    PROJECT_ROOT
+    / "vendor"
+    / "kulai_modules"
+    / "kulai_provider_whisper"
+    / "pyproject.toml"
+)
+
+
+def _dependency_names(requirements: list[str]) -> set[str]:
+    names: set[str] = set()
+    for requirement in requirements:
+        match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
+        assert match is not None, f"Invalid dependency requirement: {requirement!r}"
+        names.add(match.group(0).lower().replace("_", "-"))
+    return names
 
 
 def test_factory_builds_configured_concrete_provider() -> None:
@@ -27,10 +45,18 @@ def test_factory_builds_configured_concrete_provider() -> None:
     assert provider.config.compute_type == "int8_float16"
 
 
-def test_host_declares_direct_stt_dependencies_and_pyav_compatibility() -> None:
-    metadata = tomllib.loads((BACKEND_ROOT / "pyproject.toml").read_text("utf-8"))
-    dependencies = metadata["project"]["dependencies"]
+def test_provider_owns_pyav_compatibility_contract() -> None:
+    host_metadata = tomllib.loads(
+        (BACKEND_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    provider_metadata = tomllib.loads(
+        VENDOR_PROVIDER_METADATA.read_text(encoding="utf-8")
+    )
+    host_dependencies = host_metadata["project"]["dependencies"]
+    provider_dependencies = provider_metadata["project"]["dependencies"]
+    host_names = _dependency_names(host_dependencies)
 
-    assert any(item.startswith("kulai-transcription") for item in dependencies)
-    assert any(item.startswith("kulai-provider-whisper") for item in dependencies)
-    assert "av>=11,<19" in dependencies
+    assert "kulai-transcription" in host_names
+    assert "kulai-provider-whisper" in host_names
+    assert "av" not in host_names
+    assert "av>=11,<19" in provider_dependencies

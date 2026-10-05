@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import sys
 import tempfile
 import time
@@ -15,7 +16,6 @@ BACKEND_SRC = ROOT / "backend" / "src"
 if str(BACKEND_SRC) not in sys.path:
     sys.path.insert(0, str(BACKEND_SRC))
 
-from huggingface_hub import try_to_load_from_cache  # noqa: E402
 from kulai_transcription import (  # noqa: E402
     AudioPathInput,
     TranscriptionError,
@@ -64,6 +64,11 @@ def _is_cached(model: str) -> bool | None:
     if repo_id is None:
         return None
     try:
+        huggingface_hub = importlib.import_module("huggingface_hub")
+        try_to_load_from_cache = getattr(
+            huggingface_hub,
+            "try_to_load_from_cache",
+        )
         cached = try_to_load_from_cache(repo_id=repo_id, filename="model.bin")
     except Exception:
         return None

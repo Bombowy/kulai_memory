@@ -5,7 +5,7 @@ KulAI Studio project `kulai_memory`.
 ## Reproducibility
 
 - Source template: `blank`
-- Current pinned KulAI commit: `d0142285557ed220b75cfab436fb40f1c63a15e9`
+- Current pinned KulAI commit: `925b08a13aab9a62e080103185446543a7795794`
 - KulAI monorepo submodule: `vendor/kulai_modules`
 
 `kulai.project.json` and the submodule gitlink define the current pin. The
