@@ -18,5 +18,6 @@ def create_whisper_transcription_provider(
         model_size_or_path=active_settings.kulai_whisper_model,
         device=active_settings.kulai_whisper_device,
         compute_type=active_settings.kulai_whisper_compute_type,
+        vad_filter=active_settings.kulai_whisper_vad_filter,
     )
     return WhisperTranscriptionProvider(config=config)

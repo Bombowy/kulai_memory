@@ -4,6 +4,7 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
 from kulai_provider_whisper import WhisperTranscriptionProvider
 
 from kulai_memory.settings import Settings
@@ -29,12 +30,43 @@ def _dependency_names(requirements: list[str]) -> set[str]:
     return names
 
 
-def test_factory_builds_configured_concrete_provider() -> None:
+def test_host_whisper_defaults_are_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "KULAI_WHISPER_MODEL",
+        "KULAI_WHISPER_DEVICE",
+        "KULAI_WHISPER_COMPUTE_TYPE",
+        "KULAI_WHISPER_VAD_FILTER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.kulai_whisper_model == "large-v3"
+    assert settings.kulai_whisper_device == "cuda"
+    assert settings.kulai_whisper_compute_type == "int8_float16"
+    assert settings.kulai_whisper_vad_filter is True
+
+
+def test_host_vad_can_be_disabled_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KULAI_WHISPER_VAD_FILTER", "false")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.kulai_whisper_vad_filter is False
+
+
+@pytest.mark.parametrize("vad_filter", [True, False])
+def test_factory_builds_configured_concrete_provider(vad_filter: bool) -> None:
     settings = Settings(
         _env_file=None,
         kulai_whisper_model="large-v3",
         kulai_whisper_device="cuda",
         kulai_whisper_compute_type="int8_float16",
+        kulai_whisper_vad_filter=vad_filter,
     )
 
     provider = create_whisper_transcription_provider(settings=settings)
@@ -43,6 +75,7 @@ def test_factory_builds_configured_concrete_provider() -> None:
     assert provider.config.model_size_or_path == "large-v3"
     assert provider.config.device == "cuda"
     assert provider.config.compute_type == "int8_float16"
+    assert provider.config.vad_filter is vad_filter
 
 
 def test_provider_owns_pyav_compatibility_contract() -> None:

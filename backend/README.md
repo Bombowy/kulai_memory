@@ -35,6 +35,11 @@ core by `kulai_memory.whisper_provider`. Its host configuration is read from:
 - `KULAI_WHISPER_MODEL` (default `large-v3`)
 - `KULAI_WHISPER_DEVICE` (default `cuda`)
 - `KULAI_WHISPER_COMPUTE_TYPE` (default `int8_float16`)
+- `KULAI_WHISPER_VAD_FILTER` (default `true`)
+
+The host enables the provider's speech detector by default so controlled
+non-speech input can produce an empty transcript instead of hallucinated text.
+An empty `transcript.final` remains a valid result and does not imply an error.
 
 For `cuda`, the CUDA 12 runtime libraries required by CTranslate2 must be
 discoverable through the process `PATH`. The host does not fall back to CPU.
@@ -44,7 +49,9 @@ Run the real local path with `python scripts/stt_smoke.py`, optionally adding
 temporary PCM WAV and checks model load, decode, inference, result mapping, and
 event delivery. Run the opt-in pytest integration with
 `KULAI_RUN_WHISPER_INTEGRATION=1 python -m pytest backend/tests/integration/test_whisper.py`.
-`KULAI_WHISPER_AUDIO` can point that test at a local speech sample.
+`KULAI_WHISPER_AUDIO` can point that test at a local speech sample. The real
+integration also checks temporary silence, click, low-level noise, and tone
+fixtures without writing audio files into the repository.
 
 TASK 3A does not persist audio or transcripts and does not call `MemoryService`.
 A later mobile/WebSocket adapter will translate incoming audio bytes into the

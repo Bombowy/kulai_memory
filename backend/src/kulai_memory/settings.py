@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     kulai_whisper_model: str = "large-v3"
     kulai_whisper_device: str = "cuda"
     kulai_whisper_compute_type: str = "int8_float16"
+    kulai_whisper_vad_filter: bool = True
 
 
 @lru_cache(maxsize=1)

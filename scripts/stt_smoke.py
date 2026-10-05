@@ -122,6 +122,7 @@ async def _run(audio_path: Path, *, language: str | None, show_text: bool) -> No
     print(f"model_id={first_result.model_id or 'unknown'}")
     print(f"device={settings.kulai_whisper_device}")
     print(f"compute_type={settings.kulai_whisper_compute_type}")
+    print(f"vad_filter={str(settings.kulai_whisper_vad_filter).lower()}")
     print(f"cache_status={cache_status}")
     print(f"first_inference_seconds={first_seconds:.3f}")
     print(f"second_inference_seconds={second_seconds:.3f}")

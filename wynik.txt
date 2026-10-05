@@ -1,140 +1,227 @@
-# TASK 3A.1 — Update KulAI vendor to committed Whisper dependency fix
+# TASK 3A.2 — Whisper large-v3 VAD / non-speech hardening
 
 Data wykonania: 2026-10-05
 Repozytorium: `C:\Bombowy\Projekty\kulai_memory`
 Branch: `main`
 
-## Stan początkowy
+## 1. Stan repo na początku
 
-TASK 3A był już zacommitowany i wypchnięty na prośbę użytkownika. TASK 3A.1
-rozpoczął się z czystego host working tree na:
+Host working tree był clean. Branch `main` był o jeden lokalny commit przed
+`origin/main`. Ostatni commit:
 
-`d2ad379 feat: add real Whisper transcription flow`
+`82f21ede88391245da837c56bd37e7c7fc1f0056 fix: source Whisper PyAV constraint from provider`
 
-Vendor był clean i przypięty do starego SHA:
+TASK 3A.1 był zacommitowany. Nie wykonano reset, commit ani push.
 
-`d0142285557ed220b75cfab436fb40f1c63a15e9`
+## 2–3. Vendor SHA i czystość vendora
 
-Nie wykonano reset, commit ani push.
-
-## 1–4. Vendor update i canonical remote
-
-Stary vendor SHA:
-
-`d0142285557ed220b75cfab436fb40f1c63a15e9`
-
-Nowy vendor SHA:
+Aktualny i końcowy vendor SHA:
 
 `925b08a13aab9a62e080103185446543a7795794`
 
-Commit message:
+`git -C vendor/kulai_modules status --porcelain` był pusty przed taskiem i jest
+pusty po tasku. `git submodule status` nie ma prefiksu `+` ani `-`. Vendor nie
+został zmieniony.
 
-`fix(kulai_provider_whisper): constrain PyAV runtime`
+## 4. Canonical real runtime
 
-Commit został pobrany przez `git fetch origin main` w submodule. Sprawdzenie
-`git ls-remote`, `git cat-file` i `git merge-base --is-ancestor` potwierdziło,
-że dokładny commit istnieje na canonical remote
-`https://github.com/Bombowy/KulAI_modules.git` i należy do `origin/main`.
-Jest bezpośrednim następcą starego pina, więc aktualizacja nie wciąga
-nieprzejrzanych późniejszych zmian.
+Każdy realny STT/VAD smoke i integration używał dokładnie:
 
-## 5–8. Invariant current pin
+- model: `large-v3`;
+- device: `cuda`;
+- compute type: `int8_float16`.
 
-Po aktualizacji:
+Nie użyto tiny/small/medium ani CPU fallbacku. CUDA 12 DLL z istniejącego
+katalogu Ollama `cuda_v12` dodawano wyłącznie do `PATH` danego procesu. Nie
+zmieniono systemowego PATH, sterowników ani instalacji CUDA.
 
-- manifest SHA: `925b08a13aab9a62e080103185446543a7795794`;
-- root gitlink SHA: `925b08a13aab9a62e080103185446543a7795794`;
-- vendor HEAD: `925b08a13aab9a62e080103185446543a7795794`;
-- vendor status --porcelain: pusty.
+## 5. Stan VAD przed taskiem
 
-Vendor pozostaje w detached HEAD i jest clean. Root gitlink został dodany do
-indeksu, aby istniejący test reprodukowalności mógł przed commitem odczytać
-nowy gitlink.
+Reusable `WhisperProviderConfig.vad_filter` był typowanym booleanem z defaultem
+`False`. Provider przekazywał go bezpośrednio jako `vad_filter` do
+`faster-whisper.transcribe`. Host nie przekazywał tej wartości, więc działał z
+providerowym defaultem `false`.
 
-## 9. Historyczne provenance
+Vendorowe testy sprawdzały default `false`, odrzucenie niebooleanowej wartości
+oraz brak arbitralnego `vad_parameters`. Provider zachowywał pusty transcript
+jako prawidłowy wynik. Contract wystarczył bez zmiany vendora.
 
-Bez zmian pozostawiono:
+## 6. Finalny host VAD config
 
-- `.kulai/bootstrap-baseline.json`:
-  `aa5b4bc93d3b05cd84fcf681f54d848f74d630c5`;
-- `.kulai/migrations.json`:
-  `aa5b4bc93d3b05cd84fcf681f54d848f74d630c5`;
-- fingerprint migracji `kvectorstorepg_0001`.
+Dodano:
 
-Te wartości opisują historyczny project-generation baseline i commit, z
-którego skomponowano migrację. Vendor update nie rekomponuje migracji.
+- `Settings.kulai_whisper_vad_filter: bool = True`;
+- `KULAI_WHISPER_VAD_FILTER=true` w `backend/.env.example`;
+- przekazanie wartości do `WhisperProviderConfig(vad_filter=...)` w host factory;
+- dokumentację defaultu i semantyki pustego `transcript.final`;
+- metrykę `vad_filter=true/false` w `scripts/stt_smoke.py`.
 
-## 10–11. Dependency ownership
+Env `KULAI_WHISPER_VAD_FILTER=false` jawnie wyłącza VAD. Application core nadal
+nie importuje konkretnego providera.
 
-Usunięto bezpośrednie `av>=11,<19` z `backend/pyproject.toml`.
-Host nadal deklaruje:
+## 7. VAD false — 1 s digital silence
 
-- `kulai-provider-whisper>=0.1.0`;
-- `kulai-transcription>=0.1.0`.
+- character count: `27`;
+- segment count: `1`;
+- language: `nn`;
+- duration: `1.0 s`;
+- negative acceptance: `FAIL`.
 
-Przypięty reusable provider deklaruje:
+Treść halucynacji nie została zapisana.
 
-- `faster-whisper>=1.2,<2.0`;
-- `av>=11,<19`;
-- `kulai-transcription>=0.1.0`.
+## 8. VAD true — 1 s digital silence
 
-Kompatybilność PyAV należy zatem do modułu, który bezpośrednio używa
-faster-whisper.
+- character count: `0`;
+- segment count: `0`;
+- nonempty segment count: `0`;
+- language: `nn`;
+- duration: `1.0 s`;
+- negative acceptance: `PASS`.
 
-## 12–15. Odświeżone środowisko runtime
+Porównanie false/true użyło tej samej instancji załadowanego modelu.
 
-Editable provider odświeżono poleceniem instalującym jego lokalny package z
-vendora, bez ręcznego `pip install av<19`. Następnie odświeżono editable host.
+## 9. 3 s digital silence
 
-Wynik:
+- character count: `0`;
+- segment count: `0`;
+- language: `nn`;
+- duration: `3.0 s`;
+- wynik: `PASS`.
 
-- PyAV: `18.1.0`;
-- faster-whisper: `1.2.1`;
-- kulai-provider-whisper: `0.1.0`;
-- provider source:
-  `vendor/kulai_modules/kulai_provider_whisper/src/kulai_provider_whisper`;
-- zainstalowane provider metadata zawiera `av<19,>=11`;
-- zainstalowane host metadata nie zawiera `av`.
+## 10. Pojedynczy click
 
-Dependency ownership regression test deterministycznie czyta hostowy oraz
-vendorowy `pyproject.toml`. Potwierdza brak `av` w host dependencies i
-obecność dokładnego `av>=11,<19` w provider dependencies: PASS.
+Fixture: 1 s PCM16 mono 16 kHz, jedna próbka `32767` w połowie pliku.
 
-## 16. Diagnostyka huggingface_hub
+- character count: `0`;
+- segment count: `0`;
+- language: `nn`;
+- duration: `1.0 s`;
+- wynik: `PASS`.
 
-`scripts/stt_smoke.py` nie importuje już `huggingface_hub` na poziomie
-modułu. Cache lookup ładuje moduł dynamicznie wewnątrz best-effort helpera.
-Brak modułu, brak oczekiwanej funkcji lub błąd lookup zwraca `unknown` i nie
-blokuje STT.
+## 11. Deterministic low-level noise
 
-Nie dodano `huggingface-hub` jako bezpośredniej zależności hosta. Nowy test
-symuluje brak modułu i potwierdza wynik `None/unknown`.
+Fixture: 3 s PCM16 mono 16 kHz, seed `0x3A2`, próbki z zakresu `[-256, 256]`.
 
-## 17–20. Testy
+- character count: `0`;
+- segment count: `0`;
+- language: `nn`;
+- duration: `3.0 s`;
+- wynik: `PASS`.
 
-- focused Whisper/provider/host/cache tests: `21 passed`;
-- backend tests bez opt-in: `43 passed, 3 skipped, 1 warning`;
-- root tests: `38 passed`;
-- cały pytest: `81 passed, 3 skipped, 1 warning`;
-- reproducibility tests: `5 passed`.
+## 12. Czysty tone
 
-Trzy skipy są oczekiwanymi testami opt-in. Warning to istniejący
-Starlette/AnyIO deprecation warning.
+Fixture: 3 s PCM16 mono 16 kHz, 440 Hz, amplituda `4096`.
 
-## 21. pip check
+- character count: `0`;
+- segment count: `0`;
+- language: `nn`;
+- duration: `3.0 s`;
+- wynik: `PASS`.
 
-`python -m pip check`:
+## 13. Digital silence z language_hint=pl
+
+1 s:
+
+- character count: `0`;
+- segment count: `0`;
+- language: `pl` (`REQUESTED`);
+- duration: `1.0 s`;
+- wynik: `PASS`.
+
+3 s:
+
+- character count: `0`;
+- segment count: `0`;
+- language: `pl` (`REQUESTED`);
+- duration: `3.0 s`;
+- wynik: `PASS`.
+
+Language code nie był używany jako speech detector ani warunek akceptacji.
+
+## 14. Łączny wynik negative fixtures
+
+Wszystkie kontrolowane non-speech fixtures z `vad_filter=true` zwróciły:
+
+`result.text.strip() == ""`
+
+oraz zero niepustych segmentów. Nie dodano minimalnej długości, blacklisty,
+regexów, filtra języka, LLM validatora ani innej heurystyki transcriptu.
+
+## 15. Opcjonalna real-human-speech próbka
+
+`KULAI_WHISPER_AUDIO` nie było ustawione. Test nie skanował dysku i został
+oznaczony jako oczekiwany skip. Brak opcjonalnej próbki nie blokuje taska.
+
+## 16–18. Potwierdzenie realnej konfiguracji
+
+Wszystkie realne testy używały `large-v3`. Device: `cuda`. Compute type:
+`int8_float16`. Model był już w cache; nie zmieniono modelu dla przyspieszenia
+testów.
+
+## 19. Model reuse
+
+- porównanie VAD false/true: `model_reused=true`;
+- no-argument host smoke: `model_reused=true`;
+- pełna negative matrix: `model_reused=true`.
+
+Macierz nie ładowała pięciu osobnych modeli. Jeden module-scoped provider
+obsłużył host silence regression, negative matrix i opcjonalny speech test.
+
+## 20. Focused tests
+
+Polecenie objęło host config/factory, smoke privacy/output oraz application
+boundary:
+
+`10 passed in 0.31s`
+
+W tym potwierdzono default VAD `true`, env `false`, przekazanie `true/false`,
+canonical model/device/compute type i brak importu konkretnego providera w
+application core.
+
+## 21. Backend tests bez opt-in
+
+`46 passed, 5 skipped, 1 warning in 0.77s`
+
+Skipy dotyczą testów opt-in. Warning jest istniejącym ostrzeżeniem deprecation
+Starlette/AnyIO.
+
+## 22. Root tests
+
+`40 passed in 1.07s`
+
+Reproducibility tests uruchomione również osobno:
+
+`5 passed in 0.34s`
+
+## 23. Whisper opt-in integration
+
+Uruchomiono z `KULAI_RUN_WHISPER_INTEGRATION=1` oraz canonical runtime:
+
+`2 passed, 1 skipped in 7.46s`
+
+PASS obejmuje realny host flow z pustym `transcript.final` dla ciszy i pełną
+negative matrix. Jedyny skip to brak `KULAI_WHISPER_AUDIO`.
+
+No-argument `scripts/stt_smoke.py`:
+
+- STT smoke: `PASS`;
+- model: `large-v3`;
+- VAD: `true`;
+- transcript character count: `0`;
+- segment count: `0`;
+- duration: `1.0 s`;
+- model reused: `true`.
+
+## 24. pip check
 
 `No broken requirements found.`
 
-## 22. git diff --check
+## 25. git diff --check
 
-`git diff --check` oraz `git diff --cached --check`: PASS.
+PASS. Git wypisał wyłącznie informacyjne ostrzeżenia o przyszłej konwersji LF
+do CRLF; nie wykrył whitespace errors.
 
-Git zgłasza wyłącznie informacyjne ostrzeżenia o przyszłej konwersji LF do
-CRLF; nie ma whitespace errors.
-
-## 23. db_doctor
+## 26. db_doctor
 
 Wszystkie kontrole PASS:
 
@@ -146,100 +233,63 @@ Wszystkie kontrole PASS:
 - vector dimension: configured i actual `1024`;
 - read query: OK.
 
-Nie uruchamiano migracji ani backup/restore drill.
+## 27. Memory count przed/po
 
-## 24. Realny large-v3 CUDA smoke
+- przed realnymi smoke: `0`;
+- po realnych smoke: `0`.
 
-Konfiguracja:
+## 28. Vector count przed/po
 
-- model: `large-v3`;
-- device: `cuda`;
-- compute type: `int8_float16`;
-- model cache: already cached.
+- przed realnymi smoke: `0`;
+- po realnych smoke: `0`.
 
-Wynik:
+Nie zapisano Memory, transcriptu, audio, embeddingu ani vector record. Nie
+uruchomiono RAG, LLM, WebSocket ani frontendu.
 
-- model load: PASS;
-- decode: PASS;
-- inference: PASS;
-- result type: `TranscriptionResult`;
-- `transcript.final`: PASS;
-- first inference: 6.408 s;
-- second inference: 0.462 s;
-- model instance reused: true;
-- language: `nn`;
-- duration: 1.0 s;
-- segments: 1;
-- transcript character count: 27.
+## 29. Końcowy git status
 
-Transcript content nie został zapisany w raporcie.
+Oczekiwane, niezacommitowane zmiany TASK 3A.2:
 
-## 25. Opt-in Whisper integration
+- `backend/.env.example`;
+- `backend/README.md`;
+- `backend/src/kulai_memory/settings.py`;
+- `backend/src/kulai_memory/whisper_provider.py`;
+- `backend/tests/integration/test_whisper.py`;
+- `backend/tests/test_whisper_provider.py`;
+- `scripts/stt_smoke.py`;
+- `tests/test_stt_smoke.py`;
+- `wynik.txt`.
 
-Realny test z tą samą host factory/config:
+Nie wykonano commit ani push.
 
-`1 passed in 6.36s`
-
-Zweryfikowano realny provider, model load, decode, inference,
-`TranscriptionResult` oraz `transcript.final`.
-
-## 26–28. Brak persistence side effects
-
-Przed realnym smoke:
-
-- memories: 0;
-- kulai_vector_records: 0.
-
-Po host smoke i opt-in integration:
-
-- memories: 0;
-- kulai_vector_records: 0.
-
-Wartości są identyczne. Nie zapisano Memory, transcriptu, audio, embeddingu ani
-vector record. Nie uruchamiano RAG, VAD, WebSocket ani Ollamy.
-
-## 29. Git status
-
-Oczekiwane zmiany TASK 3A.1:
-
-- modified: `README.md`;
-- modified: `backend/pyproject.toml`;
-- modified: `backend/tests/test_whisper_provider.py`;
-- modified: `kulai.project.json`;
-- modified: `scripts/stt_smoke.py`;
-- modified/staged gitlink: `vendor/kulai_modules`;
-- new: `tests/test_stt_smoke.py`;
-- modified: `wynik.txt`.
-
-Nie ma zmian wewnątrz vendor working tree.
-
-## 30. Git submodule status
+## 30. Końcowy git submodule status
 
 `925b08a13aab9a62e080103185446543a7795794 vendor/kulai_modules (remotes/origin/HEAD)`
 
-Brak prefixu `+` lub `-`: checkout odpowiada aktualnemu root gitlinkowi.
+Vendor working tree pozostaje clean.
 
-## 31. Ograniczenia środowiskowe
+## 31. Czy potrzebny jest root-fix w reusable provider
 
-1. CUDA 12 runtime DLL nie jest dostępne w zwykłym systemowym `PATH`.
-   Realne testy użyły istniejącego katalogu CUDA 12 dodanego wyłącznie do
-   środowiska procesu. Nie zmieniono systemowego `PATH`, driverów ani CUDA.
-2. Nie zastosowano CPU fallbacku; brak CUDA DLL pozostaje jawnym błędem
-   środowiskowym.
-3. Model `large-v3` był już w cache; test nie wymagał pobrania.
-4. `huggingface_hub` pozostaje zależnością transitively używaną przez
-   faster-whisper, lecz pomocnicza diagnostyka hosta nie zakłada już jego
-   bezpośredniej dostępności.
-5. Po wcześniejszym odrzuceniu przez automatyczny reviewer usunięcia
-   diagnostycznego katalogu poza repo nadal może istnieć
-   `%TEMP%\kulai-stt-av18-1791172267486`. Nie wpływa on na repo ani venv.
+Nie. Istniejący boolean `vad_filter` i jego bezpośrednie przekazanie do
+faster-whisper poprawnie rozwiązują wszystkie kontrolowane false positives.
+Host nie potrzebuje obejścia ani provider-specific parametrów VAD.
 
-## 32. Decyzja
+## 32. Co przechodzi do TASK 3B
+
+TASK 3B powinien jawnie wdrożyć politykę biznesową:
+
+- pusty lub whitespace-only `transcript.final` oznacza `NO MEMORY CREATED`;
+- dopiero zaakceptowany niepusty transcript może rozpocząć tworzenie Memory;
+- language detection nie jest dowodem istnienia mowy;
+- obecny VAD pozostaje pierwszą ochroną przed non-speech inputem.
+
+TASK 3A.2 nie tworzy ani nie zapisuje Memory.
+
+## 33. Decyzja
 
 **OK DO COMMITA**
 
-Dependency ownership został przeniesiony do reusable providera, fresh metadata
-jest kompletne, current pin jest reprodukowalny, realny CUDA Whisper działa,
-pełne testy przechodzą, a STT nadal nie ma persistence side effects.
-
-Nie wykonano commit ani push.
+Host domyślnie włącza VAD, factory przekazuje flagę, realny `large-v3` na CUDA
+działa, wszystkie kontrolowane negative fixtures są puste, pełne testy i
+opt-in integration przechodzą, liczniki DB są niezmienione, a vendor pozostaje
+clean.
