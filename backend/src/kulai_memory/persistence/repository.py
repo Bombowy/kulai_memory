@@ -6,9 +6,14 @@ import asyncio
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kulai_memory.application.memory import Memory, MemoryPersistenceError
+from kulai_memory.application.memory import (
+    IdempotentMemoryWrite,
+    Memory,
+    MemoryPersistenceError,
+)
 
 from .models import MemoryDb
 
@@ -16,6 +21,7 @@ from .models import MemoryDb
 def _to_domain(row: MemoryDb) -> Memory:
     return Memory(
         id=row.id,
+        ingestion_id=row.ingestion_id,
         content=row.content,
         source_kind=row.source_kind,
         session_id=row.session_id,
@@ -33,6 +39,7 @@ class PostgresMemoryRepository:
     async def create(self, memory: Memory) -> Memory:
         row = MemoryDb(
             id=memory.id,
+            ingestion_id=memory.ingestion_id,
             content=memory.content,
             source_kind=memory.source_kind.value,
             session_id=memory.session_id,
@@ -44,6 +51,45 @@ class PostgresMemoryRepository:
             await self._db.flush()
             return _to_domain(row)
         except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise MemoryPersistenceError from exc
+
+    async def create_or_get_by_ingestion_id(
+        self, memory: Memory
+    ) -> IdempotentMemoryWrite:
+        """Atomically insert or return the row owning ``memory.ingestion_id``."""
+
+        statement = (
+            insert(MemoryDb)
+            .values(
+                id=memory.id,
+                ingestion_id=memory.ingestion_id,
+                content=memory.content,
+                source_kind=memory.source_kind.value,
+                session_id=memory.session_id,
+                metadata_json=dict(memory.metadata),
+                created_at=memory.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=[MemoryDb.ingestion_id])
+            .returning(MemoryDb)
+        )
+        try:
+            result = await self._db.execute(statement)
+            inserted = result.scalar_one_or_none()
+            if inserted is not None:
+                return IdempotentMemoryWrite(memory=_to_domain(inserted), created=True)
+
+            existing_result = await self._db.execute(
+                select(MemoryDb).where(MemoryDb.ingestion_id == memory.ingestion_id)
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing is None:
+                raise MemoryPersistenceError()
+            return IdempotentMemoryWrite(memory=_to_domain(existing), created=False)
+        except asyncio.CancelledError:
+            raise
+        except MemoryPersistenceError:
             raise
         except Exception as exc:
             raise MemoryPersistenceError from exc

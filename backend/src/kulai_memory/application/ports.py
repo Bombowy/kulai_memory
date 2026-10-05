@@ -8,7 +8,7 @@ from uuid import UUID
 from .events import VoiceSessionEvent
 
 if TYPE_CHECKING:
-    from .memory import Memory
+    from .memory import IdempotentMemoryWrite, Memory
 
 
 @runtime_checkable
@@ -26,6 +26,13 @@ class MemoryRepository(Protocol):
     """Persists domain memories without exposing infrastructure models."""
 
     async def create(self, memory: Memory) -> Memory:
+        ...
+
+    async def create_or_get_by_ingestion_id(
+        self, memory: Memory
+    ) -> IdempotentMemoryWrite:
+        """Atomically create Memory or return the row for its ingestion UUID."""
+
         ...
 
     async def get_by_id(self, memory_id: UUID) -> Memory | None:

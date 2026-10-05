@@ -46,6 +46,7 @@ class FakeSession:
 def _row(memory: Memory) -> MemoryDb:
     return MemoryDb(
         id=memory.id,
+        ingestion_id=memory.ingestion_id,
         content=memory.content,
         source_kind=memory.source_kind.value,
         session_id=memory.session_id,
@@ -69,7 +70,38 @@ def test_repository_creates_and_flushes_without_owning_transaction() -> None:
         assert len(fake.added) == 1
         stored = cast(MemoryDb, fake.added[0])
         assert stored.id == memory.id
+        assert stored.ingestion_id == memory.ingestion_id
         assert stored.metadata_json == {"language": "pl"}
+
+    asyncio.run(scenario())
+
+
+def test_repository_atomically_creates_or_returns_ingestion_owner() -> None:
+    async def scenario() -> None:
+        fake = FakeSession()
+        repository = PostgresMemoryRepository(db=cast(AsyncSession, fake))
+        memory = Memory(content="idempotentna pamięć")
+
+        inserted_result = MagicMock()
+        inserted_result.scalar_one_or_none.return_value = _row(memory)
+        fake.execute_results = [inserted_result]
+        created = await repository.create_or_get_by_ingestion_id(memory)
+
+        conflict_result = MagicMock()
+        conflict_result.scalar_one_or_none.return_value = None
+        existing_result = MagicMock()
+        existing_result.scalar_one_or_none.return_value = _row(memory)
+        fake.execute_results = [conflict_result, existing_result]
+        duplicate = await repository.create_or_get_by_ingestion_id(
+            Memory(ingestion_id=memory.ingestion_id, content=memory.content)
+        )
+
+        assert created.created is True
+        assert created.memory == memory
+        assert duplicate.created is False
+        assert duplicate.memory == memory
+        assert fake.commit_count == 0
+        assert fake.rollback_count == 0
 
     asyncio.run(scenario())
 
@@ -146,6 +178,7 @@ def test_memory_orm_schema_and_host_registration(monkeypatch: pytest.MonkeyPatch
     table = Base.metadata.tables["memories"]
     assert list(table.columns.keys()) == [
         "id",
+        "ingestion_id",
         "content",
         "source_kind",
         "session_id",
@@ -153,9 +186,14 @@ def test_memory_orm_schema_and_host_registration(monkeypatch: pytest.MonkeyPatch
         "created_at",
     ]
     assert table.c.id.primary_key is True
+    assert table.c.ingestion_id.nullable is False
     assert table.c.session_id.nullable is True
     assert table.c.metadata_json.nullable is False
     assert table.c.created_at.nullable is False
+    assert any(
+        constraint.name == "uq_memories_ingestion_id"
+        for constraint in table.constraints
+    )
     memory_registration.assert_called_once_with()
     vector_registration.assert_called_once_with(dimension=1024)
 
@@ -164,7 +202,10 @@ def test_alembic_graph_has_one_host_head() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["kulai_memory_0001"]
-    revision = scripts.get_revision("kulai_memory_0001")
+    assert scripts.get_heads() == ["kulai_memory_0002"]
+    revision = scripts.get_revision("kulai_memory_0002")
     assert revision is not None
-    assert revision.down_revision == "kvectorstorepg_0001"
+    assert revision.down_revision == "kulai_memory_0001"
+    initial = scripts.get_revision("kulai_memory_0001")
+    assert initial is not None
+    assert initial.down_revision == "kvectorstorepg_0001"

@@ -1,295 +1,309 @@
-# TASK 3A.2 — Whisper large-v3 VAD / non-speech hardening
+# TASK 3B.1 — Final durable/concurrent idempotency proof
 
 Data wykonania: 2026-10-05
 Repozytorium: `C:\Bombowy\Projekty\kulai_memory`
 Branch: `main`
 
-## 1. Stan repo na początku
+## 1. Stan początkowy
 
-Host working tree był clean. Branch `main` był o jeden lokalny commit przed
-`origin/main`. Ostatni commit:
+- ostatni commit: `a748411 feat: harden Whisper non-speech handling`;
+- branch `main` był zgodny z `origin/main`;
+- wszystkie zmiany TASK 3B pozostawały niezacommitowane;
+- nie wykonano commit ani push;
+- vendor był czysty i pozostał czysty;
+- vendor SHA: `925b08a13aab9a62e080103185446543a7795794`.
 
-`82f21ede88391245da837c56bd37e7c7fc1f0056 fix: source Whisper PyAV constraint from provider`
+Zmian TASK 3B nie cofnięto ani nie zgubiono. TASK 3B.1 rozszerzył realne testy
+PostgreSQL i raport. Nie zmieniono vendora.
 
-TASK 3A.1 był zacommitowany. Nie wykonano reset, commit ani push.
+## 2. Alembic i schemat
 
-## 2–3. Vendor SHA i czystość vendora
+Alembic script head:
 
-Aktualny i końcowy vendor SHA:
+`kulai_memory_0002`
 
-`925b08a13aab9a62e080103185446543a7795794`
+Aktualna revision głównej bazy:
 
-`git -C vendor/kulai_modules status --porcelain` był pusty przed taskiem i jest
-pusty po tasku. `git submodule status` nie ma prefiksu `+` ani `-`. Vendor nie
-został zmieniony.
+`kulai_memory_0002 (head)`
 
-## 4. Canonical real runtime
+Migracji `kulai_memory_0002` nie zmieniono. Nie wykonano downgrade, stamp, reset,
+`create_all` ani ponownego upgrade głównej bazy.
 
-Każdy realny STT/VAD smoke i integration używał dokładnie:
+## 3. Durable retry po commit
 
-- model: `large-v3`;
-- device: `cuda`;
-- compute type: `int8_float16`.
+Dodano realny test w marker-verified owned temporary PostgreSQL database,
+migrowanej do bieżącego head.
 
-Nie użyto tiny/small/medium ani CPU fallbacku. CUDA 12 DLL z istniejącego
-katalogu Ollama `cuda_v12` dodawano wyłącznie do `PATH` danego procesu. Nie
-zmieniono systemowego PATH, sterowników ani instalacji CUDA.
+Przebieg i wynik:
 
-## 5. Stan VAD przed taskiem
+- session #1, nowe repository/service: `CREATED`;
+- wykonano prawdziwy `COMMIT` i zamknięto session #1;
+- session #2, nowa `AsyncSession` i nowe repository/service: `DUPLICATE`;
+- diagnostyczne metadata STT w retry celowo różniły się;
+- `same memory_id`: `true`;
+- zwrócono pierwszą canonical Memory i nie nadpisano jej metadata;
+- session #2 zakończyła się poprawnym `COMMIT`;
+- session #3 z tym samym ingestion ID i inną treścią zgłosiła
+  `MemoryIdempotencyConflictError`;
+- po konflikcie wykonano bezpieczny rollback;
+- read-only verification: count dla ingestion ID = `1`;
+- read-only verification: całkowity table count = `1`;
+- stored content, source, session ID i metadata pozostały oryginalne.
 
-Reusable `WhisperProviderConfig.vad_filter` był typowanym booleanem z defaultem
-`False`. Provider przekazywał go bezpośrednio jako `vad_filter` do
-`faster-whisper.transcribe`. Host nie przekazywał tej wartości, więc działał z
-providerowym defaultem `false`.
+Focused durable integration:
 
-Vendorowe testy sprawdzały default `false`, odrzucenie niebooleanowej wartości
-oraz brak arbitralnego `vad_parameters`. Provider zachowywał pusty transcript
-jako prawidłowy wynik. Contract wystarczył bez zmiany vendora.
+`1 passed, 5 deselected in 1.95s`
 
-## 6. Finalny host VAD config
+Test udowadnia idempotencję po commit, zamknięciu sesji oraz utworzeniu nowych
+instancji repository i service.
 
-Dodano:
+## 4. Real concurrent duplicate
 
-- `Settings.kulai_whisper_vad_filter: bool = True`;
-- `KULAI_WHISPER_VAD_FILTER=true` w `backend/.env.example`;
-- przekazanie wartości do `WhisperProviderConfig(vad_filter=...)` w host factory;
-- dokumentację defaultu i semantyki pustego `transcript.final`;
-- metrykę `vad_filter=true/false` w `scripts/stt_smoke.py`.
+Dodano drugi test w osobnej marker-verified owned temporary PostgreSQL database.
 
-Env `KULAI_WHISPER_VAD_FILTER=false` jawnie wyłącza VAD. Application core nadal
-nie importuje konkretnego providera.
+Dwa niezależne taski używały:
 
-## 7. VAD false — 1 s digital silence
+- tego samego ingestion ID;
+- tego samego semantycznego payloadu;
+- dwóch osobnych `AsyncSession` i transakcji;
+- dwóch osobnych repository/service;
+- `asyncio.Barrier(2)` do zsynchronizowania startu;
+- `asyncio.gather` objętego timeoutem `15.0 s`.
 
-- character count: `27`;
-- segment count: `1`;
-- language: `nn`;
-- duration: `1.0 s`;
-- negative acceptance: `FAIL`.
+Wynik:
 
-Treść halucynacji nie została zapisana.
+- statusy: `{CREATED, DUPLICATE}`;
+- kolejność statusów była nieistotna;
+- `same memory_id`: `true`;
+- final count dla ingestion ID: `1`;
+- final table count: `1`;
+- stored content i session ID pozostały oryginalne;
+- zewnętrzny `IntegrityError`: brak;
+- broken session state: brak;
+- deadlock: brak;
+- timeout: nie wystąpił;
+- drugi rekord: nie powstał;
+- pierwszy rekord: nie został nadpisany.
 
-## 8. VAD true — 1 s digital silence
+Focused concurrent integration:
 
-- character count: `0`;
-- segment count: `0`;
-- nonempty segment count: `0`;
-- language: `nn`;
-- duration: `1.0 s`;
-- negative acceptance: `PASS`.
+`1 passed, 5 deselected in 2.09s`
 
-Porównanie false/true użyło tej samej instancji załadowanego modelu.
+## 5. Atomic repository code
 
-## 9. 3 s digital silence
+Istniejący kod:
 
-- character count: `0`;
-- segment count: `0`;
-- language: `nn`;
-- duration: `3.0 s`;
-- wynik: `PASS`.
+`INSERT ... ON CONFLICT (ingestion_id) DO NOTHING RETURNING ...`
 
-## 10. Pojedynczy click
+obsłużył durable retry oraz rzeczywistą konkurencję poprawnie. Kod atomowego
+repozytorium nie wymagał zmiany. UNIQUE constraint nie został osłabiony.
 
-Fixture: 1 s PCM16 mono 16 kHz, jedna próbka `32767` w połowie pliku.
+Zachowana semantyka:
 
-- character count: `0`;
-- segment count: `0`;
-- language: `nn`;
-- duration: `1.0 s`;
-- wynik: `PASS`.
+- to samo ingestion ID + ten sam content/source/session => `DUPLICATE`;
+- zmiana wyłącznie diagnostycznych metadata => `DUPLICATE`, pierwsza canonical
+  Memory pozostaje bez zmian;
+- to samo ingestion ID + inna treść/session/source => kontrolowany konflikt;
+- inne ingestion ID + ta sama treść => osobne Memory.
 
-## 11. Deterministic low-level noise
+## 6. Izolacja fixture records
 
-Fixture: 3 s PCM16 mono 16 kHz, seed `0x3A2`, próbki z zakresu `[-256, 256]`.
+Wszystkie realne testy PostgreSQL tworzące fixture records korzystają teraz z
+owned temporary databases. Każda baza:
 
-- character count: `0`;
-- segment count: `0`;
-- language: `nn`;
-- duration: `3.0 s`;
-- wynik: `PASS`.
+- otrzymuje losową nazwę i ownership marker;
+- jest migrowana do wymaganego revision;
+- zamyka engine przed cleanup;
+- jest usuwana wyłącznie przez `drop_owned_temporary_database` po ponownej
+  weryfikacji markera.
 
-## 12. Czysty tone
+Główna `kulai_memory` nie była używana do fixture records.
 
-Fixture: 3 s PCM16 mono 16 kHz, 440 Hz, amplituda `4096`.
+## 7. Jawnie pominięty wcześniejszy gate
 
-- character count: `0`;
-- segment count: `0`;
-- language: `nn`;
-- duration: `3.0 s`;
-- wynik: `PASS`.
+pre-migration backup/restore gate was missed; main DB contained 0 Memory and 0
+vector records before migration.
 
-## 13. Digital silence z language_hint=pl
+Nie próbowano ukryć ani historycznie odtwarzać tego gate przez downgrade. Backup
+i restore smoke wykonano teraz na aktualnej bazie przy head `kulai_memory_0002`.
 
-1 s:
+## 8. Main DB przed backupem
 
-- character count: `0`;
-- segment count: `0`;
-- language: `pl` (`REQUESTED`);
-- duration: `1.0 s`;
-- wynik: `PASS`.
+Przed backupem:
 
-3 s:
+- `db_doctor`: PASS;
+- Memory count: `0`;
+- vector record count: `0`;
+- current revision: `kulai_memory_0002`.
 
-- character count: `0`;
-- segment count: `0`;
-- language: `pl` (`REQUESTED`);
-- duration: `3.0 s`;
-- wynik: `PASS`.
+## 9. Backup i restore smoke
 
-Language code nie był używany jako speech detector ani warunek akceptacji.
+Backup utworzono przez `scripts/db_backup.py` w systemowym katalogu TEMP poza
+repozytorium.
 
-## 14. Łączny wynik negative fixtures
+- format: PostgreSQL custom;
+- backup size: `7232 bytes`;
+- SHA-256: `7ca363f42ca41ea280071514761623be3d80907d6e4eecaef27c46006d22e7ca`;
+- `pg_dump`: `18.6`.
 
-Wszystkie kontrolowane non-speech fixtures z `vad_filter=true` zwróciły:
+`scripts/db_restore_smoke.py`:
 
-`result.text.strip() == ""`
+- utworzył marker-verified owned restore database;
+- poprawnie odtworzył backup;
+- uruchomił `db_doctor` na odtworzonej bazie;
+- porównał fingerprinty restored DB i source DB;
+- potwierdził Memory rows: `0`;
+- potwierdził vector rows: `0`;
+- potwierdził, że source DB nie zmieniła się podczas restore;
+- bezpiecznie usunął owned restore database.
 
-oraz zero niepustych segmentów. Nie dodano minimalnej długości, blacklisty,
-regexów, filtra języka, LLM validatora ani innej heurystyki transcriptu.
+Po restore verification główna baza nadal zawierała:
 
-## 15. Opcjonalna real-human-speech próbka
+- Memory count: `0`;
+- vector record count: `0`.
 
-`KULAI_WHISPER_AUDIO` nie było ustawione. Test nie skanował dysku i został
-oznaczony jako oczekiwany skip. Brak opcjonalnej próbki nie blokuje taska.
+Backup utworzony przez ten run został usunięty. Przed usunięciem zweryfikowano
+pełną ścieżkę w systemowym TEMP i oczekiwany prefiks nazwy. Nie usunięto żadnego
+innego pliku.
 
-## 16–18. Potwierdzenie realnej konfiguracji
+## 10. db_doctor
 
-Wszystkie realne testy używały `large-v3`. Device: `cuda`. Compute type:
-`int8_float16`. Model był już w cache; nie zmieniono modelu dla przyspieszenia
-testów.
+Końcowy `db_doctor`: PASS.
 
-## 19. Model reuse
+Potwierdzone invariants:
 
-- porównanie VAD false/true: `model_reused=true`;
-- no-argument host smoke: `model_reused=true`;
-- pełna negative matrix: `model_reused=true`.
+- expected/current Alembic head: `kulai_memory_0002`;
+- read-only diagnostic transaction: `on`;
+- PostgreSQL: `18.6`;
+- vector extension: `0.8.6`;
+- `memories` i `kulai_vector_records`: obecne;
+- `memories.ingestion_id`: `UUID NOT NULL`;
+- `uq_memories_ingestion_id`: obecny i unikalny;
+- configured/actual vector dimension: `1024` / `vector(1024)`;
+- database read query: PASS.
 
-Macierz nie ładowała pięciu osobnych modeli. Jeden module-scoped provider
-obsłużył host silence regression, negative matrix i opcjonalny speech test.
+Końcowe polecenia migracji:
 
-## 20. Focused tests
+- `migrate heads` => `kulai_memory_0002`;
+- `migrate current` => `kulai_memory_0002 (head)`.
 
-Polecenie objęło host config/factory, smoke privacy/output oraz application
-boundary:
+## 11. Wyniki testów
 
-`10 passed in 0.31s`
+Focused ingestion/persistence:
 
-W tym potwierdzono default VAD `true`, env `false`, przekazanie `true/false`,
-canonical model/device/compute type i brak importu konkretnego providera w
-application core.
+`29 passed in 0.89s`
 
-## 21. Backend tests bez opt-in
+Real durable integration:
 
-`46 passed, 5 skipped, 1 warning in 0.77s`
+`1 passed, 5 deselected in 1.95s`
+
+Real concurrent integration:
+
+`1 passed, 5 deselected in 2.09s`
+
+Wszystkie PostgreSQL opt-in integrations:
+
+Końcowy run po ostatniej korekcie typów testu:
+
+`6 passed in 8.14s`
+
+Wszystkie backend tests bez opt-in:
+
+`55 passed, 9 skipped, 1 warning in 0.92s`
 
 Skipy dotyczą testów opt-in. Warning jest istniejącym ostrzeżeniem deprecation
 Starlette/AnyIO.
 
-## 22. Root tests
+Wszystkie root tests:
 
-`40 passed in 1.07s`
+`40 passed in 1.28s`
 
-Reproducibility tests uruchomione również osobno:
+Application boundary tests:
 
-`5 passed in 0.34s`
+`2 passed in 0.02s`
 
-## 23. Whisper opt-in integration
+Reproducibility tests:
 
-Uruchomiono z `KULAI_RUN_WHISPER_INTEGRATION=1` oraz canonical runtime:
+`5 passed in 0.39s`
 
-`2 passed, 1 skipped in 7.46s`
+Pełnej macierzy large-v3 VAD nie uruchamiano ponownie, ponieważ TASK 3B.1 nie
+zmienił kodu STT/VAD.
 
-PASS obejmuje realny host flow z pustym `transcript.final` dla ciszy i pełną
-negative matrix. Jedyny skip to brak `KULAI_WHISPER_AUDIO`.
+## 12. Pozostałe kontrole
 
-No-argument `scripts/stt_smoke.py`:
-
-- STT smoke: `PASS`;
-- model: `large-v3`;
-- VAD: `true`;
-- transcript character count: `0`;
-- segment count: `0`;
-- duration: `1.0 s`;
-- model reused: `true`.
-
-## 24. pip check
+`python -m pip check`:
 
 `No broken requirements found.`
 
-## 25. git diff --check
+`git diff --check`:
 
-PASS. Git wypisał wyłącznie informacyjne ostrzeżenia o przyszłej konwersji LF
-do CRLF; nie wykrył whitespace errors.
+PASS. Wystąpiły wyłącznie informacyjne ostrzeżenia o przyszłej konwersji LF do
+CRLF; nie wykryto whitespace errors.
 
-## 26. db_doctor
+Końcowe liczniki po wszystkich testach:
 
-Wszystkie kontrole PASS:
+- Memory count: `0`;
+- vector record count: `0`.
 
-- expected/current Alembic head: `kulai_memory_0001`;
-- read-only DB transaction: `on`;
-- PostgreSQL: `18.6`;
-- vector extension: `0.8.6`;
-- wymagane tabele i schema: OK;
-- vector dimension: configured i actual `1024`;
-- read query: OK.
+## 13. Środowisko Python
 
-## 27. Memory count przed/po
+Walidację wykonano projektowym root SDK:
 
-- przed realnymi smoke: `0`;
-- po realnych smoke: `0`.
+- Python: `3.13.15`;
+- executable: `.venv\Scripts\python.exe`;
+- package manager: `pip`.
 
-## 28. Vector count przed/po
+PyCharm nadal wskazuje dla osobnego modułu backend ignorowane `backend/.venv`
+z Python 3.14.5. Pierwsza próba uruchomienia focused tests z tego interpretera
+zakończyła się przed collection komunikatem `No module named pytest`; nie był to
+błąd kodu ani testu. Nie instalowano pakietów i nie zmieniano środowiska.
 
-- przed realnymi smoke: `0`;
-- po realnych smoke: `0`.
+## 14. Vendor i końcowy stan repozytorium
 
-Nie zapisano Memory, transcriptu, audio, embeddingu ani vector record. Nie
-uruchomiono RAG, LLM, WebSocket ani frontendu.
+Vendor SHA:
 
-## 29. Końcowy git status
+`925b08a13aab9a62e080103185446543a7795794`
 
-Oczekiwane, niezacommitowane zmiany TASK 3A.2:
+`vendor/kulai_modules` pozostaje clean. Submodule nadal wskazuje przypięty SHA.
 
-- `backend/.env.example`;
-- `backend/README.md`;
-- `backend/src/kulai_memory/settings.py`;
-- `backend/src/kulai_memory/whisper_provider.py`;
-- `backend/tests/integration/test_whisper.py`;
-- `backend/tests/test_whisper_provider.py`;
-- `scripts/stt_smoke.py`;
-- `tests/test_stt_smoke.py`;
-- `wynik.txt`.
+Zmiany TASK 3B i TASK 3B.1 pozostają niezacommitowane i niewypchnięte. Nowa
+zmiana TASK 3B.1 dotyczy realnych testów PostgreSQL oraz tego raportu. Nie
+zmieniono migracji, vendora, kodu STT/VAD, embeddings, vector write, RAG, Ollama,
+WebSocket ani frontendu.
 
-Nie wykonano commit ani push.
+Końcowy `git status --short --branch`:
 
-## 30. Końcowy git submodule status
+```text
+## main...origin/main
+ M README.md
+ M backend/README.md
+ M backend/src/kulai_memory/application/__init__.py
+ M backend/src/kulai_memory/application/memory.py
+ M backend/src/kulai_memory/application/ports.py
+ M backend/src/kulai_memory/database_safety.py
+ M backend/src/kulai_memory/persistence/models.py
+ M backend/src/kulai_memory/persistence/repository.py
+ M backend/tests/integration/test_memory_postgres.py
+ M backend/tests/integration/test_whisper.py
+ M backend/tests/test_memory.py
+ M backend/tests/test_memory_persistence.py
+ M wynik.txt
+?? backend/migrations/versions/kulai_memory_0002_memory_ingestion_id.py
+?? backend/src/kulai_memory/application/ingestion.py
+?? backend/tests/test_memory_ingestion.py
+```
 
-`925b08a13aab9a62e080103185446543a7795794 vendor/kulai_modules (remotes/origin/HEAD)`
+`git submodule status`:
 
-Vendor working tree pozostaje clean.
+```text
+ 925b08a13aab9a62e080103185446543a7795794 vendor/kulai_modules (remotes/origin/HEAD)
+```
 
-## 31. Czy potrzebny jest root-fix w reusable provider
-
-Nie. Istniejący boolean `vad_filter` i jego bezpośrednie przekazanie do
-faster-whisper poprawnie rozwiązują wszystkie kontrolowane false positives.
-Host nie potrzebuje obejścia ani provider-specific parametrów VAD.
-
-## 32. Co przechodzi do TASK 3B
-
-TASK 3B powinien jawnie wdrożyć politykę biznesową:
-
-- pusty lub whitespace-only `transcript.final` oznacza `NO MEMORY CREATED`;
-- dopiero zaakceptowany niepusty transcript może rozpocząć tworzenie Memory;
-- language detection nie jest dowodem istnienia mowy;
-- obecny VAD pozostaje pierwszą ochroną przed non-speech inputem.
-
-TASK 3A.2 nie tworzy ani nie zapisuje Memory.
-
-## 33. Decyzja
+## 15. Decyzja
 
 **OK DO COMMITA**
 
-Host domyślnie włącza VAD, factory przekazuje flagę, realny `large-v3` na CUDA
-działa, wszystkie kontrolowane negative fixtures są puste, pełne testy i
-opt-in integration przechodzą, liczniki DB są niezmienione, a vendor pozostaje
-clean.
+Trwała idempotencja po commit i nowej sesji oraz atomowe zachowanie dwóch
+równoległych transakcji zostały udowodnione na prawdziwym PostgreSQL. Backup i
+restore smoke aktualnej głównej bazy przeszedł poprawnie, source DB pozostała
+niezmieniona, wszystkie testy i quality gates przeszły, a vendor jest czysty.

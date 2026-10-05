@@ -294,7 +294,8 @@ async def memory_fingerprint(connection: AsyncConnection) -> MemoryFingerprint:
     result = await connection.stream(
         text(
             """
-            SELECT id, content, source_kind, session_id, metadata_json, created_at
+            SELECT id, ingestion_id, content, source_kind, session_id,
+                   metadata_json, created_at
             FROM memories
             ORDER BY id
             """
@@ -310,6 +311,7 @@ async def memory_fingerprint(connection: AsyncConnection) -> MemoryFingerprint:
         canonical = json.dumps(
             {
                 "id": str(mapping["id"]),
+                "ingestion_id": str(mapping["ingestion_id"]),
                 "content": mapping["content"],
                 "source_kind": mapping["source_kind"],
                 "session_id": (
@@ -371,6 +373,7 @@ async def vector_fingerprint(connection: AsyncConnection) -> VectorFingerprint:
 
 EXPECTED_MEMORY_COLUMNS: dict[str, tuple[str, bool, int | None]] = {
     "id": ("uuid", False, None),
+    "ingestion_id": ("uuid", False, None),
     "content": ("text", False, None),
     "source_kind": ("varchar", False, 32),
     "session_id": ("uuid", True, None),
@@ -579,6 +582,39 @@ async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
                         for name in EXPECTED_MEMORY_COLUMNS
                     },
                     message=None if schema_ok else "The memories schema is incompatible.",
+                )
+            )
+
+            ingestion_id_unique = await connection.scalar(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint AS constraint_record
+                        JOIN pg_class AS relation
+                          ON relation.oid = constraint_record.conrelid
+                        JOIN pg_namespace AS namespace
+                          ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = 'public'
+                          AND relation.relname = 'memories'
+                          AND constraint_record.conname =
+                              'uq_memories_ingestion_id'
+                          AND constraint_record.contype = 'u'
+                          AND pg_get_constraintdef(constraint_record.oid) =
+                              'UNIQUE (ingestion_id)'
+                    )
+                    """
+                )
+            )
+            checks.append(
+                CheckResult(
+                    name="constraint.memories_ingestion_id_unique",
+                    ok=bool(ingestion_id_unique),
+                    message=(
+                        None
+                        if ingestion_id_unique
+                        else "The Memory ingestion identifier is not unique."
+                    ),
                 )
             )
 

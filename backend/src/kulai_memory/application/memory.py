@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from math import isfinite
@@ -49,6 +50,7 @@ class Memory(BaseModel):
     )
 
     id: UUID = Field(default_factory=uuid4)
+    ingestion_id: UUID = Field(default_factory=uuid4)
     content: str
     source_kind: MemorySourceKind = MemorySourceKind.VOICE
     session_id: UUID | None = None
@@ -89,6 +91,23 @@ class MemoryPersistenceError(RuntimeError):
         super().__init__(self.safe_message)
 
 
+class MemoryIdempotencyConflictError(RuntimeError):
+    """The ingestion key was already used for a different voice memory."""
+
+    safe_message = "The ingestion identifier conflicts with an existing memory."
+
+    def __init__(self) -> None:
+        super().__init__(self.safe_message)
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotentMemoryWrite:
+    """Result of one atomic create-or-get repository operation."""
+
+    memory: Memory
+    created: bool
+
+
 def _validate_limit(limit: int) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
         raise ValueError("Memory list limit must be between 1 and 100.")
@@ -105,17 +124,47 @@ class MemoryService:
         self,
         *,
         content: str,
+        ingestion_id: UUID | None = None,
         source_kind: MemorySourceKind | str = MemorySourceKind.VOICE,
         session_id: UUID | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> Memory:
         memory = Memory(
+            ingestion_id=ingestion_id if ingestion_id is not None else uuid4(),
             content=content,
             source_kind=source_kind,
             session_id=session_id,
             metadata=dict(metadata) if metadata is not None else {},
         )
         return await self._repository.create(memory)
+
+    async def create_memory_idempotent(
+        self,
+        *,
+        ingestion_id: UUID,
+        content: str,
+        source_kind: MemorySourceKind | str = MemorySourceKind.VOICE,
+        session_id: UUID | None = None,
+        metadata: Mapping[str, JsonValue] | None = None,
+    ) -> IdempotentMemoryWrite:
+        """Create once for an ingestion UUID or return its existing Memory."""
+
+        candidate = Memory(
+            ingestion_id=ingestion_id,
+            content=content,
+            source_kind=source_kind,
+            session_id=session_id,
+            metadata=dict(metadata) if metadata is not None else {},
+        )
+        write = await self._repository.create_or_get_by_ingestion_id(candidate)
+        existing = write.memory
+        if not write.created and (
+            existing.content != candidate.content
+            or existing.source_kind != candidate.source_kind
+            or existing.session_id != candidate.session_id
+        ):
+            raise MemoryIdempotencyConflictError()
+        return write
 
     async def get_memory(self, memory_id: UUID) -> Memory | None:
         return await self._repository.get_by_id(memory_id)

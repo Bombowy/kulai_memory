@@ -68,6 +68,22 @@ The host `memories` table stores the durable text and JSON metadata without an
 embedding. TASK 5 will write embeddings through the reusable vector store, using
 `str(Memory.id)` as its `record_id` under a stable memories namespace.
 
+The provider-neutral `TranscriptMemoryIngestionService` is the persistence stage
+after STT/VAD. It accepts a `TranscriptionResult`, a voice `session_id`, and a
+client-generated `UUID ingestion_id`. Empty or whitespace-only transcripts return
+`skipped_empty` and never call the repository. A non-empty transcript is stored
+once: an identical retry returns the original Memory as `duplicate`, while reuse
+of the UUID with different content or a different session raises a controlled
+idempotency conflict. Repeating the same spoken text under a new ingestion UUID
+creates a distinct Memory.
+
+PostgreSQL enforces `memories.ingestion_id` as `NOT NULL UNIQUE`. The adapter uses
+an atomic insert-on-conflict operation but keeps the existing caller-owned
+transaction boundary. Ingestion stores provider-neutral STT diagnostics without
+raw audio or segment text. Language metadata is diagnostic and is never used as
+a speech-presence or acceptance rule. Persistence events remain the responsibility
+of a future session orchestrator so `VoiceSession` stays independent of Memory.
+
 Host package: `kulai_memory`.
 
 The core FastAPI runtime and `/health` endpoint are generated. KulAI modules remain pinned by `../kulai.project.json` and the `../vendor/kulai_modules` submodule. Auth and business wiring are not generated yet.

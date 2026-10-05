@@ -42,6 +42,10 @@ that reusable migration graph is deliberately recomposed.
 
 Core FastAPI runtime generated. The ASGI entry point is `kulai_memory.main:app`, and `GET /health` is available. Auth and business-module wiring have not been generated yet.
 
+The application core includes provider-neutral Whisper transcription and
+idempotent transcript ingestion into PostgreSQL Memory. Empty VAD-filtered
+transcripts create no Memory; callers identify retries with a stable UUID.
+
 ## Bootstrap and local run
 
 Use KulAI Studio's project detail page to create the isolated `.venv`, install

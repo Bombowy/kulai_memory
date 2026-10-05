@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from kulai_memory.application import (
+    IdempotentMemoryWrite,
     Memory,
     MemoryRepository,
     MemoryService,
@@ -27,6 +28,22 @@ class InMemoryMemoryRepository:
         self.records[memory.id] = memory
         self.created.append(memory)
         return memory
+
+    async def create_or_get_by_ingestion_id(
+        self, memory: Memory
+    ) -> IdempotentMemoryWrite:
+        existing = next(
+            (
+                record
+                for record in self.records.values()
+                if record.ingestion_id == memory.ingestion_id
+            ),
+            None,
+        )
+        if existing is not None:
+            return IdempotentMemoryWrite(memory=existing, created=False)
+        await self.create(memory)
+        return IdempotentMemoryWrite(memory=memory, created=True)
 
     async def get_by_id(self, memory_id: UUID) -> Memory | None:
         return self.records.get(memory_id)
@@ -46,8 +63,10 @@ def test_memory_defaults_have_stable_identity_and_utc_timestamp() -> None:
     another = Memory(content="inna pamięć")
 
     assert isinstance(memory.id, UUID)
+    assert isinstance(memory.ingestion_id, UUID)
     assert memory.id == memory.id
     assert memory.id != another.id
+    assert memory.ingestion_id != another.ingestion_id
     assert memory.content == "  zachowaj treść transkryptu  "
     assert memory.source_kind is MemorySourceKind.VOICE
     assert memory.session_id is None

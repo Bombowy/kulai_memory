@@ -7,6 +7,7 @@ import random
 import struct
 import wave
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 from kulai_provider_whisper import WhisperTranscriptionProvider
@@ -19,7 +20,12 @@ from kulai_transcription import (
 )
 
 from kulai_memory.application import (
+    IdempotentMemoryWrite,
+    Memory,
+    MemoryService,
     TranscriptFinalEvent,
+    TranscriptMemoryIngestionService,
+    TranscriptMemoryIngestionStatus,
     TranscriptionService,
     VoiceSession,
     VoiceSessionEvent,
@@ -41,6 +47,26 @@ class _CollectingSink:
 
     async def emit(self, event: VoiceSessionEvent) -> None:
         self.events.append(event)
+
+
+class _RejectingMemoryRepository:
+    async def create(self, memory: Memory) -> Memory:
+        del memory
+        raise AssertionError("empty transcript must not create Memory")
+
+    async def create_or_get_by_ingestion_id(
+        self, memory: Memory
+    ) -> IdempotentMemoryWrite:
+        del memory
+        raise AssertionError("empty transcript must not create Memory")
+
+    async def get_by_id(self, memory_id: UUID) -> Memory | None:
+        del memory_id
+        raise AssertionError("empty transcript must not read Memory")
+
+    async def list_recent(self, *, limit: int) -> tuple[Memory, ...]:
+        del limit
+        raise AssertionError("empty transcript must not list Memory")
 
 
 @pytest.fixture(scope="module")
@@ -136,11 +162,20 @@ def test_real_whisper_host_flow_emits_empty_final_for_silence(
 
         await session.start()
         result = await session.transcribe(request=_request(audio_path))
+        ingestion = await TranscriptMemoryIngestionService(
+            memory_service=MemoryService(repository=_RejectingMemoryRepository())
+        ).ingest(
+            transcription=result,
+            ingestion_id=uuid4(),
+            session_id=session.session_id,
+        )
         await session.close()
 
         assert isinstance(result, TranscriptionResult)
         assert result.text.strip() == ""
         assert not any(segment.text.strip() for segment in result.segments)
+        assert ingestion.status is TranscriptMemoryIngestionStatus.SKIPPED_EMPTY
+        assert ingestion.memory is None
         finals = [event for event in sink.events if isinstance(event, TranscriptFinalEvent)]
         assert len(finals) == 1
         assert finals[0].payload.text == ""
