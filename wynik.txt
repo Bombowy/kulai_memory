@@ -1,309 +1,148 @@
-# TASK 3B.1 — Final durable/concurrent idempotency proof
+﻿TASK 4A.1 — Fix real Windows microphone startup bug and error classification
+Raport końcowy — 2026-10-05
 
-Data wykonania: 2026-10-05
-Repozytorium: `C:\Bombowy\Projekty\kulai_memory`
-Branch: `main`
+1. Dokładny root cause TypeError
 
-## 1. Stan początkowy
+`MicrophoneRecorder.list_devices()` rozpoznawał parę input/output wyłącznie przez `isinstance(value, (tuple, list))`. Rzeczywisty `sounddevice.default.device` nie spełniał tego warunku, więc kod wykonywał `int(configured_default)` na całej parze. Obiekt nie obsługuje takiej konwersji i rzuca `TypeError`. Recorder opakowywał go jako `DesktopRecordingError`, po czym `DesktopController.startup()` błędnie przepakowywał ten publiczny błąd jako `DesktopDatabaseError`.
 
-- ostatni commit: `a748411 feat: harden Whisper non-speech handling`;
-- branch `main` był zgodny z `origin/main`;
-- wszystkie zmiany TASK 3B pozostawały niezacommitowane;
-- nie wykonano commit ani push;
-- vendor był czysty i pozostał czysty;
-- vendor SHA: `925b08a13aab9a62e080103185446543a7795794`.
+2. Rzeczywisty typ i charakter default.device
 
-Zmian TASK 3B nie cofnięto ani nie zgubiono. TASK 3B.1 rozszerzył realne testy
-PostgreSQL i raport. Nie zmieniono vendora.
+- Runtime sounddevice 0.5.6 zwraca obiekt typu `sounddevice._InputOutputPair`.
+- Informacja o typie jest wyłącznie diagnostyczna; kod produkcyjny nie importuje ani nie sprawdza tej prywatnej klasy.
+- Obiekt jest pair-like i reprezentuje się jako `[input, output]`.
+- Nie jest instancją `list` ani `tuple`.
+- Obsługuje indeksowanie: `[0]` to input, `[1]` to output.
+- Bezpośrednie `int(pair)` kończy się `TypeError`.
+- W raporcie nie zapisano nazw urządzeń ani innych prywatnych danych użytkownika.
 
-## 2. Alembic i schemat
+3. Normalizacja default input
 
-Alembic script head:
+Dodano prywatne, provider-agnostic helpery w recorderze:
 
-`kulai_memory_0002`
+- scalar integer-like jest rozpoznawany przez `operator.index`;
+- jeśli wartość nie jest scalarem, kod próbuje odczytać element `[0]`;
+- element input jest normalizowany do nieujemnego integer device ID;
+- output `[1]` nigdy nie uczestniczy w wyborze default input;
+- kod nie zależy od nazwy ani implementacji prywatnej klasy sounddevice.
 
-Aktualna revision głównej bazy:
+Odczyt listy urządzeń i host API nadal zgłasza kontrolowany `DesktopRecordingError`. Odczyt lub normalizacja samego optional defaultu jest best-effort i nie blokuje enumeracji.
 
-`kulai_memory_0002 (head)`
+4. Regression test pair-like
 
-Migracji `kulai_memory_0002` nie zmieniono. Nie wykonano downgrade, stamp, reset,
-`create_all` ani ponownego upgrade głównej bazy.
+Dodano własny fake pair-like object:
 
-## 3. Durable retry po commit
+- `repr(obj) == "[1, 3]"`;
+- `obj[0] == 1`, `obj[1] == 3`;
+- `isinstance(obj, (list, tuple)) == False`.
 
-Dodano realny test w marker-verified owned temporary PostgreSQL database,
-migrowanej do bieżącego head.
+Test potwierdza, że `list_devices()` nie rzuca `TypeError`, input device 1 jest jedynym defaultem, a input-capable device 3 nie jest błędnie oznaczone na podstawie output side. Dodano też osobny test scalar default.
 
-Przebieg i wynik:
+5. Brak poprawnego/default input
 
-- session #1, nowe repository/service: `CREATED`;
-- wykonano prawdziwy `COMMIT` i zamknięto session #1;
-- session #2, nowa `AsyncSession` i nowe repository/service: `DUPLICATE`;
-- diagnostyczne metadata STT w retry celowo różniły się;
-- `same memory_id`: `true`;
-- zwrócono pierwszą canonical Memory i nie nadpisano jej metadata;
-- session #2 zakończyła się poprawnym `COMMIT`;
-- session #3 z tym samym ingestion ID i inną treścią zgłosiła
-  `MemoryIdempotencyConflictError`;
-- po konflikcie wykonano bezpieczny rollback;
-- read-only verification: count dla ingestion ID = `1`;
-- read-only verification: całkowity table count = `1`;
-- stored content, source, session ID i metadata pozostały oryginalne.
+Niepoprawny obiekt defaultu oraz wartość `-1` nie przerywają enumeracji. Lista input devices jest zwracana normalnie, a wszystkie wpisy mają `is_default=False`.
 
-Focused durable integration:
+6. Poprzednia błędna klasyfikacja exception
 
-`1 passed, 5 deselected in 1.95s`
+Po poprawnym db_doctor drugi szeroki blok `except Exception` zachowywał tylko `DesktopConfigurationError` i `DesktopDatabaseError`. Każdy inny błąd, w tym prawidłowo sklasyfikowany `DesktopRecordingError`, był mechanicznie zamieniany na `DesktopDatabaseError`. UI otrzymywał przez to fałszywy komunikat o niedostępnej bazie.
 
-Test udowadnia idempotencję po commit, zamknięciu sesji oraz utworzeniu nowych
-instancji repository i service.
+7. Nowa klasyfikacja startup errors
 
-## 4. Real concurrent duplicate
+- Każdy istniejący `DesktopPublicError` zachowuje swój typ i safe public message.
+- `DesktopRecordingError` pozostaje błędem mikrofonu.
+- `DesktopConfigurationError` pozostaje błędem konfiguracji/CUDA.
+- `DesktopDependencyError` pozostaje błędem zależności.
+- Błąd doctor lub nieoczekiwany błąd engine/session setup jest klasyfikowany jako `DesktopDatabaseError`.
+- Nieoczekiwany błąd providera lub innego niedatabazowego etapu staje się bazowym, bezpiecznym `DesktopPublicError`.
+- Raw exception message nie trafia do UI.
+- Cleanup częściowo utworzonych zasobów nadal jest wykonywany przed ponownym rzuceniem błędu.
 
-Dodano drugi test w osobnej marker-verified owned temporary PostgreSQL database.
+UI pokazuje public message otrzymany ze startupu. Pomocniczy status ma neutralne `Startup failed`; nie zawiera już hardcodowanego `Database startup check failed` dla wszystkich klas błędów.
 
-Dwa niezależne taski używały:
+8. Real device enumeration smoke
 
-- tego samego ingestion ID;
-- tego samego semantycznego payloadu;
-- dwóch osobnych `AsyncSession` i transakcji;
-- dwóch osobnych repository/service;
-- `asyncio.Barrier(2)` do zsynchronizowania startu;
-- `asyncio.gather` objętego timeoutem `15.0 s`.
+Uruchomiono prawdziwy `MicrophoneRecorder.list_devices()` na sounddevice bez otwierania streamu i bez nagrywania:
 
-Wynik:
+- wynik: PASS;
+- input device count: 7;
+- system default input reported: true;
+- default-marked count: 1;
+- rzeczywisty default value był niestandardowym pair-like object;
+- nie wypisano ani nie zapisano nazw urządzeń.
 
-- statusy: `{CREATED, DUPLICATE}`;
-- kolejność statusów była nieistotna;
-- `same memory_id`: `true`;
-- final count dla ingestion ID: `1`;
-- final table count: `1`;
-- stored content i session ID pozostały oryginalne;
-- zewnętrzny `IntegrityError`: brak;
-- broken session state: brak;
-- deadlock: brak;
-- timeout: nie wystąpił;
-- drugi rekord: nie powstał;
-- pierwszy rekord: nie został nadpisany.
+9. DesktopController.startup smoke
 
-Focused concurrent integration:
+Uruchomiono prawdziwy `DesktopController.startup()` bez nagrywania i bez Whisper inference:
 
-`1 passed, 5 deselected in 2.09s`
+- startup: PASS;
+- input device count: 7;
+- default-marked count: 1;
+- DB doctor/startup reads: PASS;
+- shutdown/dispose: PASS.
 
-## 5. Atomic repository code
+Nie otwarto mikrofonu, nie utworzono audio, nie uruchomiono large-v3 inference i nie zapisano Memory.
 
-Istniejący kod:
+10. Recorder tests
 
-`INSERT ... ON CONFLICT (ingestion_id) DO NOTHING RETURNING ...`
+- 8 passed.
+- Obejmują pair-like default, scalar default, brak defaultu, enumerację, PCM16 WAV, lifecycle, limit czasu i cleanup własnych plików.
 
-obsłużył durable retry oraz rzeczywistą konkurencję poprawnie. Kod atomowego
-repozytorium nie wymagał zmiany. UNIQUE constraint nie został osłabiony.
+11. Controller tests
 
-Zachowana semantyka:
+- 10 passed.
+- Obejmują zachowanie `DesktopRecordingError`, `DesktopConfigurationError`, `DesktopDependencyError`, `DesktopDatabaseError`, generic public fallback, cleanup oraz wcześniejsze flow CREATED/SKIPPED_EMPTY/retry/provider reuse.
 
-- to samo ingestion ID + ten sam content/source/session => `DUPLICATE`;
-- zmiana wyłącznie diagnostycznych metadata => `DUPLICATE`, pierwsza canonical
-  Memory pozostaje bez zmian;
-- to samo ingestion ID + inna treść/session/source => kontrolowany konflikt;
-- inne ingestion ID + ta sama treść => osobne Memory.
+12. UI tests
 
-## 6. Izolacja fixture records
+- 7 passed.
+- Zweryfikowano osobne safe messages dla database, microphone, configuration i generic failure oraz neutralny pomocniczy startup status.
+- Headless QApplication/QThread startup i shutdown nadal przechodzą.
 
-Wszystkie realne testy PostgreSQL tworzące fixture records korzystają teraz z
-owned temporary databases. Każda baza:
+13. Backend tests
 
-- otrzymuje losową nazwę i ownership marker;
-- jest migrowana do wymaganego revision;
-- zamyka engine przed cleanup;
-- jest usuwana wyłącznie przez `drop_owned_temporary_database` po ponownej
-  weryfikacji markera.
+- 83 passed, 10 skipped.
+- Jedno istniejące ostrzeżenie deprecation pochodzi ze Starlette TestClient.
+- Skips dotyczą testów opt-in.
 
-Główna `kulai_memory` nie była używana do fixture records.
+14. Root tests
 
-## 7. Jawnie pominięty wcześniejszy gate
+- 124 passed, 10 skipped.
+- Jedno istniejące ostrzeżenie deprecation pochodzi ze Starlette TestClient.
 
-pre-migration backup/restore gate was missed; main DB contained 0 Memory and 0
-vector records before migration.
+Application boundary tests: 3 passed. Application core nadal nie importuje PySide6, sounddevice, SQLAlchemy, FastAPI ani konkretnego Whisper providera.
 
-Nie próbowano ukryć ani historycznie odtwarzać tego gate przez downgrade. Backup
-i restore smoke wykonano teraz na aktualnej bazie przy head `kulai_memory_0002`.
+15. db_doctor
 
-## 8. Main DB przed backupem
+PASS:
 
-Przed backupem:
+- PostgreSQL 18.6;
+- expected/current Alembic head `kulai_memory_0002`;
+- read-only transaction diagnostics;
+- `memories` oraz `kulai_vector_records` obecne;
+- `ingestion_id` UUID NOT NULL i UNIQUE;
+- vector extension 0.8.6;
+- `vector(1024)` zgodny z konfiguracją;
+- read query PASS.
 
-- `db_doctor`: PASS;
-- Memory count: `0`;
-- vector record count: `0`;
-- current revision: `kulai_memory_0002`.
+Nie wykonano migracji ani zmian bazy.
 
-## 9. Backup i restore smoke
+16. pip check
 
-Backup utworzono przez `scripts/db_backup.py` w systemowym katalogu TEMP poza
-repozytorium.
+PASS: `No broken requirements found.`
 
-- format: PostgreSQL custom;
-- backup size: `7232 bytes`;
-- SHA-256: `7ca363f42ca41ea280071514761623be3d80907d6e4eecaef27c46006d22e7ca`;
-- `pg_dump`: `18.6`.
+17. git diff --check
 
-`scripts/db_restore_smoke.py`:
+PASS po zapisaniu raportu. Ostrzeżenia o przyszłej konwersji LF do CRLF są informacyjne i nie są błędami whitespace.
 
-- utworzył marker-verified owned restore database;
-- poprawnie odtworzył backup;
-- uruchomił `db_doctor` na odtworzonej bazie;
-- porównał fingerprinty restored DB i source DB;
-- potwierdził Memory rows: `0`;
-- potwierdził vector rows: `0`;
-- potwierdził, że source DB nie zmieniła się podczas restore;
-- bezpiecznie usunął owned restore database.
+18. Git status i vendor
 
-Po restore verification główna baza nadal zawierała:
+- TASK 4A oraz TASK 4A.1 pozostają niezacommitowane zgodnie z wymaganiem.
+- Zmodyfikowane/nowe pliki obejmują wcześniejszy desktop alpha, poprawkę recorder/controller/UI, nowe regresje oraz ten raport.
+- Nie wykonano commit ani push.
+- Vendor pozostaje clean na SHA `925b08a13aab9a62e080103185446543a7795794`.
+- Whisper pozostaje `large-v3`, device `cuda`, compute type `int8_float16`, VAD `true`.
 
-- Memory count: `0`;
-- vector record count: `0`.
+19. Decyzja
 
-Backup utworzony przez ten run został usunięty. Przed usunięciem zweryfikowano
-pełną ścieżkę w systemowym TEMP i oczekiwany prefiks nazwy. Nie usunięto żadnego
-innego pliku.
+OK DO MANUALNEGO TESTU
 
-## 10. db_doctor
-
-Końcowy `db_doctor`: PASS.
-
-Potwierdzone invariants:
-
-- expected/current Alembic head: `kulai_memory_0002`;
-- read-only diagnostic transaction: `on`;
-- PostgreSQL: `18.6`;
-- vector extension: `0.8.6`;
-- `memories` i `kulai_vector_records`: obecne;
-- `memories.ingestion_id`: `UUID NOT NULL`;
-- `uq_memories_ingestion_id`: obecny i unikalny;
-- configured/actual vector dimension: `1024` / `vector(1024)`;
-- database read query: PASS.
-
-Końcowe polecenia migracji:
-
-- `migrate heads` => `kulai_memory_0002`;
-- `migrate current` => `kulai_memory_0002 (head)`.
-
-## 11. Wyniki testów
-
-Focused ingestion/persistence:
-
-`29 passed in 0.89s`
-
-Real durable integration:
-
-`1 passed, 5 deselected in 1.95s`
-
-Real concurrent integration:
-
-`1 passed, 5 deselected in 2.09s`
-
-Wszystkie PostgreSQL opt-in integrations:
-
-Końcowy run po ostatniej korekcie typów testu:
-
-`6 passed in 8.14s`
-
-Wszystkie backend tests bez opt-in:
-
-`55 passed, 9 skipped, 1 warning in 0.92s`
-
-Skipy dotyczą testów opt-in. Warning jest istniejącym ostrzeżeniem deprecation
-Starlette/AnyIO.
-
-Wszystkie root tests:
-
-`40 passed in 1.28s`
-
-Application boundary tests:
-
-`2 passed in 0.02s`
-
-Reproducibility tests:
-
-`5 passed in 0.39s`
-
-Pełnej macierzy large-v3 VAD nie uruchamiano ponownie, ponieważ TASK 3B.1 nie
-zmienił kodu STT/VAD.
-
-## 12. Pozostałe kontrole
-
-`python -m pip check`:
-
-`No broken requirements found.`
-
-`git diff --check`:
-
-PASS. Wystąpiły wyłącznie informacyjne ostrzeżenia o przyszłej konwersji LF do
-CRLF; nie wykryto whitespace errors.
-
-Końcowe liczniki po wszystkich testach:
-
-- Memory count: `0`;
-- vector record count: `0`.
-
-## 13. Środowisko Python
-
-Walidację wykonano projektowym root SDK:
-
-- Python: `3.13.15`;
-- executable: `.venv\Scripts\python.exe`;
-- package manager: `pip`.
-
-PyCharm nadal wskazuje dla osobnego modułu backend ignorowane `backend/.venv`
-z Python 3.14.5. Pierwsza próba uruchomienia focused tests z tego interpretera
-zakończyła się przed collection komunikatem `No module named pytest`; nie był to
-błąd kodu ani testu. Nie instalowano pakietów i nie zmieniano środowiska.
-
-## 14. Vendor i końcowy stan repozytorium
-
-Vendor SHA:
-
-`925b08a13aab9a62e080103185446543a7795794`
-
-`vendor/kulai_modules` pozostaje clean. Submodule nadal wskazuje przypięty SHA.
-
-Zmiany TASK 3B i TASK 3B.1 pozostają niezacommitowane i niewypchnięte. Nowa
-zmiana TASK 3B.1 dotyczy realnych testów PostgreSQL oraz tego raportu. Nie
-zmieniono migracji, vendora, kodu STT/VAD, embeddings, vector write, RAG, Ollama,
-WebSocket ani frontendu.
-
-Końcowy `git status --short --branch`:
-
-```text
-## main...origin/main
- M README.md
- M backend/README.md
- M backend/src/kulai_memory/application/__init__.py
- M backend/src/kulai_memory/application/memory.py
- M backend/src/kulai_memory/application/ports.py
- M backend/src/kulai_memory/database_safety.py
- M backend/src/kulai_memory/persistence/models.py
- M backend/src/kulai_memory/persistence/repository.py
- M backend/tests/integration/test_memory_postgres.py
- M backend/tests/integration/test_whisper.py
- M backend/tests/test_memory.py
- M backend/tests/test_memory_persistence.py
- M wynik.txt
-?? backend/migrations/versions/kulai_memory_0002_memory_ingestion_id.py
-?? backend/src/kulai_memory/application/ingestion.py
-?? backend/tests/test_memory_ingestion.py
-```
-
-`git submodule status`:
-
-```text
- 925b08a13aab9a62e080103185446543a7795794 vendor/kulai_modules (remotes/origin/HEAD)
-```
-
-## 15. Decyzja
-
-**OK DO COMMITA**
-
-Trwała idempotencja po commit i nowej sesji oraz atomowe zachowanie dwóch
-równoległych transakcji zostały udowodnione na prawdziwym PostgreSQL. Backup i
-restore smoke aktualnej głównej bazy przeszedł poprawnie, source DB pozostała
-niezmieniona, wszystkie testy i quality gates przeszły, a vendor jest czysty.
+Automatyczna weryfikacja potwierdziła usunięcie rzeczywistego Windows TypeError, prawidłową enumerację siedmiu wejść z jednym defaultem, poprawny pełny startup kontrolera oraz rozdzielenie błędów mikrofonu, konfiguracji, bazy i nieoczekiwanych błędów. Kolejny krok to ręczne uruchomienie `python scripts/desktop.py` i użycie NAGRAJ/STOP przez użytkownika.

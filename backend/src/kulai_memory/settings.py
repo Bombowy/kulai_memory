@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     kulai_whisper_device: str = "cuda"
     kulai_whisper_compute_type: str = "int8_float16"
     kulai_whisper_vad_filter: bool = True
+    kulai_cuda_dll_dir: Path | None = None
+
+    @field_validator("kulai_cuda_dll_dir", mode="before")
+    @classmethod
+    def empty_cuda_directory_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 @lru_cache(maxsize=1)

@@ -1,0 +1,102 @@
+"""Small desktop-facing value objects without Qt or infrastructure coupling."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from uuid import UUID
+
+
+class DesktopResultStatus(str, Enum):
+    CREATED = "created"
+    DUPLICATE = "duplicate"
+    SKIPPED_EMPTY = "skipped_empty"
+    SAVE_FAILED = "save_failed"
+
+
+class DesktopProgressState(str, Enum):
+    TRANSCRIBING = "transcribing"
+    TRANSCRIPT_READY = "transcript_ready"
+    SAVING = "saving"
+
+
+@dataclass(frozen=True, slots=True)
+class MicrophoneDevice:
+    device_id: int
+    name: str
+    host_api: str | None
+    is_default: bool
+
+    @property
+    def display_name(self) -> str:
+        host = f" - {self.host_api}" if self.host_api else ""
+        marker = " (default)" if self.is_default else ""
+        return f"{self.name}{host} [{self.device_id}]{marker}"
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingArtifact:
+    path: Path
+    duration_seconds: float
+    limit_reached: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MemorySummary:
+    id: UUID
+    created_at: datetime
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopStartupResult:
+    devices: tuple[MicrophoneDevice, ...]
+    memories: tuple[MemorySummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopProgress:
+    state: DesktopProgressState
+    transcript: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopProcessingResult:
+    status: DesktopResultStatus
+    transcript: str
+    memory_id: UUID | None
+    save_pending: bool
+
+
+class DesktopPublicError(RuntimeError):
+    safe_message = "The desktop operation could not be completed."
+
+    def __init__(self) -> None:
+        self.public_message = self.safe_message
+        super().__init__(self.public_message)
+
+
+class DesktopConfigurationError(DesktopPublicError):
+    safe_message = "Desktop configuration is invalid."
+
+
+class DesktopDependencyError(DesktopPublicError):
+    safe_message = "Install the desktop optional dependencies."
+
+
+class DesktopDatabaseError(DesktopPublicError):
+    safe_message = "Database is unavailable or its schema is not current."
+
+
+class DesktopRecordingError(DesktopPublicError):
+    safe_message = "Microphone recording could not be completed."
+
+
+class DesktopStateError(DesktopPublicError):
+    safe_message = "The desktop operation is not allowed in the current state."
+
+
+class DesktopTranscriptionError(DesktopPublicError):
+    safe_message = "Transcription failed."

@@ -53,10 +53,11 @@ event delivery. Run the opt-in pytest integration with
 integration also checks temporary silence, click, low-level noise, and tone
 fixtures without writing audio files into the repository.
 
-TASK 3A does not persist audio or transcripts and does not call `MemoryService`.
-A later mobile/WebSocket adapter will translate incoming audio bytes into the
-same application request used by the in-process desktop path. No HTTP server is
-required for in-process use.
+The desktop adapter in `kulai_memory.desktop` now orchestrates this path in
+process. Its PySide6 UI never calls localhost HTTP. A dedicated worker thread
+owns one asyncio event loop, one reusable Whisper provider, and the database
+pool, so model load, inference, and PostgreSQL work do not block the Qt UI
+thread.
 
 The `Memory` domain and `MemoryService` also live in `kulai_memory.application`.
 They depend only on the `MemoryRepository` port. The PostgreSQL implementation,
@@ -101,3 +102,24 @@ the configured main database. See `../docs/DATA_SAFETY.md` for the invariants
 that persistence, embeddings, and future RAG work must preserve.
 `DATABASE_URL` must remain unset for the canonical local Compose workflow so
 the backend and container use the same `DB_*` values from `backend/.env`.
+
+Install and launch the desktop alpha from the repository root:
+
+```text
+.venv\Scripts\python.exe -m pip install -e ".\backend[desktop]"
+.venv\Scripts\python.exe scripts\db_doctor.py
+.venv\Scripts\python.exe scripts\desktop.py
+```
+
+The desktop requires the canonical `large-v3`, `cuda`, `int8_float16`, and
+VAD-enabled Whisper settings. `KULAI_CUDA_DLL_DIR` can identify a local CUDA 12
+DLL directory. It is validated and added only to the desktop process PATH;
+there is no CPU fallback or system PATH change. The microphone adapter uses
+`sounddevice.RawInputStream` to write a private temporary 16 kHz, mono, PCM16
+WAV and removes only files that it created.
+
+One logical recording receives one UUID before capture starts. If PostgreSQL
+fails after successful STT, the process retains the `TranscriptionResult`,
+ingestion UUID, and voice-session UUID. `RETRY SAVE` uses those same values and
+does not run STT again. `CREATED` and `DUPLICATE` clear this pending state;
+empty VAD output reports `SKIPPED_EMPTY` and creates no Memory.

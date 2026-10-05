@@ -40,7 +40,10 @@ that reusable migration graph is deliberately recomposed.
 
 ## Runtime status
 
-Core FastAPI runtime generated. The ASGI entry point is `kulai_memory.main:app`, and `GET /health` is available. Auth and business-module wiring have not been generated yet.
+The first desktop alpha runs in a native PySide6 window and calls the
+application core directly in process. It does not start FastAPI or Uvicorn.
+The generated ASGI entry point remains available separately at
+`kulai_memory.main:app`.
 
 The application core includes provider-neutral Whisper transcription and
 idempotent transcript ingestion into PostgreSQL Memory. Empty VAD-filtered
@@ -94,3 +97,53 @@ $env:KULAI_RUN_POSTGRES_INTEGRATION = "1"
 
 After bootstrap, run `.venv` Python with `scripts/dev.py`; the server binds to
 `127.0.0.1`. The data-safety contract is in `docs/DATA_SAFETY.md`.
+
+## Desktop alpha
+
+Install the optional desktop dependencies into the project environment:
+
+```text
+.venv\Scripts\python.exe -m pip install -e ".\backend[desktop]"
+```
+
+Keep the canonical Whisper configuration in `backend/.env`:
+
+```text
+KULAI_WHISPER_MODEL=large-v3
+KULAI_WHISPER_DEVICE=cuda
+KULAI_WHISPER_COMPUTE_TYPE=int8_float16
+KULAI_WHISPER_VAD_FILTER=true
+KULAI_CUDA_DLL_DIR=
+```
+
+`KULAI_CUDA_DLL_DIR` may point to the local directory containing the CUDA 12
+runtime DLLs required by CTranslate2. The desktop validates the directory and
+adds it only to the current process before loading Whisper. It never changes
+the system PATH and never falls back to CPU.
+
+Start PostgreSQL, migrate explicitly, and confirm the schema before launching:
+
+```text
+.venv\Scripts\python.exe scripts\postgres.py up
+.venv\Scripts\python.exe scripts\migrate.py upgrade
+.venv\Scripts\python.exe scripts\db_doctor.py
+.venv\Scripts\python.exe scripts\desktop.py
+```
+
+Manual microphone smoke checklist:
+
+1. Select the intended microphone.
+2. Click `NAGRAJ`.
+3. Say a short Polish note.
+4. Click `STOP`.
+5. Confirm that the transcript appears.
+6. Confirm the `Saved` status.
+7. Confirm the Memory appears in the recent list.
+8. Record a second note and confirm that the already-loaded model is reused.
+
+The alpha records mono PCM16 at 16 kHz, limits one recording to 10 minutes,
+and removes its temporary WAV after transcription. A failed database save can
+be retried in the same process without recording or transcribing again. Pending
+saves do not survive application restart. Streaming partial transcripts,
+mobile clients, WebSocket transport, embeddings, semantic search, and RAG are
+outside this alpha.
