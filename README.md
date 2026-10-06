@@ -166,5 +166,51 @@ closes cleanly after a saved or empty note.
 The largest binary frame is 256 KiB and total audio is limited to 19,200,000
 bytes (10 minutes). After a recoverable `memory.save_failed`, `memory.retry`
 reuses the transcript, ingestion ID, and session ID without running Whisper
-again. There is no partial STT. This TASK 4B adapter remains localhost-only and
-has no authentication until Android/LAN authentication is added in TASK 4C.
+again. There is no partial STT. This adapter remains localhost-only and has no
+authentication until LAN/WSS pairing is added in TASK 4D.
+
+## Android voice-memory alpha
+
+The native Android alpha lives in `mobile/android`. It uses Kotlin, Jetpack
+Compose, `AudioRecord`, and OkHttp. The debug build records voice-recognition
+PCM16 at 16 kHz mono and streams bounded binary frames to the existing
+WebSocket protocol v1. It keeps a private cache copy only while a note can be
+retried, uses one stable ingestion UUID for every retry, and deletes the cache
+after `memory.saved`, an empty transcript, or a nonrecoverable error.
+
+Build and test the debug APK from the repository root:
+
+```text
+cd mobile\android
+gradlew.bat testDebugUnitTest
+gradlew.bat assembleDebug
+```
+
+The APK is written to:
+
+```text
+mobile\android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+The debug client deliberately uses `ws://127.0.0.1:8000/ws/memory`. Cleartext
+is enabled only in the debug manifest. The main/release manifest does not
+enable it. Start the backend on loopback, attach a debug-authorized Android
+device, install the APK, and configure ADB reverse:
+
+```text
+.venv\Scripts\python.exe scripts\dev.py
+adb reverse tcp:8000 tcp:8000
+adb reverse --list
+adb install -r mobile\android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+The backend must remain bound to `127.0.0.1`; TASK 4C does not expose it to the
+LAN. On the phone, grant microphone permission, record a short Polish note,
+stop, and confirm `Saved`. Then record 2–3 seconds of silence and confirm `No
+speech detected` without a new Memory. Disconnect recovery uses `RETRY NOTE`
+to replay private cached PCM with the same ingestion ID. A live recoverable
+database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
+
+This alpha does not retain retry state across process death. It has no history
+screen, LAN transport, WSS, authentication, embeddings, RAG, partial STT, or
+public-storage audio. LAN/WSS and authentication/pairing belong to TASK 4D.

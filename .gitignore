@@ -24,6 +24,15 @@ backups/
 node_modules/
 .next/
 
+# Android/Gradle local and generated state
+.gradle/
+.kotlin/
+local.properties
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
 .DS_Store
 Thumbs.db
 
