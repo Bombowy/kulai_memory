@@ -1,408 +1,295 @@
-# TASK 5B — Memory indexing into pgvector
-
-Repo: C:\Bombowy\Projekty\kulai_memory
-Data walidacji końcowej: 2026-10-06, 08:50 UTC
-DECYZJA: OK DO COMMITA
-
-TASK 5B pozostaje niezacommitowany i nie został pushowany.
-Main DB była używana wyłącznie read-only: 7 Memory -> 7 Memory, 0 vectors -> 0 vectors.
-Wszystkie testowe vector writes odbyły się wyłącznie w owned temporary DB.
+TASK 5B.1 — Guarded real-Memory vector backfill
+Data: 2026-10-06
+Decyzja: OK DO MAIN BACKFILL
+Main --execute: NOT EXECUTED. Nie embeddingowano prawdziwych Memory.
+Nie wykonano commit ani push.
 
 1. Start commit/status
-
-Wcześniejszy, jawnie zlecony commit/push TASK 5A został dokończony przed START 5B:
-f9770a360ee9e15cfe3aefa67d8526c0abd3311b
-feat: add verified BGE-M3 embedding foundation
-Lokalny HEAD i remote refs/heads/main zostały porównane i były identyczne.
-
-Stan START 5B:
-git status: nothing to commit, working tree clean.
-git status -sb: ## main...origin/main.
-git log -3 --oneline:
-f9770a3 feat: add verified BGE-M3 embedding foundation
-39b748d feat: add native Android voice memory alpha
-386d253 fix: export Android source files
-Vendor: clean, SHA 925b08a13aab9a62e080103185446543a7795794.
-TASK 5B nie zawiera commita ani pushu.
-
-2. Reusable vector-store contract — audit faktycznego przypiętego kodu
-
-kulai-vector-store 0.1.0:
-- VectorRecord(id: str, vector: EmbeddingVector, metadata: dict[str, JsonValue]).
-- VectorUpsertRequest(records: tuple[VectorRecord, ...], namespace: str | None).
-- Namespace jest częścią requestu, nie recordu.
-- Records batch nie może być pusty; IDs muszą być unikalne; dimensions spójne.
-- VectorUpsertResult(store_id, ids, upserted_count) potwierdza ordered IDs/count.
-- VectorStore jest structural Protocol: store_id, capabilities, async upsert,
-  async search, async delete.
-- upsert(*, store, request) rewaliduje dane, capabilities, namespace, metadata,
-  backend identity oraz ordered response IDs/count.
-- VectorRecord/requests są frozen/strict, extra=forbid. Metadata jest JSON-safe,
-  finite dla liczb; EmbeddingVector zapewnia niepusty, finite vector.
-- Error types obejmują Validation/Unsupported/Provider/Unavailable/ResponseError.
-  Reusable service ukrywa raw exceptions; host dodatkowo udostępnia stały public error.
-
-kulai-vector-store-pgvector 0.1.0:
-- PgVectorStore(*, db: AsyncSession, config: PgVectorStoreConfig).
-- Config(dimension: positive int, metric=VectorMetric.COSINE).
-- Store reużywa istniejący reusable ORM model kulai_vector_records.
-- upsert używa PostgreSQL INSERT ... ON CONFLICT(namespace_key, record_id)
-  DO UPDATE dla embedding, metadata_json i updated_at; execute + flush.
-- Nie wywołuje commit ani rollback.
-- namespace=None mapuje się na pusty namespace_key; host zawsze używa exact namespace.
-- Adapter sprawdza request dimension względem swojej konfiguracji przed SQL.
-- ORM registration wiąże model z jednym fixed dimension na proces.
-- delete jest namespace-scoped; execute + flush, missing IDs są idempotentne.
-- search bierze gotowy query vector, top_k, namespace i EQ/IN filters (AND).
-  Obsługuje metric COSINE/DOT_PRODUCT/EUCLIDEAN wybrany w config, higher-is-better
-  scores i uporządkowane wyniki. Search/delete odczytano podczas audytu,
-  lecz TASK 5B nie dodaje ani nie uruchamia retrieval/search/delete flow.
-- Store nie owns DB lifecycle, engine, migrations ani transaction boundaries.
-
-Contract wystarczył. Nie zmieniono vendor, schema ani migracji.
-Host pyproject deklaruje teraz jawne deps kulai-vector-store oraz
-kulai-vector-store-pgvector. Reusable packages były już zainstalowane.
-Odświeżono editable metadata kulai-memory w obu SDK bez instalowania nowych
-runtime packages (--no-deps -e backend).
-
-3. Namespace
-
-Exact namespace: kulai_memory.memories.v1.
-Jedno źródło stałej: MEMORY_VECTOR_NAMESPACE w application/indexing.py.
-Brak dowolnego namespace override w public host indexing flow.
-
-4. Record identity
-
-record_id = str(Memory.id).
-Ta sama Memory -> ta sama (namespace, record_id) identity.
-Different Memory IDs + identyczny content -> różne vector identities.
-Idempotencja indeksowania nie używa nowego ingestion_id i nie tworzy Memory.
-
-5. Metadata
-
-Allowlist dokładnie czterech pól:
-source_memory_id = str(Memory.id)
-embedding_provider_id = response.provider_id
-embedding_model_tag = response.model_id
-embedding_dimension = response.dimension
-
-Real verified values: ollama / bge-m3:567m-fp16 / 1024.
-Brak response.model_id jest controlled failure przed vector store call.
-Nie kopiujemy Memory.metadata ani Memory.content do vector metadata.
-Digest pominięto: brak neutralnego runtime helpera/source w obecnym hoście.
-Nie hardcodowano historycznego digestu i nie dodano HTTP metadata request per Memory.
-Future improvement: pozyskać digest raz na runtime/batch i przekazać neutralnie.
-
-6. Indexing service i nowe pliki
-
-application/MemoryIndexingService:
-- __init__(provider: EmbeddingProvider, expected_dimension: int | None).
-- prepare(memory: Memory) -> VectorUpsertRequest.
-- upsert(store: VectorStore, request: VectorUpsertRequest) -> VectorUpsertResult.
-- MemoryIndexingError ma stały safe message i suppressed exception context.
-- Service przyjmuje gotową canonical Memory; nie czyta DB i nie mutuje Memory.
-- Nie tworzy providerów/store, nie zamyka ich, nie owns commit/rollback.
-- Używa kulai_embeddings.embed i kulai_vector_store.upsert bez kopiowania reusable logic.
-- Application core nie importuje Ollama concrete, PgVectorStore, SQLAlchemy,
-  FastAPI, PySide6 ani transport adapters.
-
-Host indexing_persistence:
-- index_memory(memory, service, session_factory) przygotowuje vector PRZED
-  otwarciem nowej write session.
-- save_prepared_memory_vector(service, request, session_factory) zapisuje
-  przygotowany request przez reusable PgVectorStore i owns commit/rollback.
-- Returned result następuje dopiero po successful COMMIT i zamknięciu session.
-- Failure zwraca safe MemoryIndexingError, bez vector/content/SQL payload.
-
-Zmodyfikowane pliki:
-README.md
-backend/pyproject.toml
-backend/src/kulai_memory/application/__init__.py
-wynik.txt
-
-Nowe pliki:
-backend/src/kulai_memory/application/indexing.py
-backend/src/kulai_memory/indexing_persistence.py
-backend/tests/test_memory_indexing.py
-backend/tests/integration/test_memory_indexing_postgres.py
-
-Desktop, WebSocket protocol, Android, settings dimension, migration files,
-.env i scripts/export_repo.py pozostają bez zmian.
-
-7. Transaction boundaries
-
-1. Canonical Memory read odbywa się w osobnej session.
-2. Read transaction zostaje zakończona, session zamknięta, Memory detached.
-3. prepare wykonuje embedding bez otwartej vector write session.
-4. Host otwiera nową AsyncSession i session.begin() dopiero po prepare.
-5. PgVectorStore wykonuje execute/flush.
-6. Host transaction context wykonuje commit na success, rollback na failure.
-7. Session jest zamykana przed zwróceniem wyniku.
-
-Integration spies potwierdziły engine.pool.checkedout() == 0 przy embedding
-zarówno fake providerem, jak i REAL Ollama clientem.
-Unit test potwierdza kolejność embed -> session.open -> begin -> upsert -> commit
--> session.close, oraz rollback po commit failure.
-Service nie może zamknąć obcej read transaction: caller ma przekazać detached
-Memory po zamknięciu read session; contract jest jawnie opisany w docstring/README.
-
-8. Embedding lifecycle
-
-EmbeddingRequest(inputs=(memory.content,)) — content dokładnie bez trim/prefix.
-model_hint=None, purpose=None; brak dimensions override, truncation, padding.
-Reusable core rewaliduje request/response i spójność count/dimension/finite values.
-Provider/client należą do callera i mogą być reużywane na batch.
-Prepared request może być zapisany ponownie po rollback bez re-embedding.
-Real test: 1 client, 2 embedding requests, 1 close, 0 dimension overrides.
-Context manager zamyka provider również przy wyjątku.
-
-9. Dimension validation
-
-validate_embedding_dimension(response, expected_dimension=1024)
-wykonuje się przed VectorRecord i przed write session.
-REAL BGE output = 1024.
-Host config KULAI_VECTOR_DIMENSION = 1024.
-Actual PostgreSQL schema = vector(1024).
-PgVectorStoreConfig.dimension = 1024.
-Przed upsert service sprawdza także exact namespace, one record i dimension.
-Empty/NaN/inf response jest odrzucana przez reusable embedding core.
-Nie dodano własnej normalizacji vectora.
-
-10. Idempotent reindex
-
-Fake-provider + real PostgreSQL proof:
-first index -> Memory count 1, vector count 1.
-second index -> Memory count 1, vector count 1.
-PK i (namespace, record_id) pozostają identyczne.
-Hash vectora zmienił się, metadata model revision zaktualizowała się.
-Canonical Memory, w tym content/session/metadata/created_at, pozostała identyczna.
-Nie wypisywano vector values; test read-back używa safe scalar metrics i hash.
-
-REAL BGE + real PgVector proof:
-first i second index zwracają identyczny durable record_id.
-Vector count po każdym COMMIT = 1, PK identyczny.
-Exact provider/model/dimension metadata jest poprawne.
-
-11. Unit tests
-
-Focused indexing: 20 PASS, w ramach focused combined run:
-indexing + embedding foundation + application boundaries = 45 PASS,
-3 integration tests SKIPPED przy braku opt-in.
-
-Pokrycie:
-- exact namespace/Memory ID/content;
-- brak model_hint/purpose/dimensions override;
-- metadata allowlist, brak transcript/Memory metadata copy;
-- dimension mismatch -> zero store calls;
-- provider failure i invalid empty/NaN/inf -> zero store calls;
-- missing model identity -> zero store calls;
-- store failure -> Memory unchanged i safe public error;
-- same Memory twice -> one identity, updated vector/metadata;
-- different Memory IDs -> separate vector identities;
-- retry prepared request -> jeden embedding request;
-- cancellation propagates;
-- application boundary/transaction ownership;
-- host embedding before session i safe commit failure/rollback.
-
-Podczas pierwszego focused run poprawiono asercję dotyczącą model_fields_set:
-reusable core jawnie rewaliduje None dla model_hint/purpose. Finalne testy
-walidują exact normalized request payload, nadal bez override.
-
-12. Fake-store/error-safety tests
-
-Fake store zachowuje mapping (namespace, record_id) i potwierdza update,
-bez duplikatu. Memory snapshot pozostaje identyczny na success/failure.
-Private content/vector sentinels nie trafiają do str/repr/public traceback,
-captured logs ani stdout/stderr. Raw custom provider/store errors są ukryte.
-Service nie wywołuje commit/rollback/begin/aclose — AST regression PASS.
-
-13. Real temporary PostgreSQL integration
-
-KULAI_RUN_POSTGRES_INTEGRATION=1.
-Wszystkie records wyłącznie w owned temporary databases, utworzonych przez
-create_owned_temporary_database i usuniętych przez drop_owned_temporary_database
-z istniejącym ownership guard i verification.
-Temp DB migration do istniejącego head kulai_memory_0002, bez zmian main DB.
-Synthetic Memory: synthetic vector indexing memory.
-
-New test: real_pgvector_reindex_updates_one_durable_row — PASS.
-1024 fake embedding -> real PgVectorStore -> host COMMIT -> new read-only session.
-Memory 1, vectors 1, identity/dimension/metadata poprawne, repeat vectors 1.
-
-New test: real_pgvector_commit_failure_rolls_back_and_preserves_memory — PASS.
-SQL upsert/flush wykonały się w prawdziwej transakcji; before_commit hook
-kontrolowanie rzucił exception przed COMMIT.
-Po rollback: Memory 1 bez zmian, vectors 0, safe public error.
-Retry prepared request w nowej session: vectors 1, embedding call count nadal 1.
-
-14. Real BGE + real PgVector integration
-
-Wymagane oba opt-ins:
-KULAI_RUN_POSTGRES_INTEGRATION=1
-KULAI_RUN_OLLAMA_INTEGRATION=1
-
-New test: real_bge_and_pgvector_reindex_one_identity — PASS.
-Exact local model bge-m3:567m-fp16, host http://127.0.0.1:11434.
-Native dimension 1024, no dimensions override.
-Owned temp DB + synthetic Memory -> real embedding -> real PgVectorStore
--> COMMIT -> new read-only read-back.
-First/second run: Memory 1, vectors 1, exact namespace/record_id/metadata,
-same PK. Client reuse 1/requests 2/close 1/overrides 0.
-Embedding occurs with no checked-out DB connection.
-120s/180s bounded test scenario timeouts; no timeout/deadlock observed.
-
-Combined opt-in integration suite:
-11 PASS, 5 SKIPPED, 1 warning, 19.92s.
-Obejmuje nowe 3 testy indexing, wcześniejsze durable/concurrent Memory,
-PostgreSQL WebSocket fake-STT flow i real Ollama foundation.
-5 skips wymagają Whisper opt-in; KULAI_RUN_WHISPER_INTEGRATION=0.
-Nie wykonywano STT inference, bo TASK 5B nie zmienia STT/VAD.
-
-15. Memory safety
-
-Canonical Memory remains source of truth.
-Indexing service nie posiada MemoryRepository i nie wykonuje Memory writes.
-Host persistence helper posiada wyłącznie reusable PgVectorStore.
-Provider/invalid response/dimension/store/commit failures nie modyfikują Memory.
-Real rollback test potwierdził durable Memory zachowaną po failed vector commit.
-Nie indeksowano danych użytkownika. Nie wdrożono automatic voice indexing.
-
-16. Main Memory count before/after
-
-SELECT count(*) FROM memories: 7 -> 7.
-Odczyty były w SET TRANSACTION READ ONLY, zakończone rollback i engine dispose.
-Nie odczytywano contentu prawdziwych Memory do embeddingów.
-
-17. Main vector count before/after
-
-SELECT count(*) FROM kulai_vector_records: 0 -> 0.
-Main DB nie dostała żadnego vector recordu ani fixture Memory.
-
-18. Backend tests
-
-Backend pełny, opt-ins=0, QT_QPA_PLATFORM=offscreen:
-158 PASS, 16 SKIPPED, 1 warning, 3.70s.
-
-Focused combined indexing/embedding/boundaries:
-45 PASS, 3 opt-in SKIPPED, 1.21s.
-Focused persistence:
-6 PASS, 0.69s.
-
-Desktop/UI/recorder, WebSocket protocol/flows/concurrency, ingestion, persistence,
-application boundary regressions przeszły w pełnym backend suite.
-Warning: istniejący Starlette/AnyIO BlockingPortal deprecation; brak failures.
-SDK backend: PyCharm Python 3.14.5, backend/.venv.
-
-19. Root tests
-
-48 PASS, 1.83s.
-Obejmuje exporter, reproducibility i embedding-smoke regression tests.
-SDK root: PyCharm Python 3.13.15, .venv.
-Androida nie przebudowywano: mobile/ bez zmian.
-
-20. pip check
-
-Root SDK: No broken requirements found.
-Backend SDK: No broken requirements found.
-Nie zmieniono ani nie zainstalowano driverów/system tools/modeli.
-
-21. db_doctor
-
-PASS przed i po automatycznych testach: wszystkie 12 checks.
-PostgreSQL 18.6.
-Alembic expected/current: kulai_memory_0002.
-vector extension 0.8.6.
-memories i kulai_vector_records istnieją.
-ingestion_id UUID NOT NULL i uq_memories_ingestion_id potwierdzone.
-KULAI_VECTOR_DIMENSION 1024, actual type vector(1024), actual dimension 1024.
-transaction_read_only=on; read query PASS.
-Nie uruchomiono migracji/downgrade/stamp/reset na main DB.
-
-22. git diff --check / status
-
-PASS. Nowe pliki sprawdzono także pod kątem trailing whitespace.
-Git podaje jedynie standardowe Windows LF -> CRLF notices.
-
-Finalny oczekiwany status:
-## main...origin/main
- M README.md
- M backend/pyproject.toml
- M backend/src/kulai_memory/application/__init__.py
- M wynik.txt
-?? backend/src/kulai_memory/application/indexing.py
-?? backend/src/kulai_memory/indexing_persistence.py
-?? backend/tests/integration/test_memory_indexing_postgres.py
-?? backend/tests/test_memory_indexing.py
-
-Zmiany TASK 5B pozostawiono unstaged/uncommitted. HEAD nadal f9770a3.
-
-23. Vendor status
-
-Clean. SHA bez zmian:
-925b08a13aab9a62e080103185446543a7795794
-
-git submodule status:
-925b08a13aab9a62e080103185446543a7795794 vendor/kulai_modules (remotes/origin/HEAD)
-
-git -C vendor/kulai_modules status --porcelain: pusty output.
-Brak root-fix wymagany w reusable modules.
-
-24. Plan TASK 5B.1 — backfill, tylko projekt; NIE wdrożono
-
-Przyszły scripts/index_memories.py, po review 5B i osobnej autoryzacji.
-
-CLI:
-- --dry-run: default; same DB reads, żadnych embeddings ani vector writes.
-- --execute: explicit write mode, mutually exclusive z --dry-run.
-- --limit N: positive integer, default 100; deterministic created_at/id order.
-- --memory-id UUID: zawęża selection do canonical Memory.
-- --missing-only: default selection mode, tylko brak exact namespace/record_id.
-- --reindex: mutually exclusive z --missing-only, aktualizuje wybrane identities.
-- --confirm-main-vector-write: dodatkowy jawny flag wymagany przy --execute na main.
-
-Dry-run pokazuje safe counts/selected IDs/mode/model/dimension; nie content/vector.
-Execution preflight przed pierwszym write:
-1. db_doctor PASS, exact head/schema/dimension.
-2. synthetic embedding_smoke PASS na wybranym native modelu.
-3. backup main DB do owned TEMP poza repo, size/SHA-256.
-4. successful restore smoke i source DB unchanged.
-5. wymagane --execute + --confirm-main-vector-write; brak flag -> brak write.
-
-Execution:
-- bounded Memory read pages, read session zamknięta przed embedding;
-- jeden provider/client na batch, native 1024, bez override;
-- prepare per Memory, krótka write session i commit per prepared request;
-- przy failure rollback, safe report, zatrzymanie batch z nonzero exit;
-- ponowienie używa tej samej namespace/record_id, bez tworzenia nowych Memory;
-- --missing-only nie zastępuje świadomego --reindex przy zmianie modelu;
-- summary wyłącznie counts/IDs/status; żadnego transcriptu/vector values;
-- provider close i guarded cleanup tylko własnego temporary backup;
-- main Memory count pozostaje identyczny; vector count zmienia się jawnie
-  dopiero w osobno autoryzowanym wykonaniu 5B.1.
-
-Plan tests: dry-run zero write/embed, flags guard, bounded selection, existing
-identity detection, explicit reindex update, interruption/retry, backup/restore
-failure blocks writes, fake mapping, real owned temp DB end-to-end.
-No background indexer/queue ani automatic client trigger.
-
-25. Co przechodzi do TASK 5C retrieval
-
-Stabilna vector identity i wymagane metadata są foundation do późniejszego:
-query embedding na zgodnym provider/model/dimension -> namespace-scoped search
-przez reusable VectorStore -> lookup canonical Memory po source_memory_id.
-
-5C ma jawnie walidować model/dimension compatibility oraz brak/missing canonical
-Memory. Obsługa query purpose musi odpowiadać faktycznym capabilities providera
-(obecny Ollama provider nie wystawia QUERY/DOCUMENT purpose).
-Ranking/top-k/search API/cytowanie/UX będą osobnym review/spec taskiem.
-TASK 5B nie implementuje retrieval, query embeddings, RAG ani LLM completion.
-
-26. Decyzja
-
-OK DO COMMITA
-
-Real BGE -> real PgVectorStore działa wyłącznie w owned temporary DB.
-Native/config/schema dimension 1024, stable namespace/record_id, repeated index
-one row, caller-owned commit, rollback i Memory safety potwierdzone testami.
-Main DB: Memory 7 -> 7, vectors 0 -> 0. Full regressions i pip check PASS.
-Vendor clean. TASK 5B nie commitowano ani nie pushowano.
+Repo: C:\Bombowy\Projekty\kulai_memory
+Branch: main...origin/main; working tree clean na początku taska.
+HEAD: 211e69fafd152d66017edc97c2f16302234b6268
+Commit: feat: add provider-neutral memory indexing into pgvector
+Poprzednie: f9770a3 embedding foundation, 39b748d Android Alpha.
+TASK 5B był commitnięty. Zachowano istniejące application core i schemat.
+
+2. Audyt safety helpers
+Przeczytano scripts/db_doctor.py, db_backup.py, db_restore_smoke.py,
+db_backup_restore_drill.py oraz kulai_memory.database_safety.
+Wykorzystano istniejące run_database_doctor, MemoryFingerprint,
+VectorFingerprint, memory_fingerprint, vector_fingerprint, create_backup,
+create_owned_database_backup, sha256_file i restore_smoke.
+Owned DB używa create_owned_temporary_database, require_owned_database,
+drop_owned_temporary_database oraz istniejącego migrate_owned_database.
+Nie skopiowano implementacji pg_dump, pg_restore ani ownership guard.
+Przeczytano MemoryIndexingService, index_memory,
+save_prepared_memory_vector i create_embedding_provider.
+
+3. Nowe pliki / CLI contract
+Dodano:
+- scripts/index_memories.py
+- backend/src/kulai_memory/backfill.py
+- tests/test_index_memories.py
+- backend/tests/integration/test_backfill_postgres.py
+Zmieniono:
+- scripts/embedding_smoke.py: wspólny synthetic preflight probe_embedding;
+- scripts/db_restore_smoke.py: guarded API dla owned source, wspólne restore;
+- README.md: dokumentacja backfillu;
+- backend/README.md: aktualizacja starego „future server adapter”.
+CLI: --dry-run / --execute mutually exclusive; default --dry-run.
+--limit 1..1000, default 100; --memory-id UUID opcjonalne.
+--missing-only / --reindex mutually exclusive; default --missing-only.
+--execute wymaga --confirm-main-vector-write i --backup-output PATH.
+Nie dodano CLI override target DB ani environment bypass.
+Production entry point używa wyłącznie skonfigurowanej KulAI Memory DB.
+
+4. DRY-RUN semantics
+Wyłącznie read-only doctor, fingerprinty i selection.
+Nie tworzy embedding providera, nie kontaktuje Ollama, nie robi backupu,
+nie embeddinguje Memory i nie zapisuje vectorów.
+Czytające transakcje: REPEATABLE READ, READ ONLY; rollback i zamknięcie.
+Output: UUIDs/counts/namespace/model/dimension/status, bez contentu/metadata.
+Unit test potwierdza zero provider/embed/backup/restore/write calls.
+
+5. Execute guards
+Wymagane dev/development/local; test/production odrzucone w main path.
+DB host loopback; Ollama loopback przez istniejącą host factory.
+Doctor PASS; configured dimension == 1024; DB vector dimension == 1024.
+Exact model bge-m3:567m-fp16, native synthetic preflight PASS.
+Potwierdzenie main write i ścieżka backupu poza repo wymagane.
+Backup musi być nowym plikiem w istniejącym katalogu; bez overwrite/force.
+Rozwiązywane są aliasy ścieżki; output w repo i symlink są odrzucane.
+Brak dowolnego bypassu przez env. Invalid CLI nie echo prywatnych wartości.
+Guard failure przed preflight oznacza zero provider/backup/vector writes.
+
+6. Backup/restore przed write
+Po guardach jeden provider wykonuje synthetic preflight.
+Potem custom-format backup do dokładnego --backup-output.
+Potwierdzenie pliku, size > 0, zgodnego size i SHA-256.
+Restore smoke do nowej owned temporary DB, doctor i fingerprint comparison.
+Source Memory + vector fingerprints przed/po restore muszą być identyczne.
+Niezweryfikowany backup, failed restore lub zmienione źródło: ZERO writes.
+Backup pozostaje po sukcesie i po późniejszym błędzie.
+Owned integration helper weryfikuje marker source DB przed backup/restore;
+nie udostępnia tego trybu w CLI. Używa wspólnego istniejącego restore flow.
+Realne backupy i restore wykonano tylko dla owned fixture DB w testach.
+Main backup/restore nie uruchomiono, ponieważ main wykonano tylko dry-run.
+Testowe archive files należą do tymczasowych katalogów pytest;
+produkcyjny script nie usuwa backupu użytkownika.
+
+7. MemoryFingerprint invariant
+Count i SHA-256 przed operacją oraz na końcu.
+Dodatkowo checks przed przygotowaniem, po embeddingu/przed write,
+między zapisami i po committed write.
+Fingerprint i odczytywana canonical Memory są w tym samym read snapshotcie.
+Zmiana Memory powoduje controlled failure; już committed vectors pozostają.
+Final summary wskazuje memory_fingerprint_unchanged true/false/unavailable.
+Nie udaje potwierdzonego stanu, gdy odczyt nie został wykonany.
+Indexing nie modyfikuje tabeli memories.
+
+8. Deterministic selection
+ORDER BY created_at ASC, id ASC; limit i UUID filter są parametrami.
+Nie używa list_recent ani raw SQL w application core.
+SQL znajduje się w host-only BackfillReader.
+Real test wstawia Memory w odwrotnej kolejności, z równymi timestampami;
+potwierdza deterministyczną kolejność oraz memory-id/limit filter.
+
+9. Missing-only
+NOT EXISTS dla exact namespace i record_id == str(Memory.id).
+Namespace: kulai_memory.memories.v1.
+Istniejący record z innym provider/model metadata pozostaje istniejącą
+identity i jest pomijany, ale raportowany jako incompatible_existing_count
+z warning=existing_vectors_require_explicit_reindex.
+Nie jest uznawany za kompatybilny i nie jest automatycznie zastępowany.
+Dodatkowy existence check przed przygotowaniem i przed zapisem pozwala
+pominąć record zapisany w międzyczasie.
+
+10. Reindex
+Jawnie wybiera istniejące identities i robi upsert w ten sam row.
+Bez wcześniejszego delete i bez tworzenia nowego Memory.
+Real owned test potwierdza count == 3 i identyczne row PK po reindex.
+Canonical Memory fingerprint pozostaje taki sam.
+
+11. Partial failure/resume
+Commit per Memory przez istniejący save_prepared_memory_vector.
+Błąd bieżącego write powoduje rollback tej transakcji i exit non-zero.
+Wcześniejsze committed vectors pozostają; raport zawiera failed UUID/counts.
+Missing-only rerun kontynuuje brakujące identities.
+Real owned test: failure po pierwszym Memory -> 1 vector;
+resume wybiera pozostałe 2 -> 3 vectors; Memory fingerprint unchanged.
+Unit test obejmuje również write failure, retained backup i zmianę Memory
+po committed write z zatrzymaniem kolejnych zapisów.
+
+12. Provider lifecycle
+Jedna host factory / provider / klient na execution batch.
+Ten sam provider obsługuje synthetic preflight i wszystkie selected Memories.
+Zamykany przez async context manager po sukcesie albo failure.
+Reuse istniejącego kulai_embeddings.embed i MemoryIndexingService.prepare.
+Bez model_hint, purpose, dimension override, prefixów, truncation/padding.
+Real BGE batch: clients=1, requests=4 (1 preflight + 3 Memory), closed=1,
+dimensions overrides=0. Native dimension=1024.
+
+13. DB connection lifecycle
+Doctor kończy swój read flow przed requestami providera.
+Snapshot IDs i każdy canonical Memory read używają krótkich read sessions.
+Read session jest zamknięta przed service.prepare/Ollama.
+Po embeddingu otwierana jest nowa krótka write session/upsert/commit.
+Caller owns commit/rollback przez istniejący host persistence helper.
+Real test sprawdza pool.checkedout()==0 dla fixture i batch engines
+podczas KAŻDEGO embedding requestu, także synthetic preflight.
+Brak długiej write transaction obejmującej Ollama.
+
+14. Unit/focused tests
+Nowe backfill cases: 39 PASS w root suite.
+Focused root: backfill + embedding smoke + database tools = 75 PASS (1.32 s).
+Focused backend: indexing + embedding foundation + application boundaries
+= 45 PASS (1.17 s).
+Pokryto wszystkie CLI guards, dry-run zero calls, limit/UUID errors,
+backup path/source safety, preflight/backup/restore failures, corrupt/empty
+archive metadata, retained backup, reuse, partial resume, reindex,
+fingerprint failure i brak private sentinel values w output/error.
+Core API nie zmieniono; SQL/concrete wiring pozostają poza application.
+
+15. Owned temp DB fake integration
+PASS: dry-run selects 3, zero embeddings/vectors.
+Execute: actual custom backup + restore smoke, 3 Memory -> 3 vectors.
+Second missing-only: selected 0, bez kolejnych Memory embeddings.
+Reindex: 3 vectors, stable row PK i Memory fingerprint.
+Osobny partial failure/resume test PASS (1 -> 3 vectors).
+Ownership guard użyty do cleanup każdej fixture i restore DB.
+Żadne fixtures nie zostały zapisane w main DB.
+
+16. Real BGE owned PostgreSQL integration
+PASS: 3 synthetic Memories -> real bge-m3:567m-fp16 -> real PgVectorStore.
+Native 1024, exact namespace/record IDs i minimalne metadata:
+source_memory_id, embedding_provider_id=ollama,
+embedding_model_tag=bge-m3:567m-fp16, embedding_dimension=1024.
+3 vectors, Memory fingerprint identical, one reusable client,
+zero checked-out DB connections during Ollama, provider closed.
+Łącznie final integration run: 3 PASS (28.17 s).
+Opt-ins: KULAI_RUN_POSTGRES_INTEGRATION=1,
+KULAI_RUN_OLLAMA_INTEGRATION=1; Whisper opt-in wyłączony.
+Testowane tylko owned temporary DB; nie wypisywano vector values/contentu.
+
+17. MAIN DB dry-run
+Wykonano:
+.\.venv\Scripts\python.exe scripts\index_memories.py --dry-run --missing-only
+Exit code 0; status=DRY_RUN_OK.
+memory_count=7
+existing_vector_count=0
+selected_count=7
+indexed=0
+failed=0
+incompatible_existing_count=0
+namespace=kulai_memory.memories.v1
+model=bge-m3:567m-fp16
+dimension=1024
+selection=missing-only
+Selected IDs w deterministic order:
+e4538d08-4c44-4bdd-bd8b-6bef8bd4c02f
+3c3ad505-becf-4212-b40c-d3427b4c7fce
+274e0b1b-01dc-4ca0-a3a7-1bd70ca76d60
+1687f035-26d8-4b47-9dd9-b20c57deb803
+8ff3126a-63f1-4da5-9d49-343e8eea8ded
+7c0ea424-2f8d-48ef-b597-4f279684ec41
+0a31e840-e9e5-4184-ba67-e04f64e1410e
+
+18. Main Memory before/after
+Przed całym taskiem: 7. Po całym tasku: 7.
+SHA-256 przed i po:
+4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
+MemoryFingerprint identical=true.
+Nie embeddingowano contentu prawdziwych Memory.
+
+19. Main vectors before/after
+Przed całym taskiem: 0. Po całym tasku: 0.
+SHA-256 przed i po:
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+VectorFingerprint identical=true.
+Main vector writes: 0. Main --execute: NOT EXECUTED.
+
+20. db_doctor
+Final read-only doctor: 12 PASS.
+PostgreSQL 18.6; pgvector extension 0.8.6.
+Expected/current Alembic: kulai_memory_0002.
+ingestion_id UUID NOT NULL i unique constraint PASS.
+Configured dimension=1024; actual vector(1024), dimension=1024.
+Read-only transaction/query PASS. Nie zmieniono schema/migracji.
+
+21. Backend regressions
+158 PASS, 19 SKIP (opt-in), 1 dependency deprecation warning, 2.57 s.
+W tym Desktop, WebSocket, persistence, ingestion, embeddings, indexing,
+application boundaries i error safety.
+Warning pochodzi z Starlette TestClient aliasu anyio BlockingPortal;
+nie jest błędem testów ani nowym problemem hosta.
+Real STT/mikrofon i Android build nie powtarzano: kod ich flow bez zmian.
+
+22. Root regressions
+87 PASS (1.94 s), w tym reproducibility, exporter i database tools.
+Python dla root/scripts: 3.13.15; backend SDK: 3.14.5,
+zgodnie z interpreterami wskazanymi przez PyCharm.
+Nie zmieniano interpreterów ani dependencies.
+
+23. pip check
+Root .venv: PASS — No broken requirements found.
+Backend .venv: PASS — No broken requirements found.
+
+24. git diff --check
+PASS; brak whitespace errors.
+Dodatkowo sprawdzono whitespace i końcowy newline wszystkich 4 nowych plików.
+Informacyjne LF/CRLF komunikaty Git nie oznaczają test failure.
+
+25. Git status
+HEAD i branch bez zmian; brak commit/push.
+Modified: README.md, backend/README.md, scripts/db_restore_smoke.py,
+scripts/embedding_smoke.py, wynik.txt.
+Untracked: backend/src/kulai_memory/backfill.py,
+backend/tests/integration/test_backfill_postgres.py,
+scripts/index_memories.py, tests/test_index_memories.py.
+Pełny raport zapisano do lokalnego wynik.txt.
+Nie zmieniano export_repo.py, mobile/, UI, protocol ani application core.
+
+26. Vendor
+SHA przed i po: 925b08a13aab9a62e080103185446543a7795794.
+Vendor status --porcelain: empty / clean.
+Git submodule status: ten sam przypięty SHA, bez dirty marker.
+Nie zmieniano reusable modules.
+
+27. Przyszła komenda USER — NOT EXECUTED
+Dopiero po osobnej akceptacji pierwszego main backfillu i sprawdzeniu dry-run.
+Użytkownik może w PowerShell wykonać:
+
+$backupPath = Join-Path $env:TEMP ("kulai_memory_before_vectors_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".dump")
+.\.venv\Scripts\python.exe scripts\index_memories.py --execute --missing-only --confirm-main-vector-write --backup-output "$backupPath"
+
+Komenda zapisuje vectors dla prawdziwych Memory. Backup pozostaje poza repo.
+Script sam wykona doctor/preflight i backup/restore przed pierwszym write.
+Podczas operation należy wstrzymać nowe voice saves, aby source fingerprint
+pozostał identyczny. Rerun wymaga nowego, nieistniejącego backup-output.
+Ta komenda NIE została uruchomiona w TASK 5B.1.
+
+28. Expected post-backfill invariant
+Dla obecnego snapshotu: Memory count 7 i jego SHA-256 bez zmian;
+7 wybranych IDs -> 7 exact namespace/record identities, native vector(1024).
+Metadata provider/model/dimension/source ID zgodne z canonical flow.
+Kolejny missing-only: selected 0; reindex aktualizuje te same rows.
+Przy failure wcześniejsze committed rows pozostają i missing-only wznawia;
+Memory nigdy nie jest modyfikowana przez vector writes.
+Ostateczne counts zależą od aktualnego dry-run/snapshotu przy wykonaniu.
+
+29. Co przechodzi do TASK 5C
+Po osobno zatwierdzonym main backfillu: canonical Memory -> stable vector
+identity, zweryfikowane 1024 embeddings i metadata foundation do retrieval.
+5C może zaprojektować query embedding, namespace-scoped semantic retrieval,
+walidację model/dimension i odczyt source Memory po trafieniach.
+Nie wdrożono search/top-k/RAG/LLM, workerów ani auto-indexing voice save.
+Digest metadata pozostaje opcjonalnym przyszłym runtime improvement.
+
+30. Quality gate / decyzja
+OK DO MAIN BACKFILL.
+Dry-run rzeczywiście read-only; main dry-run PASS.
+Owned execute/backup/restore/partial-resume/reindex PASS.
+Real BGE batch PASS, bez DB connection during embedding.
+Memory fingerprint invariant PASS. Main counts 7/0 -> 7/0.
+Full regressions i pip check PASS; vendor clean.
+Main write wymaga osobnej zgody użytkownika; w tym tasku zero main writes.
+Nie wykonano commit ani push.

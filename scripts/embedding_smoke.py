@@ -14,7 +14,9 @@ if str(BACKEND_SRC) not in sys.path:
 
 from kulai_embeddings import (  # noqa: E402
     EmbeddingError,
+    EmbeddingProvider,
     EmbeddingRequest,
+    EmbeddingResponse,
     EmbeddingResponseError,
     EmbeddingValidationError,
     embed,
@@ -27,21 +29,29 @@ from kulai_memory.settings import get_settings  # noqa: E402
 SYNTHETIC_TEXT = "KulAI Memory embedding dimension verification."
 
 
+async def probe_embedding(
+    *, provider: EmbeddingProvider, expected_dimension: int | None
+) -> EmbeddingResponse:
+    """Shared synthetic preflight; no persistence and no provider lifecycle."""
+
+    response = await embed(
+        provider=provider, request=EmbeddingRequest(inputs=(SYNTHETIC_TEXT,))
+    )
+    validate_embedding_dimension(response, expected_dimension=expected_dimension)
+    if not any(value != 0.0 for value in response.embeddings[0].values):
+        raise EmbeddingResponseError("Embedding probe returned an all-zero vector.")
+    return response
+
+
 async def _run() -> None:
     settings = get_settings()
     async with create_embedding_provider(settings=settings) as provider:
-        response = await embed(
-            provider=provider,
-            request=EmbeddingRequest(inputs=(SYNTHETIC_TEXT,)),
-        )
-        validate_embedding_dimension(
-            response, expected_dimension=settings.kulai_vector_dimension
+        response = await probe_embedding(
+            provider=provider, expected_dimension=settings.kulai_vector_dimension
         )
         values = response.embeddings[0].values
         finite = all(math.isfinite(value) for value in values)
         non_zero = any(value != 0.0 for value in values)
-        if not non_zero:
-            raise EmbeddingResponseError("Embedding probe returned an all-zero vector.")
 
     print(f"embedding.provider={response.provider_id}")
     print(f"embedding.model={response.model_id or settings.kulai_embedding_model}")

@@ -2,7 +2,7 @@
 
 The host application exposes a transport-neutral application core in
 `kulai_memory.application`. A desktop adapter can call `VoiceSession` directly
-in process, while a future server adapter can forward the same typed events as
+in process, while the server adapter forwards the same typed events as
 JSON over WebSocket. Transport adapters are responsible only for translating
 their input and output; session behavior stays in the application core.
 

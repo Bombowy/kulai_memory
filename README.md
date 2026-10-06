@@ -268,7 +268,7 @@ the caller's responsibility; reuse one provider throughout a batch.
 
 Repeated indexing updates the same `(namespace, record_id)` row and leaves the
 canonical Memory unchanged. No existing voice/client flow automatically indexes
-Memory. There is no main-database backfill command or retrieval in TASK 5B.
+Memory. Guarded backfill is described below; retrieval is not implemented.
 
 Integration tests create, migrate, and remove owned temporary databases only:
 
@@ -283,3 +283,43 @@ Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
 
 The tests prove durable upsert/reindex, commit failure rollback, Memory safety,
 provider/client reuse, and embedding without an open database transaction.
+
+## Guarded Memory backfill
+
+`scripts/index_memories.py` defaults to **dry-run** on the configured database.
+It performs read-only diagnostics and selection, without creating a provider,
+contacting Ollama, making a backup, or writing vectors:
+
+```text
+.venv\Scripts\python.exe scripts\index_memories.py --dry-run --missing-only
+.venv\Scripts\python.exe scripts\index_memories.py --dry-run --reindex --limit 100
+```
+
+Selection is deterministic: `created_at ASC, id ASC`. `--limit` accepts 1–1000
+(default 100); `--memory-id UUID` restricts selection. Default `--missing-only`
+excludes any existing exact namespace/record identity. Incompatible existing
+provider/model metadata is reported and needs explicit `--reindex`; it is never
+silently treated as compatible or automatically replaced.
+
+**Execute writes vectors for real user Memory. Run it only after separately
+approving the dry-run selection and first main backfill.** It requires both
+`--confirm-main-vector-write` and `--backup-output PATH`, with a new file in an
+existing directory outside this repository. There is no force/overwrite option.
+It permits only local development environments and loopback DB/Ollama, requires
+doctor PASS and exact BGE-M3/native/config/schema dimension 1024, and performs a
+synthetic preflight before any Memory embedding. One provider is reused for the
+preflight and entire batch.
+
+Before any write, a custom-format backup is created and verified by SHA-256 and
+restore into an owned temporary database. Restore/source fingerprints must
+match. The backup is retained after success or failure. No automatic migration
+or database reset is performed.
+
+Each Memory read session closes before embedding; each vector uses a new short
+write transaction and commit. On a partial failure, earlier commits remain,
+the current failed write rolls back, and rerunning missing-only resumes safely.
+Memory fingerprints are checked before writes, between items, and at completion.
+Concurrent Memory changes stop the operation with a safe error; keep voice saves
+idle during a future approved backfill if an unchanged fingerprint is required.
+Output contains only identifiers, counts and status. This task runs main dry-run
+only, and adds no automatic indexing to Desktop, WebSocket, or Android.

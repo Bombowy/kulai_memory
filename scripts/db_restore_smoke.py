@@ -9,6 +9,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from kulai_db import DbConfig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,8 +24,10 @@ from kulai_memory.database_safety import (
     async_database_url,
     create_owned_temporary_database,
     database_config,
+    database_config_for_database,
     drop_owned_temporary_database,
     memory_fingerprint,
+    require_owned_database,
     restore_archive_to_owned_database,
     run_database_doctor,
     validate_restore_source,
@@ -45,7 +48,9 @@ async def fingerprint_url(
     engine = create_async_engine(url)
     try:
         async with engine.connect() as connection:
-            await connection.execute(text("SET TRANSACTION READ ONLY"))
+            await connection.execute(
+                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            )
             memories = await memory_fingerprint(connection)
             vectors = await vector_fingerprint(connection)
             await connection.rollback()
@@ -55,13 +60,29 @@ async def fingerprint_url(
 
 
 async def restore_smoke(backup: Path) -> tuple[str, int, int]:
+    config = database_config()
+    validate_restore_source(config, app_env=get_settings().app_env)
+    return await _restore_verified_source(backup, config=config)
+
+
+async def restore_owned_database_backup(
+    backup: Path, *, owned: OwnedTemporaryDatabase, config: DbConfig
+) -> tuple[str, int, int]:
+    """Restore only a marker-verified owned source; no CLI target override."""
+
+    validate_restore_source(config, app_env=get_settings().app_env)
+    await require_owned_database(owned, config=config)
+    target = database_config_for_database(owned.name, config=config)
+    return await _restore_verified_source(backup, config=target)
+
+
+async def _restore_verified_source(
+    backup: Path, *, config: DbConfig
+) -> tuple[str, int, int]:
     archive = backup.expanduser().resolve()
     if not archive.is_file():
         raise FileNotFoundError("Backup file does not exist.")
 
-    settings = get_settings()
-    config = database_config()
-    validate_restore_source(config, app_env=settings.app_env)
     source_before = await fingerprint_url(config.async_url)
     owned: OwnedTemporaryDatabase | None = None
     verified = False
