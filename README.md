@@ -246,3 +246,40 @@ Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
 The integration uses two synthetic requests on one provider/client, with no
 PostgreSQL dependency. This foundation does not index Memory, write vectors,
 perform retrieval, or run RAG.
+
+## Memory vector indexing
+
+`MemoryIndexingService` accepts a detached canonical `Memory` and a neutral
+embedding provider. `prepare(memory=...)` embeds exactly `Memory.content`,
+validates the configured dimension, and returns a reusable `VectorUpsertRequest`.
+The namespace is `kulai_memory.memories.v1`; the record ID is `str(Memory.id)`.
+Metadata contains only source Memory ID, provider ID, exact response model tag,
+and embedding dimension. Model digest is omitted until a runtime metadata
+source is available. Memory content and its arbitrary metadata are not copied.
+
+Close the Memory read session before preparing the vector. The host caller
+`index_memory` in `kulai_memory.indexing_persistence` prepares first, then opens
+a fresh short session, uses the reusable `PgVectorStore`, and commits through
+the transaction context. On failure it rolls back and returns a safe
+`MemoryIndexingError`. `save_prepared_memory_vector` can retry an already
+prepared request without another embedding. A returned upsert result from the
+application service alone does not imply commit. Provider close/dispose remains
+the caller's responsibility; reuse one provider throughout a batch.
+
+Repeated indexing updates the same `(namespace, record_id)` row and leaves the
+canonical Memory unchanged. No existing voice/client flow automatically indexes
+Memory. There is no main-database backfill command or retrieval in TASK 5B.
+
+Integration tests create, migrate, and remove owned temporary databases only:
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION = "1"
+# Add this opt-in for real BGE-M3 + real pgvector rather than synthetic embeddings:
+$env:KULAI_RUN_OLLAMA_INTEGRATION = "1"
+.venv\Scripts\python.exe -m pytest backend\tests\integration\test_memory_indexing_postgres.py -q
+Remove-Item Env:KULAI_RUN_POSTGRES_INTEGRATION
+Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
+```
+
+The tests prove durable upsert/reindex, commit failure rollback, Memory safety,
+provider/client reuse, and embedding without an open database transaction.

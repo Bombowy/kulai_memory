@@ -31,6 +31,7 @@ from .ingestion import (
     TranscriptMemoryIngestionStatus,
     transcription_is_empty,
 )
+from .indexing import MEMORY_VECTOR_NAMESPACE, MemoryIndexingError, MemoryIndexingService
 from .memory import (
     IdempotentMemoryWrite,
     Memory,
@@ -59,6 +60,9 @@ __all__ = [
     "ErrorPayload",
     "EventSink",
     "IdempotentMemoryWrite",
+    "MEMORY_VECTOR_NAMESPACE",
+    "MemoryIndexingError",
+    "MemoryIndexingService",
     "MemorySavedEvent",
     "MemorySavedPayload",
     "MemorySavingEvent",
