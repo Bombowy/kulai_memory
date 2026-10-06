@@ -48,8 +48,37 @@ def test_application_core_has_no_transport_ui_or_database_imports() -> None:
                     violations.append(f"{path.name}:{node.lineno}: {module}")
                 if module.startswith("kulai_memory.desktop"):
                     violations.append(f"{path.name}:{node.lineno}: {module}")
+                if module.startswith(("kulai_memory.api", "kulai_memory.server")):
+                    violations.append(f"{path.name}:{node.lineno}: {module}")
 
     assert violations == []
+
+
+def test_desktop_and_server_adapters_remain_independent() -> None:
+    package_root = APPLICATION_ROOT.parent
+
+    def imported_modules(root: Path) -> list[str]:
+        modules: list[str] = []
+        for path in root.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    modules.append(node.module)
+        return modules
+
+    desktop_imports = imported_modules(package_root / "desktop")
+    server_imports = imported_modules(package_root / "server")
+    server_imports.extend(imported_modules(package_root / "api"))
+
+    assert not any(module.startswith("kulai_memory.server") for module in desktop_imports)
+    assert not any(module.startswith("kulai_memory.api") for module in desktop_imports)
+    assert not any(module.startswith("kulai_memory.desktop") for module in server_imports)
+    assert not any(
+        module.split(".", maxsplit=1)[0] in {"PySide6", "sounddevice"}
+        for module in server_imports
+    )
 
 
 def test_desktop_ui_does_not_assemble_database_or_whisper_in_widgets() -> None:

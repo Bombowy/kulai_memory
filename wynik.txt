@@ -1,148 +1,220 @@
-﻿TASK 4A.1 — Fix real Windows microphone startup bug and error classification
-Raport końcowy — 2026-10-05
+TASK 4B — WebSocket voice-memory server adapter
+Raport końcowy
+Data: 2026-10-06
 
-1. Dokładny root cause TypeError
+1. Start commit/status
+   - Start commit: 8e79d97 feat: add desktop voice memory app.
+   - Branch: main, zgodny z origin/main.
+   - Host był clean; vendor był clean.
+   - Vendor SHA: 925b08a13aab9a62e080103185446543a7795794.
 
-`MicrophoneRecorder.list_devices()` rozpoznawał parę input/output wyłącznie przez `isinstance(value, (tuple, list))`. Rzeczywisty `sounddevice.default.device` nie spełniał tego warunku, więc kod wykonywał `int(configured_default)` na całej parze. Obiekt nie obsługuje takiej konwersji i rzuca `TypeError`. Recorder opakowywał go jako `DesktopRecordingError`, po czym `DesktopController.startup()` błędnie przepakowywał ten publiczny błąd jako `DesktopDatabaseError`.
+2. Istniejący FastAPI/KulAI app contract
+   - Zainstalowane: FastAPI 0.142.2, Starlette 0.52.1.
+   - create_kulai_app obsługuje routers, lecz nie ma parametru lifespan.
+   - FastAPI scala lifespan dołączonego APIRouter, więc zachowano reusable
+     create_kulai_app i lifecycle dostarcza WebSocket router.
+   - /health pozostał niezmienionym liveness endpointem.
 
-2. Rzeczywisty typ i charakter default.device
+3. Nowe pliki
+   - api/memory_ws.py: endpoint, connection state machine i EventSink.
+   - api/memory_ws_protocol.py: typed Pydantic v1 client commands.
+   - api/pcm_wav.py: owned bounded streaming WAV.
+   - server/runtime.py: długowieczny provider/DB/server runtime.
+   - runtime/cuda.py: neutralny process-local CUDA DLL scope.
+   - Dodano focused, concurrency i owned-PostgreSQL integration tests.
 
-- Runtime sounddevice 0.5.6 zwraca obiekt typu `sounddevice._InputOutputPair`.
-- Informacja o typie jest wyłącznie diagnostyczna; kod produkcyjny nie importuje ani nie sprawdza tej prywatnej klasy.
-- Obiekt jest pair-like i reprezentuje się jako `[input, output]`.
-- Nie jest instancją `list` ani `tuple`.
-- Obsługuje indeksowanie: `[0]` to input, `[1]` to output.
-- Bezpośrednie `int(pair)` kończy się `TypeError`.
-- W raporcie nie zapisano nazw urządzeń ani innych prywatnych danych użytkownika.
+4. Finalny WebSocket endpoint
+   - /ws/memory w tej samej aplikacji FastAPI tworzonej przez create_kulai_app.
+   - scripts/dev.py nadal binduje wyłącznie 127.0.0.1.
 
-3. Normalizacja default input
+5. Protocol v1
+   - Jedno połączenie = jedna logiczna notatka.
+   - Typed commands: recording.start, recording.stop, memory.retry.
+   - schema_version=1, extra=forbid, discriminator=type.
+   - Klient podaje ingestion_id; nie może podać session_id.
 
-Dodano prywatne, provider-agnostic helpery w recorderze:
+6. Audio wire format
+   - Raw binary pcm_s16le, 16000 Hz, mono.
+   - Brak base64 i brak alternatywnych formatów w v1.
+   - Serwer zapisuje chunks strumieniowo, bez trzymania całego audio w RAM.
 
-- scalar integer-like jest rozpoznawany przez `operator.index`;
-- jeśli wartość nie jest scalarem, kod próbuje odczytać element `[0]`;
-- element input jest normalizowany do nieujemnego integer device ID;
-- output `[1]` nigdy nie uczestniczy w wyborze default input;
-- kod nie zależy od nazwy ani implementacji prywatnej klasy sounddevice.
+7. Chunk/total limits
+   - Maksymalna binary frame: 262144 bajty.
+   - Maksymalnie 19200000 bajtów PCM, czyli 10 minut.
+   - Wymagana parzysta liczba bajtów PCM16.
+   - Limit jest liczony na podstawie faktycznie odebranych binary frames.
 
-Odczyt listy urządzeń i host API nadal zgłasza kontrolowany `DesktopRecordingError`. Odczyt lub normalizacja samego optional defaultu jest best-effort i nie blokuje enumeracji.
+8. Connection state machine
+   - CONNECTED -> RECORDING -> PROCESSING -> PENDING_SAVE -> COMPLETED.
+   - Invalid transition emituje protocol.invalid_message i close 1002.
+   - Po saved albo empty final serwer zamyka połączenie kodem 1000.
 
-4. Regression test pair-like
+9. Temp WAV lifecycle
+   - Temp WAV powstaje przez tempfile poza repo i jest własnością adaptera.
+   - Usuwany po STT success/failure, protocol failure i disconnect.
+   - Przy anulowaniu thread-backed inference runtime czeka, aż provider przestanie
+     używać ścieżki, zanim adapter ją usunie.
+   - Testy cleanup PASS; brak pozostawionych fixtures.
 
-Dodano własny fake pair-like object:
+10. Event ordering
+    - Success: ready 1, final 2, saving 3, saved 4.
+    - Empty: ready 1, final 2.
+    - Save failure/retry: ready 1, final 2, saving 3, error 4,
+      saving 5, saved 6.
+    - Wszystkie events jednego połączenia mają jeden session_id.
 
-- `repr(obj) == "[1, 3]"`;
-- `obj[0] == 1`, `obj[1] == 3`;
-- `isinstance(obj, (list, tuple)) == False`.
+11. Event sequence implementation
+    - VoiceSession zachowuje własne ready/final sequence.
+    - WebSocketEventSink waliduje contiguous sequence i session_id.
+    - Transport kontynuuje od następnej sequence dla persistence/error events.
+    - Serializacja odbywa się wyłącznie przez event_to_jsonable.
 
-Test potwierdza, że `list_devices()` nie rzuca `TypeError`, input device 1 jest jedynym defaultem, a input-capable device 3 nie jest błędnie oznaczone na podstawie output side. Dodano też osobny test scalar default.
+12. Server runtime lifecycle
+    - APIRouter lifespan tworzy runtime raz na proces TestClient/Uvicorn.
+    - Startup: canonical config, db_doctor, CUDA scope, engine/session factory,
+      provider, TranscriptionService.
+    - Shutdown czeka na inference, dispose engine i przywraca process PATH.
+    - Przy startup failure /health pozostaje liveness, a WebSocket zwraca
+      bezpieczny server error i close 1013.
 
-5. Brak poprawnego/default input
+13. Provider factory call count
+    - Concurrency fake test: 1.
+    - Real large-v3 WebSocket test: 1 dla dwóch połączeń.
 
-Niepoprawny obiekt defaultu oraz wartość `-1` nie przerywają enumeracji. Lista input devices jest zwracana normalnie, a wszystkie wpisy mają `is_default=False`.
+14. Model reuse
+    - Real test potwierdził tę samą instancję providera i identyczny załadowany
+      obiekt modelu po dwóch osobnych WebSocket connection runs.
 
-6. Poprzednia błędna klasyfikacja exception
+15. Inference serialization
+    - VoiceMemoryServerRuntime używa asyncio.Lock.
+    - Dwa równoległe socket flows zakończyły się poprawnie.
+    - max_concurrent_inference == 1; brak mieszania session IDs/events.
 
-Po poprawnym db_doctor drugi szeroki blok `except Exception` zachowywał tylko `DesktopConfigurationError` i `DesktopDatabaseError`. Każdy inny błąd, w tym prawidłowo sklasyfikowany `DesktopRecordingError`, był mechanicznie zamieniany na `DesktopDatabaseError`. UI otrzymywał przez to fałszywy komunikat o niedostępnej bazie.
+16. CUDA helper/refactor
+    - Desktopowy helper wydzielono do neutralnego runtime/cuda.py.
+    - Desktop i server używają tego samego ProcessCudaDllScope.
+    - Zachowano KULAI_CUDA_DLL_DIR, os.add_dll_directory na Windows,
+      process-local PATH restore, brak system PATH mutation i brak CPU fallback.
+    - Desktop CUDA regression PASS.
 
-7. Nowa klasyfikacja startup errors
+17. DB doctor/startup
+    - Runtime wykonuje run_database_doctor przed utworzeniem providera.
+    - Doctor failure blokuje voice runtime i nie tworzy providera/engine.
+    - Main db_doctor final: PASS, current/head kulai_memory_0002,
+      ingestion_id UUID NOT NULL UNIQUE, vector(1024), read-only diagnostics.
 
-- Każdy istniejący `DesktopPublicError` zachowuje swój typ i safe public message.
-- `DesktopRecordingError` pozostaje błędem mikrofonu.
-- `DesktopConfigurationError` pozostaje błędem konfiguracji/CUDA.
-- `DesktopDependencyError` pozostaje błędem zależności.
-- Błąd doctor lub nieoczekiwany błąd engine/session setup jest klasyfikowany jako `DesktopDatabaseError`.
-- Nieoczekiwany błąd providera lub innego niedatabazowego etapu staje się bazowym, bezpiecznym `DesktopPublicError`.
-- Raw exception message nie trafia do UI.
-- Cleanup częściowo utworzonych zasobów nadal jest wykonywany przed ponownym rzuceniem błędu.
+18. Persistence flow
+    - TranscriptionResult -> TranscriptMemoryIngestionService -> MemoryService
+      -> PostgresMemoryRepository -> caller-owned commit.
+    - Nie zduplikowano idempotency ani repository logic.
+    - Empty transcript używa wspólnego application predicate i nie otwiera
+      persistence flow.
 
-UI pokazuje public message otrzymany ze startupu. Pomocniczy status ma neutralne `Startup failed`; nie zawiera już hardcodowanego `Database startup check failed` dla wszystkich klas błędów.
+19. Save retry behavior
+    - Pending RAM zawiera tylko TranscriptionResult, ingestion_id i session_id.
+    - memory.retry nie uruchamia STT i używa nowych AsyncSession/repository/service.
+    - Udane CREATED/DUPLICATE czyści pending state.
+    - Powtarzalne persistence failures mogą być ponawiane na tym samym socket.
 
-8. Real device enumeration smoke
+20. Disconnect behavior
+    - VoiceSession jest zamykany, owned WAV usuwany, pending state porzucany.
+    - Już zapisana Memory nie jest usuwana.
+    - Brak durable pending queue zgodnie z zakresem TASK 4B.
 
-Uruchomiono prawdziwy `MicrophoneRecorder.list_devices()` na sounddevice bez otwierania streamu i bez nagrywania:
+21. Protocol error behavior
+    - Safe canonical ErrorEvent bez echo raw payloadu i tracebacka.
+    - 1002: message/state/audio contract, 1009: audio limit,
+      1008: idempotency conflict, 1011: transcription/internal,
+      1013: runtime unavailable.
+    - Sentinel privacy tests potwierdzają brak provider exception/payload leak.
 
-- wynik: PASS;
-- input device count: 7;
-- system default input reported: true;
-- default-marked count: 1;
-- rzeczywisty default value był niestandardowym pair-like object;
-- nie wypisano ani nie zapisano nazw urządzeń.
+22. Fake WebSocket tests
+    - Focused protocol/adapter/runtime suite: 32 passed.
+    - Obejmuje success, empty, retry, malformed messages, wszystkie audio
+      constraints, invalid transitions, cleanup, startup failure i privacy.
+    - STT call count w save retry: 1.
 
-9. DesktopController.startup smoke
+23. Concurrent connection test
+    - PASS.
+    - Dwa równoległe TestClient WebSocket flows, oba zakończone saved.
+    - runtime factory=1, provider factory=1, max concurrent inference=1.
 
-Uruchomiono prawdziwy `DesktopController.startup()` bez nagrywania i bez Whisper inference:
+24. Real PostgreSQL WebSocket integration
+    - PASS w owned migrated temporary DB.
+    - Pierwsze połączenie: CREATED.
+    - Nowe połączenie z tym samym ingestion_id: DUPLICATE.
+    - Deterministyczny server-generated UUIDv5 session_id zachowuje kontrakt
+      idempotencji przez reconnect bez client-provided session_id.
+    - Oba memory.saved wskazują ten sam Memory ID; row count=1; vector count=0.
+    - PostgreSQL opt-in suite: 7 passed, 5 skipped (Whisper-only tests disabled).
 
-- startup: PASS;
-- input device count: 7;
-- default-marked count: 1;
-- DB doctor/startup reads: PASS;
-- shutdown/dispose: PASS.
+25. Real large-v3 silence WebSocket integration
+    - PASS w owned migrated temporary DB.
+    - Dwa osobne connections, po 1 s digital silence.
+    - Każde: session.ready -> transcript.final text empty -> clean close 1000.
+    - Brak memory.saving/memory.saved; Memory count=0; vector count=0.
+    - Provider i model reuse potwierdzone.
 
-Nie otwarto mikrofonu, nie utworzono audio, nie uruchomiono large-v3 inference i nie zapisano Memory.
+26. Optional real speech status
+    - NOT EXECUTED — KULAI_WHISPER_AUDIO nie był skonfigurowany.
+    - Nie skanowano dysku i nie zapisano transcript content do raportu.
 
-10. Recorder tests
+27. Main DB counts przed/po
+    - Przed automatycznymi integracjami: Memory=4, vector=0.
+    - Po wszystkich automatycznych integracjach: Memory=4, vector=0.
+    - Testy nie pozostawiły fixture records w main DB.
 
-- 8 passed.
-- Obejmują pair-like default, scalar default, brak defaultu, enumerację, PCM16 WAV, lifecycle, limit czasu i cleanup własnych plików.
+28. Desktop regression status
+    - 28 passed.
+    - UI, controller, recorder, config i launcher pozostały sprawne.
+    - Desktop nadal działa in-process i nie zależy od server adaptera.
 
-11. Controller tests
+29. Backend tests
+    - 117 passed, 12 skipped bez opt-in.
 
-- 10 passed.
-- Obejmują zachowanie `DesktopRecordingError`, `DesktopConfigurationError`, `DesktopDependencyError`, `DesktopDatabaseError`, generic public fallback, cleanup oraz wcześniejsze flow CREATED/SKIPPED_EMPTY/retry/provider reuse.
+30. Root tests
+    - 41 passed.
 
-12. UI tests
+31. Reproducibility
+    - 5 passed.
+    - Application boundaries: 4 passed.
 
-- 7 passed.
-- Zweryfikowano osobne safe messages dla database, microphone, configuration i generic failure oraz neutralny pomocniczy startup status.
-- Headless QApplication/QThread startup i shutdown nadal przechodzą.
+32. pip check
+    - PASS: No broken requirements found.
+    - Dev extra używa uvicorn[standard], instalując WebSocket protocol support.
 
-13. Backend tests
+33. git diff --check
+    - PASS, exit code 0.
+    - Git zgłasza wyłącznie informacyjne Windows LF/CRLF warnings.
 
-- 83 passed, 10 skipped.
-- Jedno istniejące ostrzeżenie deprecation pochodzi ze Starlette TestClient.
-- Skips dotyczą testów opt-in.
+34. db_doctor
+    - PASS dla wszystkich checks.
+    - PostgreSQL 18.6, Alembic kulai_memory_0002, pgvector 0.8.6,
+      vector dimension 1024.
 
-14. Root tests
+35. Vendor status
+    - Clean.
+    - SHA bez zmian: 925b08a13aab9a62e080103185446543a7795794.
 
-- 124 passed, 10 skipped.
-- Jedno istniejące ostrzeżenie deprecation pochodzi ze Starlette TestClient.
+36. Git status
+    - Wyłącznie oczekiwane niezacommitowane zmiany TASK 4B i wynik.txt.
+    - Branch nadal main...origin/main.
+    - Nie wykonano commit ani push.
 
-Application boundary tests: 3 passed. Application core nadal nie importuje PySide6, sounddevice, SQLAlchemy, FastAPI ani konkretnego Whisper providera.
+37. Ograniczenia v1
+    - Jedna notatka na connection, brak wielu recordingów na socket.
+    - Brak partial STT, durable pending queue i konwersji formatów audio.
+    - Localhost-only, bez LAN/public binding i bez auth.
+    - Jeden GPU/provider, inference kolejkowane w procesie.
 
-15. db_doctor
+38. Co przechodzi do TASK 4C Android Alpha
+    - Android microphone capture i klient typed protocol v1.
+    - LAN binding opt-in zamiast zmiany localhost default.
+    - Development authentication/pairing i bezpieczna konfiguracja sieci.
+    - Client reconnect/retry UX z zachowaniem ingestion_id.
+    - Bez zmian STT, VAD, ingestion ani persistence core.
 
-PASS:
+39. Decyzja
+    OK DO COMMITA
 
-- PostgreSQL 18.6;
-- expected/current Alembic head `kulai_memory_0002`;
-- read-only transaction diagnostics;
-- `memories` oraz `kulai_vector_records` obecne;
-- `ingestion_id` UUID NOT NULL i UNIQUE;
-- vector extension 0.8.6;
-- `vector(1024)` zgodny z konfiguracją;
-- read query PASS.
-
-Nie wykonano migracji ani zmian bazy.
-
-16. pip check
-
-PASS: `No broken requirements found.`
-
-17. git diff --check
-
-PASS po zapisaniu raportu. Ostrzeżenia o przyszłej konwersji LF do CRLF są informacyjne i nie są błędami whitespace.
-
-18. Git status i vendor
-
-- TASK 4A oraz TASK 4A.1 pozostają niezacommitowane zgodnie z wymaganiem.
-- Zmodyfikowane/nowe pliki obejmują wcześniejszy desktop alpha, poprawkę recorder/controller/UI, nowe regresje oraz ten raport.
-- Nie wykonano commit ani push.
-- Vendor pozostaje clean na SHA `925b08a13aab9a62e080103185446543a7795794`.
-- Whisper pozostaje `large-v3`, device `cuda`, compute type `int8_float16`, VAD `true`.
-
-19. Decyzja
-
-OK DO MANUALNEGO TESTU
-
-Automatyczna weryfikacja potwierdziła usunięcie rzeczywistego Windows TypeError, prawidłową enumerację siedmiu wejść z jednym defaultem, poprawny pełny startup kontrolera oraz rozdzielenie błędów mikrofonu, konfiguracji, bazy i nieoczekiwanych błędów. Kolejny krok to ręczne uruchomienie `python scripts/desktop.py` i użycie NAGRAJ/STOP przez użytkownika.
+Nie wykonano commit ani push.

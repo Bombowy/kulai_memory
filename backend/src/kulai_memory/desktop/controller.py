@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +41,7 @@ from kulai_memory.database_safety import (
     run_database_doctor,
 )
 from kulai_memory.persistence import PostgresMemoryRepository
+from kulai_memory.runtime import CudaRuntimeConfigurationError, ProcessCudaDllScope
 from kulai_memory.settings import Settings, get_settings
 
 from .models import (
@@ -108,46 +108,6 @@ class _DesktopEventSink:
             )
 
 
-class _CudaDllScope:
-    """Temporarily expose an optional CUDA DLL directory to this process."""
-
-    def __init__(self, directory: Path | None) -> None:
-        self._directory = directory
-        self._original_path: str | None = None
-        self._dll_handle: Any = None
-
-    def activate(self) -> None:
-        if self._directory is None:
-            return
-        directory = self._directory.expanduser().resolve()
-        if not directory.is_dir():
-            raise DesktopConfigurationError
-
-        self._original_path = os.environ.get("PATH", "")
-        entries = self._original_path.split(os.pathsep)
-        normalized = {os.path.normcase(os.path.abspath(entry)) for entry in entries if entry}
-        if os.path.normcase(str(directory)) not in normalized:
-            os.environ["PATH"] = str(directory) + os.pathsep + self._original_path
-        if os.name == "nt" and hasattr(os, "add_dll_directory"):
-            try:
-                self._dll_handle = os.add_dll_directory(str(directory))
-            except OSError as exc:
-                self.close()
-                raise DesktopConfigurationError from exc
-
-    def close(self) -> None:
-        handle = self._dll_handle
-        self._dll_handle = None
-        if handle is not None:
-            try:
-                handle.close()
-            except OSError:
-                pass
-        if self._original_path is not None:
-            os.environ["PATH"] = self._original_path
-            self._original_path = None
-
-
 def _provider_factory(settings: Settings) -> TranscriptionProvider:
     from kulai_memory.whisper_provider import create_whisper_transcription_provider
 
@@ -206,7 +166,7 @@ class DesktopController:
         self._repository_factory = repository_factory
         self._progress_callback = progress_callback
         self._operation_lock = asyncio.Lock()
-        self._cuda_scope = _CudaDllScope(self._settings.kulai_cuda_dll_dir)
+        self._cuda_scope = ProcessCudaDllScope(self._settings.kulai_cuda_dll_dir)
         self._engine: _Engine | None = None
         self._session_factory: _SessionFactory | None = None
         self._provider: TranscriptionProvider | None = None
@@ -252,6 +212,10 @@ class DesktopController:
             unexpected_error: type[DesktopPublicError] = DesktopPublicError
             try:
                 self._cuda_scope.activate()
+            except CudaRuntimeConfigurationError as exc:
+                await self._shutdown_resources_unlocked()
+                raise DesktopConfigurationError from exc
+            try:
                 unexpected_error = DesktopDatabaseError
                 engine = self._engine_factory(config)
                 self._engine = engine

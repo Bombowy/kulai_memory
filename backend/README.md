@@ -87,7 +87,9 @@ of a future session orchestrator so `VoiceSession` stays independent of Memory.
 
 Host package: `kulai_memory`.
 
-The core FastAPI runtime and `/health` endpoint are generated. KulAI modules remain pinned by `../kulai.project.json` and the `../vendor/kulai_modules` submodule. Auth and business wiring are not generated yet.
+The core FastAPI runtime provides `/health` plus the local-only
+`/ws/memory` voice-memory adapter. KulAI modules remain pinned by
+`../kulai.project.json` and the `../vendor/kulai_modules` submodule.
 
 ASGI entry point: `kulai_memory.main:app`. Copy `backend/.env.example` to `backend/.env` before local runtime. After Studio bootstrap, run the root `scripts/dev.py` with the project `.venv` Python.
 
@@ -111,10 +113,10 @@ Install and launch the desktop alpha from the repository root:
 .venv\Scripts\python.exe scripts\desktop.py
 ```
 
-The desktop requires the canonical `large-v3`, `cuda`, `int8_float16`, and
-VAD-enabled Whisper settings. `KULAI_CUDA_DLL_DIR` can identify a local CUDA 12
-DLL directory. It is validated and added only to the desktop process PATH;
-there is no CPU fallback or system PATH change. The microphone adapter uses
+The desktop and WebSocket server require the canonical `large-v3`, `cuda`,
+`int8_float16`, and VAD-enabled Whisper settings. `KULAI_CUDA_DLL_DIR` can
+identify a local CUDA 12 DLL directory. It is validated and added only to the
+current process PATH; there is no CPU fallback or system PATH change. The microphone adapter uses
 `sounddevice.RawInputStream` to write a private temporary 16 kHz, mono, PCM16
 WAV and removes only files that it created.
 
@@ -123,3 +125,17 @@ fails after successful STT, the process retains the `TranscriptionResult`,
 ingestion UUID, and voice-session UUID. `RETRY SAVE` uses those same values and
 does not run STT again. `CREATED` and `DUPLICATE` clear this pending state;
 empty VAD output reports `SKIPPED_EMPTY` and creates no Memory.
+
+The WebSocket v1 adapter accepts one note per connection. A client sends a
+typed `recording.start` command containing a stable ingestion UUID, binary
+`pcm_s16le` chunks (16 kHz, mono), and `recording.stop`. Frames are limited to
+256 KiB and total audio to 19,200,000 bytes. The server streams the PCM into an
+owned temporary WAV, serializes inference through one process-wide large-v3
+provider, and removes the WAV after STT or disconnect.
+
+Canonical events are emitted in operation order. An empty final transcript
+closes the connection without Memory events. A recoverable save failure leaves
+the socket open for `memory.retry`, which reuses the same transcript and IDs.
+The server closes cleanly after `memory.saved`. The adapter is bound only by the
+existing localhost development launcher; LAN exposure, authentication, and the
+Android client belong to TASK 4C.

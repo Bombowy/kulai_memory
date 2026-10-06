@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from kulai_transcription import (
@@ -71,6 +71,13 @@ def test_session_has_stable_unique_identity_and_structural_sink() -> None:
     assert first.session_id == first.session_id
     assert first.session_id != second.session_id
     assert first.state is VoiceSessionState.CREATED
+
+
+def test_session_accepts_server_generated_identity_without_changing_default() -> None:
+    session_id = uuid4()
+    session = VoiceSession(event_sink=InMemoryEventSink(), session_id=session_id)
+
+    assert session.session_id == session_id
 
 
 def test_start_emits_ready_and_concurrent_starts_are_idempotent() -> None:

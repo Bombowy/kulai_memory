@@ -117,9 +117,9 @@ KULAI_CUDA_DLL_DIR=
 ```
 
 `KULAI_CUDA_DLL_DIR` may point to the local directory containing the CUDA 12
-runtime DLLs required by CTranslate2. The desktop validates the directory and
-adds it only to the current process before loading Whisper. It never changes
-the system PATH and never falls back to CPU.
+runtime DLLs required by CTranslate2. The desktop and WebSocket server validate
+the directory and add it only to their current process before loading Whisper.
+They never change the system PATH and never fall back to CPU.
 
 Start PostgreSQL, migrate explicitly, and confirm the schema before launching:
 
@@ -145,5 +145,26 @@ The alpha records mono PCM16 at 16 kHz, limits one recording to 10 minutes,
 and removes its temporary WAV after transcription. A failed database save can
 be retried in the same process without recording or transcribing again. Pending
 saves do not survive application restart. Streaming partial transcripts,
-mobile clients, WebSocket transport, embeddings, semantic search, and RAG are
-outside this alpha.
+mobile clients, embeddings, semantic search, and RAG are outside this alpha.
+
+## Local WebSocket voice-memory adapter
+
+Install development dependencies and start the existing ASGI app locally:
+
+```text
+.venv\Scripts\python.exe -m pip install -e ".\backend[dev]"
+.venv\Scripts\python.exe scripts\dev.py
+```
+
+`ws://127.0.0.1:8000/ws/memory` implements protocol v1. One connection accepts
+one logical note: send `recording.start`, stream raw binary PCM signed 16-bit
+little-endian audio at 16 kHz mono, then send `recording.stop`. The server emits
+canonical `session.ready`, `transcript.final`, `memory.saving`, `memory.saved`,
+and `error` events with one session ID and increasing sequence numbers. It
+closes cleanly after a saved or empty note.
+
+The largest binary frame is 256 KiB and total audio is limited to 19,200,000
+bytes (10 minutes). After a recoverable `memory.save_failed`, `memory.retry`
+reuses the transcript, ingestion ID, and session ID without running Whisper
+again. There is no partial STT. This TASK 4B adapter remains localhost-only and
+has no authentication until Android/LAN authentication is added in TASK 4C.

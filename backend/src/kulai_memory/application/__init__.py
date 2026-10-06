@@ -29,6 +29,7 @@ from .ingestion import (
     TranscriptMemoryIngestionResult,
     TranscriptMemoryIngestionService,
     TranscriptMemoryIngestionStatus,
+    transcription_is_empty,
 )
 from .memory import (
     IdempotentMemoryWrite,
@@ -81,6 +82,7 @@ __all__ = [
     "TranscriptMemoryIngestionResult",
     "TranscriptMemoryIngestionService",
     "TranscriptMemoryIngestionStatus",
+    "transcription_is_empty",
     "TranscriptionService",
     "VoiceSession",
     "VoiceSessionError",

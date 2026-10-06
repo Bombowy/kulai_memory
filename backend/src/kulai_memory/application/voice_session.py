@@ -75,10 +75,11 @@ class VoiceSession:
         *,
         event_sink: EventSink,
         transcription_service: TranscriptionService | None = None,
+        session_id: UUID | None = None,
     ) -> None:
         self._event_sink = event_sink
         self._transcription_service = transcription_service
-        self._session_id = uuid4()
+        self._session_id = session_id if session_id is not None else uuid4()
         self._state = VoiceSessionState.CREATED
         self._sequence = 0
         self._lifecycle_lock = asyncio.Lock()

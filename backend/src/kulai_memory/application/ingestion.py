@@ -28,6 +28,12 @@ class TranscriptMemoryIngestionResult:
     memory: Memory | None
 
 
+def transcription_is_empty(result: TranscriptionResult) -> bool:
+    """Return whether the canonical transcript contains no user content."""
+
+    return not result.text.strip()
+
+
 def _transcription_metadata(result: TranscriptionResult) -> dict[str, JsonValue]:
     language: JsonValue = None
     if result.language is not None:
@@ -67,7 +73,7 @@ class TranscriptMemoryIngestionService:
         ingestion_id: UUID,
         session_id: UUID,
     ) -> TranscriptMemoryIngestionResult:
-        if not transcription.text.strip():
+        if transcription_is_empty(transcription):
             return TranscriptMemoryIngestionResult(
                 status=TranscriptMemoryIngestionStatus.SKIPPED_EMPTY,
                 memory=None,
