@@ -1,220 +1,121 @@
-TASK 4B — WebSocket voice-memory server adapter
-Raport końcowy
+# Raport — poprawa eksportu repozytorium dla Android/Kotlin
+
 Data: 2026-10-06
+Repozytorium: C:\Bombowy\Projekty\kulai_memory
 
-1. Start commit/status
-   - Start commit: 8e79d97 feat: add desktop voice memory app.
-   - Branch: main, zgodny z origin/main.
-   - Host był clean; vendor był clean.
-   - Vendor SHA: 925b08a13aab9a62e080103185446543a7795794.
+## Zakres
 
-2. Istniejący FastAPI/KulAI app contract
-   - Zainstalowane: FastAPI 0.142.2, Starlette 0.52.1.
-   - create_kulai_app obsługuje routers, lecz nie ma parametru lifespan.
-   - FastAPI scala lifespan dołączonego APIRouter, więc zachowano reusable
-     create_kulai_app i lifecycle dostarcza WebSocket router.
-   - /health pozostał niezmienionym liveness endpointem.
+Zmieniono wyłącznie narzędzie eksportu repozytorium i jego test:
+- scripts/export_repo.py
+- tests/test_export_repo.py
 
-3. Nowe pliki
-   - api/memory_ws.py: endpoint, connection state machine i EventSink.
-   - api/memory_ws_protocol.py: typed Pydantic v1 client commands.
-   - api/pcm_wav.py: owned bounded streaming WAV.
-   - server/runtime.py: długowieczny provider/DB/server runtime.
-   - runtime/cuda.py: neutralny process-local CUDA DLL scope.
-   - Dodano focused, concurrency i owned-PostgreSQL integration tests.
+Nie zmieniono kodu aplikacji Android ani backendu. Istniejące niezacommitowane zmiany TASK 4C w .gitignore, README.md i mobile/ zostały zachowane.
 
-4. Finalny WebSocket endpoint
-   - /ws/memory w tej samej aplikacji FastAPI tworzonej przez create_kulai_app.
-   - scripts/dev.py nadal binduje wyłącznie 127.0.0.1.
+Nie wykonano commita ani push.
 
-5. Protocol v1
-   - Jedno połączenie = jedna logiczna notatka.
-   - Typed commands: recording.start, recording.stop, memory.retry.
-   - schema_version=1, extra=forbid, discriminator=type.
-   - Klient podaje ingestion_id; nie może podać session_id.
+## Stan początkowy
 
-6. Audio wire format
-   - Raw binary pcm_s16le, 16000 Hz, mono.
-   - Brak base64 i brak alternatywnych formatów w v1.
-   - Serwer zapisuje chunks strumieniowo, bez trzymania całego audio w RAM.
+Branch:
+- main...origin/main
 
-7. Chunk/total limits
-   - Maksymalna binary frame: 262144 bajty.
-   - Maksymalnie 19200000 bajtów PCM, czyli 10 minut.
-   - Wymagana parzysta liczba bajtów PCM16.
-   - Limit jest liczony na podstawie faktycznie odebranych binary frames.
+Istniejące zmiany przed tym zadaniem:
+- M .gitignore
+- M README.md
+- M wynik.txt
+- ?? mobile/
 
-8. Connection state machine
-   - CONNECTED -> RECORDING -> PROCESSING -> PENDING_SAVE -> COMPLETED.
-   - Invalid transition emituje protocol.invalid_message i close 1002.
-   - Po saved albo empty final serwer zamyka połączenie kodem 1000.
+Pliki scripts/export_repo.py oraz tests/test_export_repo.py nie miały zmian przed rozpoczęciem tego zadania.
 
-9. Temp WAV lifecycle
-   - Temp WAV powstaje przez tempfile poza repo i jest własnością adaptera.
-   - Usuwany po STT success/failure, protocol failure i disconnect.
-   - Przy anulowaniu thread-backed inference runtime czeka, aż provider przestanie
-     używać ścieżki, zanim adapter ją usunie.
-   - Testy cleanup PASS; brak pozostawionych fixtures.
+Vendor:
+- SHA: 925b08a13aab9a62e080103185446543a7795794
+- status: clean
 
-10. Event ordering
-    - Success: ready 1, final 2, saving 3, saved 4.
-    - Empty: ready 1, final 2.
-    - Save failure/retry: ready 1, final 2, saving 3, error 4,
-      saving 5, saved 6.
-    - Wszystkie events jednego połączenia mają jeden session_id.
+## Implementacja
 
-11. Event sequence implementation
-    - VoiceSession zachowuje własne ready/final sequence.
-    - WebSocketEventSink waliduje contiguous sequence i session_id.
-    - Transport kontynuuje od następnej sequence dla persistence/error events.
-    - Serializacja odbywa się wyłącznie przez event_to_jsonable.
+Do TEXT_EXTENSIONS dodano:
+- .kt
+- .kts
+- .java
+- .gradle
+- .properties
+- .pro
 
-12. Server runtime lifecycle
-    - APIRouter lifespan tworzy runtime raz na proces TestClient/Uvicorn.
-    - Startup: canonical config, db_doctor, CUDA scope, engine/session factory,
-      provider, TranscriptionService.
-    - Shutdown czeka na inference, dispose engine i przywraca process PATH.
-    - Przy startup failure /health pozostaje liveness, a WebSocket zwraca
-      bezpieczny server error i close 1013.
+Istniejące filtrowanie raportów pozostawiono bez zmian. wynik.txt nadal znajduje się w EXCLUDED_REPORT_FILENAMES i nie jest eksportowany.
 
-13. Provider factory call count
-    - Concurrency fake test: 1.
-    - Real large-v3 WebSocket test: 1 dla dwóch połączeń.
+## Test regresyjny
 
-14. Model reuse
-    - Real test potwierdził tę samą instancję providera i identyczny załadowany
-      obiekt modelu po dwóch osobnych WebSocket connection runs.
+Dodano deterministyczny test integracyjny eksportera. Test tworzy tymczasowe repozytorium Git i sprawdza eksport następujących reviewable text files:
+- mobile/android/app/src/main/java/example/MainActivity.kt
+- mobile/android/app/build.gradle.kts
+- mobile/android/settings.gradle.kts
+- mobile/android/gradle.properties
+- mobile/android/app/src/main/java/example/LegacyActivity.java
+- mobile/android/build.gradle
+- mobile/android/app/proguard-rules.pro
 
-15. Inference serialization
-    - VoiceMemoryServerRuntime używa asyncio.Lock.
-    - Dwa równoległe socket flows zakończyły się poprawnie.
-    - max_concurrent_inference == 1; brak mieszania session IDs/events.
+Test potwierdza również:
+- stabilną, posortowaną kolejność nagłówków FILE;
+- zgodność liczby wyeksportowanych plików;
+- brak nagłówka FILE: wynik.txt;
+- brak treści sentinel z wynik.txt.
 
-16. CUDA helper/refactor
-    - Desktopowy helper wydzielono do neutralnego runtime/cuda.py.
-    - Desktop i server używają tego samego ProcessCudaDllScope.
-    - Zachowano KULAI_CUDA_DLL_DIR, os.add_dll_directory na Windows,
-      process-local PATH restore, brak system PATH mutation i brak CPU fallback.
-    - Desktop CUDA regression PASS.
+## Wyniki walidacji
 
-17. DB doctor/startup
-    - Runtime wykonuje run_database_doctor przed utworzeniem providera.
-    - Doctor failure blokuje voice runtime i nie tworzy providera/engine.
-    - Main db_doctor final: PASS, current/head kulai_memory_0002,
-      ingestion_id UUID NOT NULL UNIQUE, vector(1024), read-only diagnostics.
+Exporter tests:
+- komenda: .venv\Scripts\python.exe -m pytest tests\test_export_repo.py -q
+- wynik: PASS
+- 3 passed in 0.55s
 
-18. Persistence flow
-    - TranscriptionResult -> TranscriptMemoryIngestionService -> MemoryService
-      -> PostgresMemoryRepository -> caller-owned commit.
-    - Nie zduplikowano idempotency ani repository logic.
-    - Empty transcript używa wspólnego application predicate i nie otwiera
-      persistence flow.
+git diff --check:
+- wynik: PASS
+- brak błędów whitespace;
+- Git zgłosił jedynie informacyjne ostrzeżenia Windows LF/CRLF.
 
-19. Save retry behavior
-    - Pending RAM zawiera tylko TranscriptionResult, ingestion_id i session_id.
-    - memory.retry nie uruchamia STT i używa nowych AsyncSession/repository/service.
-    - Udane CREATED/DUPLICATE czyści pending state.
-    - Powtarzalne persistence failures mogą być ponawiane na tym samym socket.
+## Wygenerowany eksport
 
-20. Disconnect behavior
-    - VoiceSession jest zamykany, owned WAV usuwany, pending state porzucany.
-    - Już zapisana Memory nie jest usuwana.
-    - Brak durable pending queue zgodnie z zakresem TASK 4B.
+Komenda:
+- .venv\Scripts\python.exe scripts\export_repo.py
 
-21. Protocol error behavior
-    - Safe canonical ErrorEvent bez echo raw payloadu i tracebacka.
-    - 1002: message/state/audio contract, 1009: audio limit,
-      1008: idempotency conflict, 1011: transcription/internal,
-      1013: runtime unavailable.
-    - Sentinel privacy tests potwierdzają brak provider exception/payload leak.
+Plik:
+- kod_repo_do_analizy.txt
 
-22. Fake WebSocket tests
-    - Focused protocol/adapter/runtime suite: 32 passed.
-    - Obejmuje success, empty, retry, malformed messages, wszystkie audio
-      constraints, invalid transitions, cleanup, startup failure i privacy.
-    - STT call count w save retry: 1.
+Statystyki:
+- files exported: 114
+- files skipped: 3
+- size: 522670 bytes
+- SHA-256: d1a2ec20d37b0c028436e3560c29a926fb3aef7b1ed97f74c9012d47f57895cd
+- vendor included: no, zgodnie z domyślnym kontraktem eksportera
 
-23. Concurrent connection test
-    - PASS.
-    - Dwa równoległe TestClient WebSocket flows, oba zakończone saved.
-    - runtime factory=1, provider factory=1, max concurrent inference=1.
+Zweryfikowane rzeczywiste nagłówki Android Alpha:
+- FILE: mobile/android/app/src/main/java/com/kulai/memory/MainActivity.kt
+- FILE: mobile/android/app/build.gradle.kts
+- FILE: mobile/android/settings.gradle.kts
+- FILE: mobile/android/gradle.properties
 
-24. Real PostgreSQL WebSocket integration
-    - PASS w owned migrated temporary DB.
-    - Pierwsze połączenie: CREATED.
-    - Nowe połączenie z tym samym ingestion_id: DUPLICATE.
-    - Deterministyczny server-generated UUIDv5 session_id zachowuje kontrakt
-      idempotencji przez reconnect bez client-provided session_id.
-    - Oba memory.saved wskazują ten sam Memory ID; row count=1; vector count=0.
-    - PostgreSQL opt-in suite: 7 passed, 5 skipped (Whisper-only tests disabled).
+Wynik weryfikacji:
+- wszystkie wymagane nagłówki są obecne;
+- liczba nagłówków FILE: 114;
+- dokładny nagłówek FILE: wynik.txt nie występuje;
+- kod_repo_do_analizy.txt pozostaje ignorowanym lokalnym artefaktem.
 
-25. Real large-v3 silence WebSocket integration
-    - PASS w owned migrated temporary DB.
-    - Dwa osobne connections, po 1 s digital silence.
-    - Każde: session.ready -> transcript.final text empty -> clean close 1000.
-    - Brak memory.saving/memory.saved; Memory count=0; vector count=0.
-    - Provider i model reuse potwierdzone.
+## Stan końcowy
 
-26. Optional real speech status
-    - NOT EXECUTED — KULAI_WHISPER_AUDIO nie był skonfigurowany.
-    - Nie skanowano dysku i nie zapisano transcript content do raportu.
+Oczekiwane zmiany związane z tym zadaniem:
+- M scripts/export_repo.py
+- M tests/test_export_repo.py
+- M wynik.txt
 
-27. Main DB counts przed/po
-    - Przed automatycznymi integracjami: Memory=4, vector=0.
-    - Po wszystkich automatycznych integracjach: Memory=4, vector=0.
-    - Testy nie pozostawiły fixture records w main DB.
+Zachowane wcześniejsze zmiany TASK 4C:
+- M .gitignore
+- M README.md
+- ?? mobile/
 
-28. Desktop regression status
-    - 28 passed.
-    - UI, controller, recorder, config i launcher pozostały sprawne.
-    - Desktop nadal działa in-process i nie zależy od server adaptera.
+Vendor pozostaje przypięty do:
+- 925b08a13aab9a62e080103185446543a7795794
 
-29. Backend tests
-    - 117 passed, 12 skipped bez opt-in.
+Vendor status:
+- clean
 
-30. Root tests
-    - 41 passed.
+## Decyzja
 
-31. Reproducibility
-    - 5 passed.
-    - Application boundaries: 4 passed.
-
-32. pip check
-    - PASS: No broken requirements found.
-    - Dev extra używa uvicorn[standard], instalując WebSocket protocol support.
-
-33. git diff --check
-    - PASS, exit code 0.
-    - Git zgłasza wyłącznie informacyjne Windows LF/CRLF warnings.
-
-34. db_doctor
-    - PASS dla wszystkich checks.
-    - PostgreSQL 18.6, Alembic kulai_memory_0002, pgvector 0.8.6,
-      vector dimension 1024.
-
-35. Vendor status
-    - Clean.
-    - SHA bez zmian: 925b08a13aab9a62e080103185446543a7795794.
-
-36. Git status
-    - Wyłącznie oczekiwane niezacommitowane zmiany TASK 4B i wynik.txt.
-    - Branch nadal main...origin/main.
-    - Nie wykonano commit ani push.
-
-37. Ograniczenia v1
-    - Jedna notatka na connection, brak wielu recordingów na socket.
-    - Brak partial STT, durable pending queue i konwersji formatów audio.
-    - Localhost-only, bez LAN/public binding i bez auth.
-    - Jeden GPU/provider, inference kolejkowane w procesie.
-
-38. Co przechodzi do TASK 4C Android Alpha
-    - Android microphone capture i klient typed protocol v1.
-    - LAN binding opt-in zamiast zmiany localhost default.
-    - Development authentication/pairing i bezpieczna konfiguracja sieci.
-    - Client reconnect/retry UX z zachowaniem ingestion_id.
-    - Bez zmian STT, VAD, ingestion ani persistence core.
-
-39. Decyzja
-    OK DO COMMITA
-
-Nie wykonano commit ani push.
+OK — eksporter obejmuje źródła Android/Kotlin/Gradle, test regresyjny przechodzi, pełny eksport został ponownie wygenerowany, a wynik.txt nie został do niego dołączony.

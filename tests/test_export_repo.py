@@ -100,6 +100,39 @@ def test_export_includes_reviewable_changes_and_omits_unsafe_files(
     assert stats.output_size == output.stat().st_size
 
 
+def test_export_includes_android_and_gradle_reviewable_text_files(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    _git_init(root)
+    reviewable_files = {
+        "mobile/android/app/build.gradle.kts": "plugins {}\n",
+        "mobile/android/app/proguard-rules.pro": "-keep class example.** { *; }\n",
+        "mobile/android/app/src/main/java/example/LegacyActivity.java": (
+            "class LegacyActivity {}\n"
+        ),
+        "mobile/android/app/src/main/java/example/MainActivity.kt": (
+            "class MainActivity\n"
+        ),
+        "mobile/android/build.gradle": "plugins {}\n",
+        "mobile/android/gradle.properties": "org.gradle.jvmargs=-Xmx1g\n",
+        "mobile/android/settings.gradle.kts": 'rootProject.name = "KulAI Memory"\n',
+    }
+    for relative_path, content in reviewable_files.items():
+        _write(root / relative_path, content)
+    _write(root / "wynik.txt", "REPORT MUST NOT BE EXPORTED\n")
+    _git_add(root, *reviewable_files, "wynik.txt")
+
+    output = root / "kod_repo_do_analizy.txt"
+    stats = export_repository(root, output)
+    exported = output.read_text(encoding="utf-8")
+
+    assert _file_headers(exported) == sorted(reviewable_files)
+    assert stats.file_count == len(reviewable_files)
+    assert "FILE: wynik.txt" not in exported
+    assert "REPORT MUST NOT BE EXPORTED" not in exported
+
+
 def test_vendor_is_optional_and_cli_supports_custom_output(
     tmp_path: Path,
     capsys,
