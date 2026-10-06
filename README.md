@@ -214,3 +214,35 @@ database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
 This alpha does not retain retry state across process death. It has no history
 screen, LAN transport, WSS, authentication, embeddings, RAG, partial STT, or
 public-storage audio. LAN/WSS and authentication/pairing belong to TASK 4D.
+
+## Local embedding foundation
+
+The embedding host uses `kulai_embeddings.embed` and the reusable native Ollama
+provider. Defaults are `KULAI_EMBEDDING_MODEL=bge-m3:567m-fp16` and
+`KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434`; only loopback hosts are accepted.
+The model must already be installed. No model is downloaded automatically.
+
+Run the synthetic probe without reading Memory or opening PostgreSQL:
+
+```text
+.venv\Scripts\python.exe scripts\embedding_smoke.py
+```
+
+The probe uses the native model dimension, with no dimensions override,
+truncation, padding, or normalization by the host. It requires an explicitly
+configured `KULAI_VECTOR_DIMENSION` and compares it with the response. The
+verified BGE-M3 output and current database schema both have dimension 1024.
+Output contains only safe model/dimension metrics. Verify the actual schema
+separately with `scripts/db_doctor.py`; the embedding probe does not inspect it.
+
+Run the opt-in real Ollama test in PowerShell:
+
+```powershell
+$env:KULAI_RUN_OLLAMA_INTEGRATION = "1"
+.venv\Scripts\python.exe -m pytest backend\tests\integration\test_embeddings.py -q
+Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
+```
+
+The integration uses two synthetic requests on one provider/client, with no
+PostgreSQL dependency. This foundation does not index Memory, write vectors,
+perform retrieval, or run RAG.
