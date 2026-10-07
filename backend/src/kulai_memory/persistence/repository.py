@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,6 +100,18 @@ class PostgresMemoryRepository:
             result = await self._db.execute(statement)
             row = result.scalar_one_or_none()
             return _to_domain(row) if row is not None else None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise MemoryPersistenceError from exc
+
+    async def delete_by_id(self, memory_id: UUID) -> bool:
+        """Delete one canonical row; ownership of commit stays with the caller."""
+
+        statement = delete(MemoryDb).where(MemoryDb.id == memory_id).returning(MemoryDb.id)
+        try:
+            result = await self._db.execute(statement)
+            return result.scalar_one_or_none() is not None
         except asyncio.CancelledError:
             raise
         except Exception as exc:

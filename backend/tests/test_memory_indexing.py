@@ -323,6 +323,15 @@ def test_host_opens_session_after_embedding_and_handles_commit_safely(
         async def __aexit__(self, *args):
             operations.append("session.close")
 
+        async def scalar(self, statement):
+            from sqlalchemy.dialects import postgresql
+
+            compiled = statement.compile(dialect=postgresql.dialect())
+            assert "FOR UPDATE" in str(compiled)
+            assert memory.id in compiled.params.values()
+            operations.append("lock")
+            return memory.id
+
         @asynccontextmanager
         async def begin(self):
             operations.append("begin")
@@ -361,8 +370,47 @@ def test_host_opens_session_after_embedding_and_handles_commit_safely(
     else:
         assert run().ids == (str(memory.id),)
 
-    expected = ["embed", "session.open", "begin", "upsert", "commit"]
+    expected = ["embed", "session.open", "begin", "lock", "upsert", "commit"]
     if commit_fails:
         expected.append("rollback")
     assert operations == expected + ["session.close"]
     assert memory.model_dump() == snapshot
+
+
+def test_missing_canonical_memory_blocks_prepared_vector_before_store_creation(monkeypatch):
+    operations = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        @asynccontextmanager
+        async def begin(self):
+            try:
+                yield
+            except BaseException:
+                operations.append("rollback")
+                raise
+
+        async def scalar(self, statement):
+            operations.append("lock")
+            return None
+
+    def unexpected_store(**kwargs):
+        operations.append("store")
+        raise AssertionError("Missing Memory must not write a vector")
+
+    monkeypatch.setattr(indexing_persistence, "PgVectorStore", unexpected_store)
+    service = MemoryIndexingService(provider=FakeProvider(), expected_dimension=1024)
+
+    async def run():
+        prepared = await service.prepare(memory=Memory(content="synthetic stale memory"))
+        await indexing_persistence.save_prepared_memory_vector(
+            service=service, request=prepared, session_factory=Session,
+        )
+    with pytest.raises(MemoryIndexingError):
+        asyncio.run(run())
+    assert operations == ["lock", "rollback"]

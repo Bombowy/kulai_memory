@@ -284,6 +284,33 @@ Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
 The tests prove durable upsert/reindex, commit failure rollback, Memory safety,
 provider/client reuse, and embedding without an open database transaction.
 
+## Atomic Memory deletion
+
+The backend helper `kulai_memory.deletion_persistence.delete_memory` accepts a
+Memory UUID and a session factory. It deletes the canonical Memory first, then
+uses reusable vector delete for namespace `kulai_memory.memories.v1` and record
+ID `str(memory_id)`. Both adapters use the same PostgreSQL session and transaction.
+The helper returns only after commit; failures before commit roll back both
+changes. The neutral application service does not own commit or rollback.
+
+Deletion is idempotent. The result contains `memory_id`, `memory_deleted` and
+`vector_deleted_count`. A Memory without a vector can be deleted; an orphan
+vector can be cleaned up; repeating a completed delete returns false/zero.
+Other Memory IDs and vector namespaces are preserved. This is hard deletion
+of the canonical row, including its stored ingestion identity.
+
+Host indexing and backfill lock the canonical Memory row with `FOR UPDATE`
+before upsert, inside the short write transaction. Embedding still runs before
+opening that transaction. Both indexing and deletion acquire canonical-row
+locks before touching vectors. An index that finishes first is subsequently
+deleted; an index waiting for a completed delete fails safely without writing
+a vector. A prepared request for a deleted Memory cannot recreate its vector.
+
+Deletion currently has no UI, CLI or transport endpoint. Real deletion and
+concurrency tests use owned temporary databases under
+`KULAI_RUN_POSTGRES_INTEGRATION=1`; automatic validation never deletes main DB
+Memory. No vendor or schema changes are required.
+
 ## Guarded Memory backfill
 
 `scripts/index_memories.py` defaults to **dry-run** on the configured database.

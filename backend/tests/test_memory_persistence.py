@@ -135,6 +135,30 @@ def test_repository_maps_get_and_recent_rows() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("present", [True, False])
+def test_repository_deletes_by_id_without_owning_transaction(present):
+    async def scenario():
+        from sqlalchemy.dialects import postgresql
+
+        fake = FakeSession()
+        memory = Memory(content="synthetic deletion")
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = memory.id if present else None
+
+        async def execute(statement):
+            compiled = statement.compile(dialect=postgresql.dialect())
+            assert str(compiled).startswith("DELETE FROM memories")
+            assert "RETURNING memories.id" in str(compiled)
+            assert compiled.params == {"id_1": memory.id}
+            return result
+
+        fake.execute = execute
+        repository = PostgresMemoryRepository(db=cast(AsyncSession, fake))
+        assert await repository.delete_by_id(memory.id) is present
+        assert fake.commit_count == fake.rollback_count == 0
+    asyncio.run(scenario())
+
+
 def test_repository_wraps_internal_failure_without_exposing_details() -> None:
     async def scenario() -> None:
         db = MagicMock(spec=AsyncSession)

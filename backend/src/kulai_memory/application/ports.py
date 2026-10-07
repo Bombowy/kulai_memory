@@ -40,3 +40,13 @@ class MemoryRepository(Protocol):
 
     async def list_recent(self, *, limit: int) -> tuple[Memory, ...]:
         ...
+
+
+@runtime_checkable
+class MemoryDeletionRepository(Protocol):
+    """Delete canonical Memory within the caller's shared transaction."""
+
+    async def delete_by_id(self, memory_id: UUID) -> bool:
+        """Return whether one Memory was deleted, without committing."""
+
+        ...

@@ -31,6 +31,7 @@ from .ingestion import (
     TranscriptMemoryIngestionStatus,
     transcription_is_empty,
 )
+from .deletion import MemoryDeletionError, MemoryDeletionResult, MemoryDeletionService
 from .indexing import MEMORY_VECTOR_NAMESPACE, MemoryIndexingError, MemoryIndexingService
 from .memory import (
     IdempotentMemoryWrite,
@@ -40,7 +41,7 @@ from .memory import (
     MemoryService,
     MemorySourceKind,
 )
-from .ports import EventSink, MemoryRepository
+from .ports import EventSink, MemoryDeletionRepository, MemoryRepository
 from .retrieval import (
     MemoryRetrievalError,
     MemoryRetrievalHit,
@@ -67,6 +68,10 @@ __all__ = [
     "EventSink",
     "IdempotentMemoryWrite",
     "MEMORY_VECTOR_NAMESPACE",
+    "MemoryDeletionError",
+    "MemoryDeletionRepository",
+    "MemoryDeletionResult",
+    "MemoryDeletionService",
     "MemoryIndexingError",
     "MemoryIndexingService",
     "MemorySavedEvent",
