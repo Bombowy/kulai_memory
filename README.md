@@ -287,17 +287,33 @@ provider/client reuse, and embedding without an open database transaction.
 ## Atomic Memory deletion
 
 The backend helper `kulai_memory.deletion_persistence.delete_memory` accepts a
-Memory UUID and a session factory. It deletes the canonical Memory first, then
+Memory UUID and a session factory. It retires ingestion identity and deletes the canonical Memory, then
 uses reusable vector delete for namespace `kulai_memory.memories.v1` and record
 ID `str(memory_id)`. Both adapters use the same PostgreSQL session and transaction.
-The helper returns only after commit; failures before commit roll back both
+The helper returns only after commit; failures before commit roll back the tombstone and both
 changes. The neutral application service does not own commit or rollback.
 
 Deletion is idempotent. The result contains `memory_id`, `memory_deleted` and
 `vector_deleted_count`. A Memory without a vector can be deleted; an orphan
 vector can be cleaned up; repeating a completed delete returns false/zero.
 Other Memory IDs and vector namespaces are preserved. This is hard deletion
-of the canonical row, including its stored ingestion identity.
+of the canonical row. `memory_ingestion_tombstones` retains only `ingestion_id`,
+`memory_id` and `deleted_at`, with no content, metadata, session or vector data,
+no foreign key, and no expiry. Repeated deletion preserves the first timestamp.
+
+Creation and deletion serialize across sessions/processes through PostgreSQL
+transaction advisory locks. The signed 64-bit key is the first eight bytes of
+SHA-256 over `kulai_memory.ingestion.v1\0` followed by the ingestion UUID bytes.
+A collision only serializes unrelated identities; tombstone checks use the full
+UUID. The lock order is ingestion advisory lock, canonical row, then vector.
+Indexing only locks canonical row then vector and never takes an advisory lock.
+Checks use the host's PostgreSQL READ COMMITTED transactions after acquiring the
+lock, so a waiting replay sees the committed tombstone before any INSERT.
+
+A retry of a retired ingestion UUID raises `MemoryIngestionRetiredError`, even
+with different content. Fresh ingestion UUIDs still work. WebSocket returns
+`memory.ingestion_retired` with `recoverable=false` and closes with code 1008;
+desktop clears pending save and offers no retry for that deleted note.
 
 Host indexing and backfill lock the canonical Memory row with `FOR UPDATE`
 before upsert, inside the short write transaction. Embedding still runs before
@@ -309,7 +325,11 @@ a vector. A prepared request for a deleted Memory cannot recreate its vector.
 Deletion currently has no UI, CLI or transport endpoint. Real deletion and
 concurrency tests use owned temporary databases under
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; automatic validation never deletes main DB
-Memory. No vendor or schema changes are required.
+Memory. Host revision `kulai_memory_0003` adds the technical tombstone table;
+the reviewed vendor pin is unchanged. Until the main DB is manually migrated
+after review, it remains on 0002 and `db_doctor` intentionally reports a head
+mismatch and missing tombstone schema. Desktop/server startup remains blocked
+on that schema; no automatic upgrade, stamp or diagnostic bypass is performed.
 
 ## Guarded Memory backfill
 

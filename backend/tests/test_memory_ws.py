@@ -24,6 +24,7 @@ from kulai_memory.application import (
     EventSink,
     Memory,
     MemoryIdempotencyConflictError,
+    MemoryIngestionRetiredError,
     TranscriptMemoryIngestionResult,
     TranscriptMemoryIngestionStatus,
     TranscriptionService,
@@ -429,3 +430,48 @@ def test_idempotency_conflict_is_not_retryable() -> None:
     assert [final["sequence"], saving["sequence"], error["sequence"]] == [2, 3, 4]
     assert error["payload"]["code"] == "memory.idempotency_conflict"
     assert error["payload"]["recoverable"] is False
+
+
+@pytest.mark.parametrize("after_save_failure", [False, True])
+def test_retired_ingestion_is_terminal_and_never_retranscribes(after_save_failure, monkeypatch, caplog):
+    paths = []
+
+    class TrackingWav(OwnedPcmWav):
+        def __init__(self):
+            super().__init__()
+            paths.append(self.path)
+
+    class RetiredRuntime(FakeRuntime):
+        async def ingest(self, **kwargs):
+            self.ingest_calls.append((kwargs["ingestion_id"], kwargs["session_id"], kwargs["transcription"].text))
+            if after_save_failure and len(self.ingest_calls) == 1:
+                raise ServerPersistenceError()
+            raise MemoryIngestionRetiredError()
+
+    monkeypatch.setattr(memory_ws, "OwnedPcmWav", TrackingWav)
+    runtime = RetiredRuntime(text="PRIVATE_RETIRE_TRANSCRIPT_SENTINEL")
+    app = create_app(voice_runtime_factory=lambda: runtime)
+    identity = uuid4()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/memory") as websocket:
+            websocket.send_json(_start_message(identity))
+            events = [websocket.receive_json()]
+            websocket.send_bytes(b"\x00\x00")
+            websocket.send_json(_stop_message())
+            events.extend(websocket.receive_json() for _ in range(3))
+            if after_save_failure:
+                assert events[-1]["payload"]["recoverable"] is True
+                websocket.send_json(_retry_message())
+                events.extend(websocket.receive_json() for _ in range(2))
+            _assert_clean_close(websocket, 1008)
+    error = events[-1]
+    assert error["payload"] == {"code": "memory.ingestion_retired",
+                               "message": MemoryIngestionRetiredError.safe_message,
+                               "recoverable": False}
+    assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
+    assert len({event["session_id"] for event in events}) == 1
+    assert runtime.provider.call_count == runtime.transcribe_count == 1
+    assert {call[0] for call in runtime.ingest_calls} == {identity}
+    assert runtime.memories == {}
+    assert "PRIVATE_RETIRE_TRANSCRIPT_SENTINEL" not in json.dumps(error) + caplog.text
+    assert paths and all(not path.exists() for path in paths)

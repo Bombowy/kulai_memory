@@ -28,7 +28,8 @@ class MemoryDeletionResult:
 class MemoryDeletionService:
     """Both adapters must share one transaction; the host commits the result.
 
-    Delete canonical Memory first to serialize with host indexing's row lock.
+    The repository retires ingestion identity before deleting canonical Memory;
+    its canonical row lock serializes with host indexing before vector deletion.
     Missing Memory is allowed, including cleanup of its orphan vector.
     """
 

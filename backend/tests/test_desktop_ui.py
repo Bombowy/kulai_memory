@@ -22,6 +22,8 @@ from kulai_memory.desktop.models import (  # noqa: E402
     DesktopDatabaseError,
     DesktopPublicError,
     DesktopRecordingError,
+    DesktopProcessingResult,
+    DesktopResultStatus,
     DesktopStartupResult,
     MicrophoneDevice,
 )
@@ -142,4 +144,22 @@ def test_window_can_close_while_runtime_is_still_starting() -> None:
 
     assert shutdown_spy.count() == 1
     assert worker.wait(2_000)
+    app.processEvents()
+
+
+def test_retired_note_hides_retry_and_allows_fresh_recording():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(autostart=False)
+    window._ready = True
+    window.retry_button.setVisible(True)
+    window._on_processing_finished(DesktopProcessingResult(
+        status=DesktopResultStatus.INGESTION_RETIRED, transcript="synthetic note",
+        memory_id=None, save_pending=False,
+    ))
+    assert window.retry_button.isHidden()
+    assert not window.retry_button.isEnabled()
+    assert window.record_button.isEnabled()
+    assert window.save_status.text() == "INGESTION_RETIRED"
+    assert "cannot be saved again" in window.status_label.text()
+    window.close()
     app.processEvents()

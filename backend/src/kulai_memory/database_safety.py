@@ -426,6 +426,63 @@ def vector_embedding_dimension_check(
     )
 
 
+async def _tombstone_schema_checks(connection: AsyncConnection) -> tuple[CheckResult, ...]:
+    """Inspect the technical retirement table without reading its records."""
+
+    present = await connection.scalar(
+        text("SELECT to_regclass('public.memory_ingestion_tombstones') IS NOT NULL"),
+    )
+    columns = await connection.execute(text(
+        """
+        SELECT column_name, udt_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'memory_ingestion_tombstones'
+        """
+    ))
+    actual = {
+        row.column_name: (row.udt_name, row.is_nullable == "YES", row.column_default)
+        for row in columns
+    }
+    expected = {
+        "ingestion_id": ("uuid", False),
+        "memory_id": ("uuid", False),
+        "deleted_at": ("timestamptz", False),
+    }
+    schema_ok = (
+        set(actual) == set(expected)
+        and all(actual[name][:2] == spec for name, spec in expected.items())
+        and actual["deleted_at"][2] in {"now()", "CURRENT_TIMESTAMP"}
+    )
+    constraints = await connection.execute(text(
+        """
+        SELECT CAST(constraint_record.contype AS text), pg_get_constraintdef(constraint_record.oid)
+        FROM pg_constraint AS constraint_record
+        JOIN pg_class AS relation ON relation.oid = constraint_record.conrelid
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'public'
+          AND relation.relname = 'memory_ingestion_tombstones'
+        """
+    ))
+    definitions = set(tuple(row) for row in constraints)
+    constraints_ok = (
+        ("p", "PRIMARY KEY (ingestion_id)") in definitions
+        and ("u", "UNIQUE (memory_id)") in definitions
+        and not any(kind == "f" for kind, _ in definitions)
+    )
+    return (
+        CheckResult(name="table.memory_ingestion_tombstones", ok=bool(present)),
+        CheckResult(
+            name="schema.memory_ingestion_tombstones", ok=schema_ok,
+            value={"columns": sorted(actual)},
+            message=None if schema_ok else "The ingestion tombstone schema is incompatible.",
+        ),
+        CheckResult(
+            name="constraint.memory_ingestion_tombstones", ok=constraints_ok,
+            message=None if constraints_ok else "The ingestion tombstone constraints are incompatible.",
+        ),
+    )
+
+
 async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
     """Inspect required database invariants using read-only SQL only."""
 
@@ -641,6 +698,8 @@ async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
                     actual_type=embedding_type,
                 )
             )
+
+            checks.extend(await _tombstone_schema_checks(connection))
 
             query_value = await connection.scalar(text("SELECT 1"))
             checks.append(

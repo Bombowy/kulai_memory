@@ -436,7 +436,7 @@ async def _migration_backfills_existing_memory() -> None:
 
         assert ingestion_id == memory_id
         assert unique_constraint is True
-        assert revision == "kulai_memory_0002"
+        assert (revision,) == expected_alembic_heads()
     finally:
         await drop_owned_temporary_database(owned, config=config)
 

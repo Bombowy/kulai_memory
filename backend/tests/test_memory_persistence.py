@@ -25,6 +25,7 @@ class FakeSession:
         self.commit_count = 0
         self.rollback_count = 0
         self.execute_results: list[object] = []
+        self.statements: list[object] = []
 
     def add(self, value: object) -> None:
         self.added.append(value)
@@ -38,9 +39,15 @@ class FakeSession:
     async def rollback(self) -> None:
         self.rollback_count += 1
 
-    async def execute(self, statement: object) -> object:
-        del statement
+    async def execute(self, statement: object, parameters=None) -> object:
+        self.statements.append(statement)
         return self.execute_results.pop(0)
+
+
+def _scalar_result(value=None):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
 
 
 def _row(memory: Memory) -> MemoryDb:
@@ -60,6 +67,7 @@ def test_repository_creates_and_flushes_without_owning_transaction() -> None:
         fake = FakeSession()
         repository = PostgresMemoryRepository(db=cast(AsyncSession, fake))
         memory = Memory(content="repozytorium", metadata={"language": "pl"})
+        fake.execute_results = [_scalar_result(), _scalar_result()]
 
         result = await repository.create(memory)
 
@@ -84,14 +92,14 @@ def test_repository_atomically_creates_or_returns_ingestion_owner() -> None:
 
         inserted_result = MagicMock()
         inserted_result.scalar_one_or_none.return_value = _row(memory)
-        fake.execute_results = [inserted_result]
+        fake.execute_results = [_scalar_result(), _scalar_result(), inserted_result]
         created = await repository.create_or_get_by_ingestion_id(memory)
 
         conflict_result = MagicMock()
         conflict_result.scalar_one_or_none.return_value = None
         existing_result = MagicMock()
         existing_result.scalar_one_or_none.return_value = _row(memory)
-        fake.execute_results = [conflict_result, existing_result]
+        fake.execute_results = [_scalar_result(), _scalar_result(), conflict_result, existing_result]
         duplicate = await repository.create_or_get_by_ingestion_id(
             Memory(ingestion_id=memory.ingestion_id, content=memory.content)
         )
@@ -142,19 +150,22 @@ def test_repository_deletes_by_id_without_owning_transaction(present):
 
         fake = FakeSession()
         memory = Memory(content="synthetic deletion")
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = memory.id if present else None
-
-        async def execute(statement):
-            compiled = statement.compile(dialect=postgresql.dialect())
-            assert str(compiled).startswith("DELETE FROM memories")
-            assert "RETURNING memories.id" in str(compiled)
-            assert compiled.params == {"id_1": memory.id}
-            return result
-
-        fake.execute = execute
+        values = (
+            (memory.ingestion_id, None, memory.ingestion_id, memory.id, memory.id)
+            if present else (None, None)
+        )
+        fake.execute_results = [_scalar_result(value) for value in values]
         repository = PostgresMemoryRepository(db=cast(AsyncSession, fake))
         assert await repository.delete_by_id(memory.id) is present
+        compiled = [str(statement.compile(dialect=postgresql.dialect()))
+                    for statement in fake.statements]
+        if present:
+            assert "pg_advisory_xact_lock" in compiled[1]
+            assert "FOR UPDATE" in compiled[2]
+            assert compiled[3].startswith("INSERT INTO memory_ingestion_tombstones")
+            assert compiled[4].startswith("DELETE FROM memories")
+        else:
+            assert all("INSERT INTO" not in sql and "DELETE FROM" not in sql for sql in compiled)
         assert fake.commit_count == fake.rollback_count == 0
     asyncio.run(scenario())
 
@@ -163,6 +174,7 @@ def test_repository_wraps_internal_failure_without_exposing_details() -> None:
     async def scenario() -> None:
         db = MagicMock(spec=AsyncSession)
         db.flush = AsyncMock(side_effect=RuntimeError("password=top-secret"))
+        db.execute = AsyncMock(side_effect=[_scalar_result(), _scalar_result()])
         repository = PostgresMemoryRepository(db=db)
 
         with pytest.raises(MemoryPersistenceError) as caught:
@@ -226,7 +238,10 @@ def test_alembic_graph_has_one_host_head() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["kulai_memory_0002"]
+    assert scripts.get_heads() == ["kulai_memory_0003"]
+    tombstone_revision = scripts.get_revision("kulai_memory_0003")
+    assert tombstone_revision is not None
+    assert tombstone_revision.down_revision == "kulai_memory_0002"
     revision = scripts.get_revision("kulai_memory_0002")
     assert revision is not None
     assert revision.down_revision == "kulai_memory_0001"

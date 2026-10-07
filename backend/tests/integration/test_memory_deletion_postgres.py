@@ -78,6 +78,17 @@ async def _state(factory):
             await session.rollback()
 
 
+async def _tombstone_state(factory):
+    async with factory() as session:
+        try:
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            return tuple((await session.execute(text(
+                "SELECT ingestion_id, memory_id, deleted_at FROM memory_ingestion_tombstones ORDER BY ingestion_id"
+            ))).all())
+        finally:
+            await session.rollback()
+
+
 async def _durable_delete_cases():
     async with _owned_migrated_session_factory() as factory:
         unrelated = await _seed(factory)
@@ -97,10 +108,13 @@ async def _durable_delete_cases():
                                           if row != (MEMORY_VECTOR_NAMESPACE, str(memory.id)))
             assert (OTHER_NAMESPACE, str(memory.id)) in after_vectors
             assert unrelated.id in after_memories
+            tombstones = await _tombstone_state(factory)
+            assert sum(row.memory_id == memory.id for row in tombstones) == int(memory_present)
             assert await deletion_persistence.delete_memory(
                 memory_id=memory.id, session_factory=factory,
             ) == MemoryDeletionResult(memory.id, False, 0)
             assert await _state(factory) == (after_memories, after_vectors)
+            assert await _tombstone_state(factory) == tombstones
         print("atomic.delete.durable_cases=4;repeat=PASS;namespace_isolation=PASS")
 
 
@@ -109,6 +123,7 @@ async def _rollback_failure(stage, monkeypatch):
         memory = await _seed(factory)
         reader = BackfillReader(factory)
         before = await reader.fingerprints()
+        tombstones_before = await _tombstone_state(factory)
         calls = []
 
         class Repository(PostgresMemoryRepository):
@@ -156,6 +171,7 @@ async def _rollback_failure(stage, monkeypatch):
         assert calls == (["memory"] if stage == "memory" else
                          ["memory", "vector", "commit"] if stage == "commit" else ["memory", "vector"])
         assert await reader.fingerprints() == before
+        assert await _tombstone_state(factory) == tombstones_before
         memories, vectors = await _state(factory)
         assert memories == (memory.id,) and vectors == ((MEMORY_VECTOR_NAMESPACE, str(memory.id)),)
         print(f"atomic.delete.rollback_stage={stage};fingerprints_unchanged=true")
@@ -171,6 +187,10 @@ async def _concurrent_duplicate_delete():
         assert {(result.memory_deleted, result.vector_deleted_count) for result in results} == {(True, 1), (False, 0)}
         assert all(result.memory_id == memory.id for result in results)
         assert await _state(factory) == ((), ())
+        tombstones = await _tombstone_state(factory)
+        assert len(tombstones) == 1
+        assert tombstones[0].ingestion_id == memory.ingestion_id
+        assert tombstones[0].memory_id == memory.id
         print("atomic.delete.concurrent_duplicate=PASS;memory_count=0;vector_count=0")
 
 

@@ -19,6 +19,7 @@ from kulai_memory.application import (
     ErrorPayload,
     EventSink,
     MemoryIdempotencyConflictError,
+    MemoryIngestionRetiredError,
     MemorySavedEvent,
     MemorySavedPayload,
     MemorySavingEvent,
@@ -284,6 +285,16 @@ class _MemoryWebSocketConnection:
                 ingestion_id=pending.ingestion_id,
                 session_id=pending.session_id,
             )
+        except MemoryIngestionRetiredError:
+            self._pending = None
+            await self._send_error(
+                code=MemoryIngestionRetiredError.code,
+                message=MemoryIngestionRetiredError.safe_message,
+                recoverable=False,
+            )
+            self._state = ConnectionState.COMPLETED
+            await self._close(1008)
+            return
         except MemoryIdempotencyConflictError:
             await self._send_error(
                 code="memory.idempotency_conflict",

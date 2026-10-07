@@ -10,6 +10,7 @@ from kulai_db import Base
 from sqlalchemy import (
     DateTime,
     Index,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -55,7 +56,23 @@ class MemoryDb(Base):
     )
 
 
+class MemoryIngestionTombstoneDb(Base):
+    """Technical identities only; deliberately no relationship to deleted rows."""
+
+    __tablename__ = "memory_ingestion_tombstones"
+    __table_args__ = (
+        PrimaryKeyConstraint("ingestion_id", name="pk_memory_ingestion_tombstones"),
+        UniqueConstraint("memory_id", name="uq_memory_ingestion_tombstones_memory_id"),
+    )
+
+    ingestion_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    memory_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
 def register_memory_orm_models() -> type[MemoryDb]:
-    """Expose the already-declared host model to explicit ORM registration."""
+    """Expose host models already declared on shared Base metadata."""
 
     return MemoryDb

@@ -14,6 +14,7 @@ class DesktopResultStatus(str, Enum):
     DUPLICATE = "duplicate"
     SKIPPED_EMPTY = "skipped_empty"
     SAVE_FAILED = "save_failed"
+    INGESTION_RETIRED = "ingestion_retired"
 
 
 class DesktopProgressState(str, Enum):

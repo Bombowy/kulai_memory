@@ -16,7 +16,7 @@ from .persistence import PostgresMemoryRepository
 async def delete_memory(
     *, memory_id: UUID, session_factory: async_sessionmaker[AsyncSession],
 ) -> MemoryDeletionResult:
-    """Return only after both deletes commit in the same PostgreSQL session."""
+    """Return after tombstone and both deletes commit in one PostgreSQL session."""
 
     if not isinstance(memory_id, UUID):
         raise MemoryDeletionError()

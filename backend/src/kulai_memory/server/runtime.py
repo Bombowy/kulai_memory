@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import (
 from kulai_memory.application import (
     EventSink,
     MemoryIdempotencyConflictError,
+    MemoryIngestionRetiredError,
     MemoryRepository,
     MemoryService,
     TranscriptMemoryIngestionResult,
@@ -290,7 +291,7 @@ class VoiceMemoryServerRuntime:
                 return result
         except asyncio.CancelledError:
             raise
-        except MemoryIdempotencyConflictError:
+        except (MemoryIdempotencyConflictError, MemoryIngestionRetiredError):
             raise
         except Exception as exc:
             raise ServerPersistenceError from exc

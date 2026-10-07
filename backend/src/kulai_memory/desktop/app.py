@@ -382,6 +382,9 @@ class MainWindow(QMainWindow):
         elif result.status is DesktopResultStatus.SKIPPED_EMPTY:
             self.status_label.setText("No speech detected")
             self.save_status.setText("SKIPPED_EMPTY")
+        elif result.status is DesktopResultStatus.INGESTION_RETIRED:
+            self.status_label.setText("This note was deleted and cannot be saved again.")
+            self.save_status.setText("INGESTION_RETIRED")
         else:
             self.status_label.setText("Save failed - retry available")
             self.save_status.setText("SAVE_FAILED")

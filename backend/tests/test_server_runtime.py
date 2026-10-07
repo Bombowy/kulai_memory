@@ -14,7 +14,7 @@ from kulai_transcription import (
     TranscriptionResult,
 )
 
-from kulai_memory.application import VoiceSessionEvent
+from kulai_memory.application import MemoryIngestionRetiredError, VoiceSessionEvent
 from kulai_memory.database_safety import CheckResult, DoctorReport
 from kulai_memory.server import (
     ServerConfigurationError,
@@ -191,4 +191,47 @@ def test_database_doctor_failure_blocks_provider_and_engine() -> None:
         assert provider_calls == []
         assert engine.dispose_count == 0
 
+    asyncio.run(scenario())
+
+
+def test_runtime_preserves_retired_error_and_does_not_commit():
+    async def scenario():
+        class Session:
+            commits = 0
+            closed = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                self.closed = True
+
+            async def commit(self):
+                self.commits += 1
+
+        class Repository:
+            async def create_or_get_by_ingestion_id(self, memory):
+                raise MemoryIngestionRetiredError()
+
+        async def doctor(ignored):
+            return DoctorReport((CheckResult("test", True),))
+
+        session = Session()
+        engine = FakeEngine()
+        runtime = VoiceMemoryServerRuntime(
+            settings=Settings(_env_file=None), provider_factory=lambda ignored: BlockingProvider(),
+            database_config_factory=lambda: DbConfig(user="u", password="p", name="db"),
+            doctor=doctor, engine_factory=lambda ignored: engine,
+            session_factory_builder=lambda ignored: lambda: session,
+            repository_factory=lambda ignored: Repository(),
+        )
+        await runtime.startup()
+        with pytest.raises(MemoryIngestionRetiredError):
+            await runtime.ingest(
+                transcription=TranscriptionResult(text="synthetic", provider_id="fake"),
+                ingestion_id=uuid4(), session_id=uuid4(),
+            )
+        assert session.closed and session.commits == 0
+        await runtime.shutdown()
+        assert engine.dispose_count == 1
     asyncio.run(scenario())

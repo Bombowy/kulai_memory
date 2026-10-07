@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from kulai_memory.application import (
+    MemoryIngestionRetiredError,
     MemoryService,
     MemoryRepository,
     TranscriptFinalEvent,
@@ -368,6 +369,14 @@ class DesktopController:
                     await session.commit()
         except asyncio.CancelledError:
             raise
+        except MemoryIngestionRetiredError:
+            self._pending = None
+            return DesktopProcessingResult(
+                status=DesktopResultStatus.INGESTION_RETIRED,
+                transcript=pending.transcription.text,
+                memory_id=None,
+                save_pending=False,
+            )
         except Exception:
             return DesktopProcessingResult(
                 status=DesktopResultStatus.SAVE_FAILED,

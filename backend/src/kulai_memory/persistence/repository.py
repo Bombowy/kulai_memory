@@ -12,10 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kulai_memory.application.memory import (
     IdempotentMemoryWrite,
     Memory,
+    MemoryIngestionRetiredError,
     MemoryPersistenceError,
 )
 
-from .models import MemoryDb
+from .ingestion_lock import lock_ingestion
+from .models import MemoryDb, MemoryIngestionTombstoneDb
 
 
 def _to_domain(row: MemoryDb) -> Memory:
@@ -36,6 +38,16 @@ class PostgresMemoryRepository:
     def __init__(self, *, db: AsyncSession) -> None:
         self._db = db
 
+    async def _require_active_ingestion(self, ingestion_id: UUID) -> None:
+        await lock_ingestion(self._db, ingestion_id)
+        result = await self._db.execute(
+            select(MemoryIngestionTombstoneDb.ingestion_id).where(
+                MemoryIngestionTombstoneDb.ingestion_id == ingestion_id,
+            ),
+        )
+        if result.scalar_one_or_none() is not None:
+            raise MemoryIngestionRetiredError() from None
+
     async def create(self, memory: Memory) -> Memory:
         row = MemoryDb(
             id=memory.id,
@@ -47,10 +59,13 @@ class PostgresMemoryRepository:
             created_at=memory.created_at,
         )
         try:
+            await self._require_active_ingestion(memory.ingestion_id)
             self._db.add(row)
             await self._db.flush()
             return _to_domain(row)
         except asyncio.CancelledError:
+            raise
+        except MemoryIngestionRetiredError:
             raise
         except Exception as exc:
             raise MemoryPersistenceError from exc
@@ -75,6 +90,7 @@ class PostgresMemoryRepository:
             .returning(MemoryDb)
         )
         try:
+            await self._require_active_ingestion(memory.ingestion_id)
             result = await self._db.execute(statement)
             inserted = result.scalar_one_or_none()
             if inserted is not None:
@@ -89,7 +105,7 @@ class PostgresMemoryRepository:
             return IdempotentMemoryWrite(memory=_to_domain(existing), created=False)
         except asyncio.CancelledError:
             raise
-        except MemoryPersistenceError:
+        except (MemoryPersistenceError, MemoryIngestionRetiredError):
             raise
         except Exception as exc:
             raise MemoryPersistenceError from exc
@@ -106,13 +122,64 @@ class PostgresMemoryRepository:
             raise MemoryPersistenceError from exc
 
     async def delete_by_id(self, memory_id: UUID) -> bool:
-        """Delete one canonical row; ownership of commit stays with the caller."""
+        """Retire identity and delete the row in the caller-owned transaction.
 
-        statement = delete(MemoryDb).where(MemoryDb.id == memory_id).returning(MemoryDb.id)
+        Discover without a row lock, then lock ingestion before rechecking the
+        canonical row FOR UPDATE. This is the same order used by ingestion.
+        """
+
         try:
+            identity = await self._db.execute(
+                select(MemoryDb.ingestion_id).where(MemoryDb.id == memory_id),
+            )
+            ingestion_id = identity.scalar_one_or_none()
+            if ingestion_id is None:
+                retired = await self._db.execute(
+                    select(MemoryIngestionTombstoneDb.ingestion_id).where(
+                        MemoryIngestionTombstoneDb.memory_id == memory_id,
+                    ),
+                )
+                ingestion_id = retired.scalar_one_or_none()
+            if ingestion_id is None:
+                return False
+
+            await lock_ingestion(self._db, ingestion_id)
+            canonical = await self._db.execute(
+                select(MemoryDb.ingestion_id)
+                .where(MemoryDb.id == memory_id)
+                .with_for_update(),
+            )
+            current_ingestion_id = canonical.scalar_one_or_none()
+            if current_ingestion_id is None:
+                return False
+            if current_ingestion_id != ingestion_id:
+                raise MemoryPersistenceError()
+
+            tombstone = await self._db.execute(
+                insert(MemoryIngestionTombstoneDb)
+                .values(ingestion_id=ingestion_id, memory_id=memory_id)
+                .on_conflict_do_nothing(
+                    index_elements=[MemoryIngestionTombstoneDb.ingestion_id],
+                )
+                .returning(MemoryIngestionTombstoneDb.memory_id),
+            )
+            if tombstone.scalar_one_or_none() is None:
+                existing = await self._db.execute(
+                    select(MemoryIngestionTombstoneDb.memory_id).where(
+                        MemoryIngestionTombstoneDb.ingestion_id == ingestion_id,
+                    ),
+                )
+                if existing.scalar_one_or_none() != memory_id:
+                    raise MemoryPersistenceError()
+
+            statement = (
+                delete(MemoryDb).where(MemoryDb.id == memory_id).returning(MemoryDb.id)
+            )
             result = await self._db.execute(statement)
             return result.scalar_one_or_none() is not None
         except asyncio.CancelledError:
+            raise
+        except MemoryPersistenceError:
             raise
         except Exception as exc:
             raise MemoryPersistenceError from exc

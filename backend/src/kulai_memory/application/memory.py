@@ -100,6 +100,16 @@ class MemoryIdempotencyConflictError(RuntimeError):
         super().__init__(self.safe_message)
 
 
+class MemoryIngestionRetiredError(RuntimeError):
+    """A deleted ingestion identity cannot create a Memory again."""
+
+    code = "memory.ingestion_retired"
+    safe_message = "This note was deleted and cannot be saved again."
+
+    def __init__(self) -> None:
+        super().__init__(self.safe_message)
+
+
 @dataclass(frozen=True, slots=True)
 class IdempotentMemoryWrite:
     """Result of one atomic create-or-get repository operation."""

@@ -17,7 +17,7 @@ from kulai_transcription import (
     TranscriptionResult,
 )
 
-from kulai_memory.application import IdempotentMemoryWrite, Memory
+from kulai_memory.application import IdempotentMemoryWrite, Memory, MemoryIngestionRetiredError
 from kulai_memory.database_safety import CheckResult, DoctorReport
 from kulai_memory.desktop.controller import DesktopController
 from kulai_memory.desktop.models import (
@@ -28,6 +28,7 @@ from kulai_memory.desktop.models import (
     DesktopPublicError,
     DesktopRecordingError,
     DesktopResultStatus,
+    DesktopStateError,
     MicrophoneDevice,
     RecordingArtifact,
 )
@@ -324,6 +325,41 @@ def test_new_recordings_get_new_ids_and_reuse_one_provider(tmp_path: Path) -> No
         assert len(harness.provider.requests) == 2
         await controller.shutdown()
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("after_save_failure", [False, True])
+def test_retired_ingestion_finishes_pending_flow_without_retry_loop(tmp_path, after_save_failure):
+    async def scenario():
+        harness = Harness(tmp_path, texts=("synthetic note", "fresh note"),
+                          commit_failures=(False, True) if after_save_failure else ())
+        controller = harness.controller()
+        await controller.startup()
+        ingestion_id = await controller.start_recording(device_id=3)
+        original_create = harness.repository.create_or_get_by_ingestion_id
+
+        async def retired(memory):
+            assert memory.ingestion_id == ingestion_id
+            raise MemoryIngestionRetiredError()
+
+        if after_save_failure:
+            failed = await controller.stop_and_process()
+            assert failed.save_pending and failed.status is DesktopResultStatus.SAVE_FAILED
+            harness.repository.create_or_get_by_ingestion_id = retired
+            result = await controller.retry_save()
+        else:
+            harness.repository.create_or_get_by_ingestion_id = retired
+            result = await controller.stop_and_process()
+        assert result.status is DesktopResultStatus.INGESTION_RETIRED
+        assert not result.save_pending and not controller.has_pending_save
+        assert result.memory_id is None
+        assert len(harness.provider.requests) == 1
+        with pytest.raises(DesktopStateError):
+            await controller.retry_save()
+        harness.repository.create_or_get_by_ingestion_id = original_create
+        assert await controller.start_recording(device_id=3) != ingestion_id
+        assert (await controller.stop_and_process()).status is DesktopResultStatus.CREATED
+        await controller.shutdown()
     asyncio.run(scenario())
 
 
