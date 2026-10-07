@@ -5,7 +5,7 @@ KulAI Studio project `kulai_memory`.
 ## Reproducibility
 
 - Source template: `blank`
-- Current pinned KulAI commit: `925b08a13aab9a62e080103185446543a7795794`
+- Current pinned KulAI commit: `720d0f26c75ba4af24d395f98f15a37e4bd5067e`
 - KulAI monorepo submodule: `vendor/kulai_modules`
 
 `kulai.project.json` and the submodule gitlink define the current pin. The
@@ -268,7 +268,7 @@ the caller's responsibility; reuse one provider throughout a batch.
 
 Repeated indexing updates the same `(namespace, record_id)` row and leaves the
 canonical Memory unchanged. No existing voice/client flow automatically indexes
-Memory. Guarded backfill is described below; retrieval is not implemented.
+Memory. Guarded backfill and semantic retrieval are described below.
 
 Integration tests create, migrate, and remove owned temporary databases only:
 
@@ -323,3 +323,50 @@ Concurrent Memory changes stop the operation with a safe error; keep voice saves
 idle during a future approved backfill if an unchanged fingerprint is required.
 Output contains only identifiers, counts and status. This task runs main dry-run
 only, and adds no automatic indexing to Desktop, WebSocket, or Android.
+
+## Semantic Memory retrieval
+
+The retrieval foundation embeds an unchanged query with native
+`bge-m3:567m-fp16` (1024), then uses reusable pgvector search scoped to
+`kulai_memory.memories.v1`. Cosine scores are `1 - cosine_distance`;
+higher scores indicate better matches. Each vector record ID is resolved to
+canonical content in `memories`, preserving the store's ranking. Results do not
+contain embedding vectors or raw vector metadata.
+
+The reviewed reusable root fix is pinned at `720d0f2`. It normalizes query
+vectors to lists at the pgvector driver boundary while preserving the public
+tuple contract. Real pgvector retrieval passes with `pgvector 0.5.0`. On frozen
+golden v1, Recall@1, Recall@3, Recall@5 and MRR@5 are all 1.00, including both
+English and Polish queries. The local semantic CLI also passes against main DB;
+Memory and vector fingerprints remain unchanged. These metrics describe the
+controlled synthetic dataset, not general retrieval quality.
+
+The explicit local CLI is:
+
+```text
+.venv\Scripts\python.exe scripts\search_memories.py --query "aplikacja mobilna KulAI Memory" --top-k 5
+```
+
+It checks doctor/model/dimension and loopback DB/Ollama, owns one provider, and
+closes it on failure or success. Queries must be non-blank strings of at most
+10,000 characters; top-k accepts integers 1–20 (default 5). Query embedding runs
+before opening a new repeatable-read, read-only session. Search and canonical
+lookup share that snapshot; it is rolled back and closed without commit.
+
+The CLI intentionally displays canonical Memory content for the user. Automated
+main smoke and reports show only counts, rank, UUID and score. Incompatible
+provider/model/dimension metadata fails the entire retrieval; invalid identities
+and orphan vectors are controlled integrity errors. No hits are silently dropped.
+
+Golden v1 contains 16 synthetic English Memories and 16 queries (8 English/8
+Polish), with stable IDs. Dataset and thresholds were frozen before real tests:
+macro Recall@1 >= 0.60, Recall@3 >= 0.80, Recall@5 >= 0.90; MRR is truncated at 5.
+The opt-in tests use owned temporary DBs. Ordinary tests need neither Ollama nor
+PostgreSQL. Run the retrieval integration with
+`KULAI_RUN_POSTGRES_INTEGRATION=1`; add `KULAI_RUN_OLLAMA_INTEGRATION=1` for golden
+BGE evaluation.
+
+This baseline has no score cutoff, reranker, index freshness detection or
+automatic voice indexing. Unindexed Memories are invisible to vector search,
+and tied scores retain the store's order. No LLM, RAG, client UI or schema changes
+are included.

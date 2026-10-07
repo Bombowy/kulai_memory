@@ -41,6 +41,12 @@ from .memory import (
     MemorySourceKind,
 )
 from .ports import EventSink, MemoryRepository
+from .retrieval import (
+    MemoryRetrievalError,
+    MemoryRetrievalHit,
+    MemoryRetrievalResult,
+    MemoryRetrievalService,
+)
 from .transcription import TranscriptionService
 from .voice_session import (
     VoiceSession,
@@ -71,6 +77,10 @@ __all__ = [
     "MemoryIdempotencyConflictError",
     "MemoryPersistenceError",
     "MemoryRepository",
+    "MemoryRetrievalError",
+    "MemoryRetrievalHit",
+    "MemoryRetrievalResult",
+    "MemoryRetrievalService",
     "MemoryService",
     "MemorySourceKind",
     "RagContextEvent",
