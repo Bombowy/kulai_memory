@@ -76,6 +76,15 @@ class VoiceWebSocketMockServerTest {
 
     @Test
     fun `recoverable server failure retries save without audio or STT`() = runBlocking {
+        verifyRecoverableServerFailure("memory.save_failed")
+    }
+
+    @Test
+    fun `saved memory indexing failure uses memory retry over OkHttp`() = runBlocking {
+        verifyRecoverableServerFailure("memory.index_failed")
+    }
+
+    private suspend fun verifyRecoverableServerFailure(code: String) {
         val server = MockWebServer()
         val receivedTypes = CopyOnWriteArrayList<String>()
         server.enqueue(
@@ -92,7 +101,7 @@ class VoiceWebSocketMockServerTest {
                                 event(
                                     "error",
                                     4,
-                                    "{\"code\":\"memory.save_failed\",\"message\":\"safe\",\"recoverable\":true}",
+                                    "{\"code\":\"$code\",\"message\":\"safe\",\"recoverable\":true}",
                                 ),
                             )
                         }

@@ -316,10 +316,14 @@ class VoiceMemoryController(
                 socket?.close()
             }
             is ServerEvent.Error -> {
-                if (event.code == "memory.save_failed" && event.recoverable) {
+                if (event.code in setOf("memory.save_failed", "memory.index_failed") && event.recoverable) {
                     mutableState.value = mutableState.value.copy(
                         phase = VoiceMemoryPhase.RETRY_SAVE,
-                        statusDetail = "Save failed — retry available.",
+                        statusDetail = if (event.code == "memory.index_failed") {
+                            "Memory saved; semantic indexing failed — retry available."
+                        } else {
+                            "Save failed — retry available."
+                        },
                     )
                 } else {
                     failNonRecoverable("The voice-memory operation failed.", 1000)

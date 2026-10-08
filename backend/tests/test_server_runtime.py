@@ -22,6 +22,7 @@ from kulai_memory.server import (
     VoiceMemoryServerRuntime,
 )
 from kulai_memory.settings import Settings
+from backend.tests.indexing_fakes import FakeRuntimeIndexer
 
 
 class FakeEngine:
@@ -93,12 +94,13 @@ def _runtime(
         return provider
 
     return VoiceMemoryServerRuntime(
-        settings=settings or Settings(_env_file=None),
+        settings=settings or Settings(_env_file=None, kulai_vector_dimension=1024),
         provider_factory=provider_factory,
         database_config_factory=lambda: DbConfig(user="u", password="p", name="db"),
         doctor=doctor,
         engine_factory=lambda ignored: engine,
         session_factory_builder=lambda ignored: NoopSessionFactory(),
+        indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
     )
 
 
@@ -219,11 +221,12 @@ def test_runtime_preserves_retired_error_and_does_not_commit():
         session = Session()
         engine = FakeEngine()
         runtime = VoiceMemoryServerRuntime(
-            settings=Settings(_env_file=None), provider_factory=lambda ignored: BlockingProvider(),
+            settings=Settings(_env_file=None, kulai_vector_dimension=1024), provider_factory=lambda ignored: BlockingProvider(),
             database_config_factory=lambda: DbConfig(user="u", password="p", name="db"),
             doctor=doctor, engine_factory=lambda ignored: engine,
             session_factory_builder=lambda ignored: lambda: session,
             repository_factory=lambda ignored: Repository(),
+            indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
         )
         await runtime.startup()
         with pytest.raises(MemoryIngestionRetiredError):
@@ -234,4 +237,34 @@ def test_runtime_preserves_retired_error_and_does_not_commit():
         assert session.closed and session.commits == 0
         await runtime.shutdown()
         assert engine.dispose_count == 1
+    asyncio.run(scenario())
+
+
+def test_cancelled_startup_closes_embedding_provider_and_engine():
+    async def scenario():
+        engine = FakeEngine()
+        indexer = FakeRuntimeIndexer()
+        async def reconcile(**kwargs): raise asyncio.CancelledError()
+        indexer.reconcile = reconcile
+        runtime = _runtime(provider=BlockingProvider(), engine=engine, provider_calls=[])
+        runtime._indexer_factory = lambda **kwargs: indexer
+        with pytest.raises(asyncio.CancelledError): await runtime.startup()
+        assert indexer.closed == engine.dispose_count == 1
+        assert not runtime.started
+        await runtime.shutdown()
+        assert indexer.closed == engine.dispose_count == 1
+    asyncio.run(scenario())
+
+
+def test_shutdown_disposes_engine_even_when_indexer_close_is_cancelled():
+    async def scenario():
+        engine = FakeEngine()
+        indexer = FakeRuntimeIndexer()
+        runtime = _runtime(provider=BlockingProvider(), engine=engine, provider_calls=[])
+        runtime._indexer_factory = lambda **kwargs: indexer
+        await runtime.startup()
+        async def close(): raise asyncio.CancelledError()
+        indexer.aclose = close
+        with pytest.raises(asyncio.CancelledError): await runtime.shutdown()
+        assert engine.dispose_count == 1 and not runtime.started
     asyncio.run(scenario())

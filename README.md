@@ -296,9 +296,41 @@ prepared request without another embedding. A returned upsert result from the
 application service alone does not imply commit. Provider close/dispose remains
 the caller's responsibility; reuse one provider throughout a batch.
 
-Repeated indexing updates the same `(namespace, record_id)` row and leaves the
-canonical Memory unchanged. No existing voice/client flow automatically indexes
-Memory. Guarded backfill and semantic retrieval are described below.
+Explicit reindex updates the same `(namespace, record_id)` row and leaves the
+canonical Memory unchanged. Desktop and WebSocket voice saves now automatically
+ensure a compatible vector after the canonical Memory transaction commits and
+closes. `CREATED` indexes the new Memory; `DUPLICATE` repairs a missing vector and
+skips a compatible existing vector with zero embedding requests or writes.
+Empty transcripts still create neither Memory nor vector.
+
+Automatic indexing requires `source_memory_id`, provider `ollama`, model
+`bge-m3:567m-fp16` and dimension `1024` at the exact namespace/record identity.
+An incompatible vector is reported and never automatically overwritten. A final
+metadata check under the canonical `FOR UPDATE` lock prevents concurrent workers
+from overwriting a compatible vector and prevents stale embeddings from reviving
+a deleted Memory. Query retrieval also requires matching `source_memory_id`.
+
+Each runtime owns one reusable embedding provider/client and closes it during
+shutdown or startup failure. Embedding runs without a checked-out Memory session;
+vector upsert and caller-owned commit use a separate short transaction. Each
+embedding has a 120-second deadline. Canonical Memory remains durable if indexing
+fails. WebSocket emits recoverable `memory.index_failed` and retains the existing
+`memory.retry` flow; `memory.saved` is emitted after indexing succeeds. Desktop
+shows `INDEXING_FAILED`, preserves the Memory ID, refreshes Recent Memory and
+offers retry. Android maps the same error to its existing retry flow. Retries
+preserve ingestion ID/transcript and do not rerun Whisper.
+
+Canonical Memory without a vector is the durable crash-recovery signal. Startup
+reconciliation repairs at most 100 missing vectors, ordered by `created_at ASC,
+id ASC`, after the database doctor passes. It awaits that bounded batch before
+readiness on the runtime worker loop, never the Qt UI thread. Compatible vectors
+are skipped; incompatible vectors are counted separately. The first indexing
+failure stops the batch and leaves the runtime available with a safe degraded
+report (Desktop status / server warning and `indexing_report`). A later bounded
+`reconcile_missing_indexes()` call, restart or duplicate note retry can repair
+the gap. Remaining missing vectors also mark the report degraded. There is no
+periodic polling, outbox migration or automatic reindex of incompatible vectors.
+Guarded manual backfill and semantic retrieval are described below.
 
 Integration tests create, migrate, and remove owned temporary databases only:
 
@@ -401,8 +433,9 @@ the current failed write rolls back, and rerunning missing-only resumes safely.
 Memory fingerprints are checked before writes, between items, and at completion.
 Concurrent Memory changes stop the operation with a safe error; keep voice saves
 idle during a future approved backfill if an unchanged fingerprint is required.
-Output contains only identifiers, counts and status. This task runs main dry-run
-only, and adds no automatic indexing to Desktop, WebSocket, or Android.
+Output contains only identifiers, counts and status. Manual backfill remains a
+separate guarded operation; runtime automatic indexing uses ensure-indexed and
+never performs implicit reindex.
 
 ## Semantic Memory retrieval
 
@@ -446,7 +479,7 @@ PostgreSQL. Run the retrieval integration with
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; add `KULAI_RUN_OLLAMA_INTEGRATION=1` for golden
 BGE evaluation.
 
-This baseline has no score cutoff, reranker, index freshness detection or
-automatic voice indexing. Unindexed Memories are invisible to vector search,
+This baseline has no score cutoff, reranker or content-update freshness detection.
+Missing indexes awaiting repair are invisible to vector search,
 and tied scores retain the store's order. No LLM, RAG, client UI or schema changes
 are included.

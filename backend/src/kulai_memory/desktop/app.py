@@ -312,6 +312,8 @@ class MainWindow(QMainWindow):
         self._set_recent(result.memories)
         self._ready = bool(result.devices)
         self.status_label.setText("Ready" if result.devices else "No input device found")
+        if result.indexing.degraded:
+            self.save_status.setText("Semantic indexing is degraded; missing indexes can be retried.")
         self.record_button.setEnabled(self._ready)
         self.refresh_button.setEnabled(True)
 
@@ -363,12 +365,17 @@ class MainWindow(QMainWindow):
             self.transcript.setPlainText(progress.transcript or "")
         elif progress.state is DesktopProgressState.SAVING:
             self.status_label.setText("Saving...")
+        elif progress.state is DesktopProgressState.INDEXING:
+            self.status_label.setText("Indexing...")
 
     @Slot(object)
     def _on_processing_finished(self, result: DesktopProcessingResult) -> None:
         self.transcript.setPlainText(result.transcript)
         self.retry_button.setVisible(result.save_pending)
         self.retry_button.setEnabled(result.save_pending)
+        self.retry_button.setText(
+            "RETRY INDEXING" if result.status is DesktopResultStatus.INDEXING_FAILED else "RETRY SAVE"
+        )
         self.device_selector.setEnabled(not result.save_pending)
 
         if result.status is DesktopResultStatus.CREATED:
@@ -385,6 +392,10 @@ class MainWindow(QMainWindow):
         elif result.status is DesktopResultStatus.INGESTION_RETIRED:
             self.status_label.setText("This note was deleted and cannot be saved again.")
             self.save_status.setText("INGESTION_RETIRED")
+        elif result.status is DesktopResultStatus.INDEXING_FAILED:
+            self.status_label.setText("Memory saved; semantic indexing failed - retry available")
+            self.save_status.setText("INDEXING_FAILED")
+            self._worker.request_recent()
         else:
             self.status_label.setText("Save failed - retry available")
             self.save_status.setText("SAVE_FAILED")

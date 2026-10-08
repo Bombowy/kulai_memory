@@ -32,7 +32,11 @@ from .ingestion import (
     transcription_is_empty,
 )
 from .deletion import MemoryDeletionError, MemoryDeletionResult, MemoryDeletionService
-from .indexing import MEMORY_VECTOR_NAMESPACE, MemoryIndexingError, MemoryIndexingService
+from .indexing import (
+    MEMORY_VECTOR_NAMESPACE, EnsureMemoryIndexedResult, IndexReconciliationReport,
+    MemoryIndexingError, MemoryIndexingIncompatibleError, MemoryIndexingMissingError,
+    MemoryIndexingService, MemoryIndexingState,
+)
 from .memory import (
     IdempotentMemoryWrite,
     Memory,
@@ -69,12 +73,17 @@ __all__ = [
     "EventSink",
     "IdempotentMemoryWrite",
     "MEMORY_VECTOR_NAMESPACE",
+    "EnsureMemoryIndexedResult",
+    "IndexReconciliationReport",
     "MemoryDeletionError",
     "MemoryDeletionRepository",
     "MemoryDeletionResult",
     "MemoryDeletionService",
     "MemoryIndexingError",
+    "MemoryIndexingIncompatibleError",
+    "MemoryIndexingMissingError",
     "MemoryIndexingService",
+    "MemoryIndexingState",
     "MemorySavedEvent",
     "MemorySavedPayload",
     "MemorySavingEvent",

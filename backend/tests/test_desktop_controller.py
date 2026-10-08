@@ -33,6 +33,7 @@ from kulai_memory.desktop.models import (
     RecordingArtifact,
 )
 from kulai_memory.settings import Settings
+from backend.tests.indexing_fakes import FakeRuntimeIndexer
 
 
 class FakeProvider:
@@ -138,11 +139,13 @@ class FakeSession:
     def __init__(self, *, fail_commit: bool = False) -> None:
         self.fail_commit = fail_commit
         self.commits = 0
+        self.closed = False
 
     async def __aenter__(self) -> FakeSession:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        self.closed = True
         return None
 
     async def commit(self) -> None:
@@ -193,6 +196,7 @@ class Harness:
         self.doctor_ok = doctor_ok
         self.cuda_directory = cuda_directory
         self.provider_error = provider_error
+        self.indexer = FakeRuntimeIndexer()
 
     def provider_factory(self, settings: Settings) -> FakeProvider:
         assert settings.kulai_whisper_model == "large-v3"
@@ -215,6 +219,7 @@ class Harness:
             settings=Settings(
                 _env_file=None,
                 kulai_cuda_dll_dir=self.cuda_directory,
+                kulai_vector_dimension=1024,
             ),
             recorder=self.recorder,
             provider_factory=self.provider_factory,
@@ -224,6 +229,7 @@ class Harness:
             session_factory_builder=lambda ignored: self.sessions,
             repository_factory=lambda ignored: self.repository,
             progress_callback=self.progress.append,
+            indexer_factory=lambda **kwargs: self.indexer,
         )
 
 
@@ -249,12 +255,16 @@ def test_record_transcribe_create_recent_and_shutdown(tmp_path: Path) -> None:
             DesktopProgressState.TRANSCRIBING,
             DesktopProgressState.TRANSCRIPT_READY,
             DesktopProgressState.SAVING,
+            DesktopProgressState.INDEXING,
         ]
         assert harness.recorder.cleaned == [tmp_path / "recording-0.wav"]
         assert not (tmp_path / "recording-0.wav").exists()
         assert harness.provider_factory_calls == 1
         assert harness.engine.dispose_count == 1
         assert harness.recorder.shutdown_count == 1
+        assert harness.indexer.calls[0].id == created.memory_id
+        assert harness.indexer.closed == 1
+        assert harness.indexer.reconciliations == 1
 
     asyncio.run(scenario())
 
@@ -272,8 +282,51 @@ def test_empty_transcript_is_skipped_without_memory(tmp_path: Path) -> None:
         assert result.memory_id is None
         assert not result.save_pending
         assert harness.repository.create_or_get_calls == []
+        assert harness.indexer.calls == []
         await controller.shutdown()
 
+    asyncio.run(scenario())
+
+
+def test_indexing_failure_preserves_id_commit_and_pending_then_repairs_without_stt(tmp_path):
+    async def scenario():
+        harness = Harness(tmp_path)
+        controller = harness.controller()
+        await controller.startup()
+        ingestion_id = await controller.start_recording(device_id=3)
+        original_ensure = harness.indexer.ensure
+        async def ensure_after_commit(*, memory):
+            assert all(session.closed for session in harness.sessions.sessions)
+            assert harness.sessions.sessions[-1].commits == 1
+            return await original_ensure(memory=memory)
+        harness.indexer.ensure = ensure_after_commit
+        harness.indexer.error = RuntimeError("PRIVATE_INDEX_ERROR")
+        result = await controller.stop_and_process()
+        assert result.status is DesktopResultStatus.INDEXING_FAILED
+        assert result.memory_id is not None and result.save_pending
+        assert harness.repository.by_ingestion[ingestion_id].id == result.memory_id
+        assert (await controller.list_recent())[0].id == result.memory_id
+        harness.indexer.error = None
+        retry = await controller.retry_save()
+        assert retry.status is DesktopResultStatus.DUPLICATE and not retry.save_pending
+        assert retry.memory_id == result.memory_id
+        assert len(harness.repository.by_ingestion) == len(harness.provider.requests) == 1
+        assert len(harness.indexer.calls) == 2
+        await controller.shutdown()
+        assert harness.indexer.closed == 1
+    asyncio.run(scenario())
+
+
+def test_startup_degraded_report_and_later_reconciliation(tmp_path):
+    from kulai_memory.application.indexing import IndexReconciliationReport
+    async def scenario():
+        harness = Harness(tmp_path)
+        harness.indexer.report = IndexReconciliationReport(failed=1, remaining_missing=2)
+        controller = harness.controller()
+        assert (await controller.startup()).indexing.degraded
+        harness.indexer.report = IndexReconciliationReport(indexed=2)
+        assert not (await controller.reconcile_missing_indexes()).degraded
+        await controller.shutdown()
     asyncio.run(scenario())
 
 
@@ -390,6 +443,7 @@ def test_microphone_startup_error_is_not_reclassified_as_database(
 
         assert harness.provider_factory_calls == 1
         assert harness.engine.dispose_count == 1
+        assert harness.indexer.closed == 1
         await controller.shutdown()
 
     asyncio.run(scenario())

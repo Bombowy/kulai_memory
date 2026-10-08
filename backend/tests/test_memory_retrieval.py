@@ -197,6 +197,18 @@ def test_other_namespace_cannot_be_returned(setup):
     assert result.hits[0].memory == setup[4][0]
 
 
+def test_missing_source_memory_id_is_incompatible(setup):
+    row = match(setup[4][0], 0.9)
+    data = dict(row.record.metadata)
+    data.pop("source_memory_id")
+    setup[2].rows[MEMORY_VECTOR_NAMESPACE] = (
+        row.model_copy(update={"record": row.record.model_copy(update={"metadata": data})}),
+    )
+    with pytest.raises(MemoryRetrievalError) as caught:
+        asyncio.run(retrieve(setup))
+    assert caught.value.code == "retrieval.incompatible_metadata"
+
+
 @pytest.mark.parametrize("field,value", [
     ("embedding_provider_id", "different"), ("embedding_model_tag", "different:model"),
     ("embedding_dimension", 768), ("embedding_dimension", 1024.0),

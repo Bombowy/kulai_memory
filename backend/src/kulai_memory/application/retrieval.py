@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kulai_memory.embedding_validation import validate_embedding_dimension
 
-from .indexing import MEMORY_VECTOR_NAMESPACE
+from .indexing import MEMORY_VECTOR_NAMESPACE, memory_vector_metadata_matches
 from .memory import Memory
 from .ports import MemoryRepository
 
@@ -128,20 +128,16 @@ class MemoryRetrievalService:
             identities: list[UUID] = []
             for match in result.matches:
                 metadata = match.record.metadata
-                if (
-                    metadata.get("embedding_provider_id") != self._provider_id
-                    or metadata.get("embedding_model_tag") != self._model_tag
-                    or type(metadata.get("embedding_dimension")) is not int
-                    or metadata["embedding_dimension"] != self._dimension
-                ):
-                    raise MemoryRetrievalError("retrieval.incompatible_metadata")
                 try:
                     memory_id = UUID(match.record.id)
                     if str(memory_id) != match.record.id:
                         raise ValueError
                 except ValueError:
                     raise MemoryRetrievalError("retrieval.invalid_record_id") from None
-                if "source_memory_id" in metadata and metadata["source_memory_id"] != str(memory_id):
+                if not memory_vector_metadata_matches(
+                    metadata, memory_id=memory_id, provider_id=self._provider_id,
+                    model_tag=self._model_tag, dimension=self._dimension,
+                ):
                     raise MemoryRetrievalError("retrieval.incompatible_metadata")
                 identities.append(memory_id)
 

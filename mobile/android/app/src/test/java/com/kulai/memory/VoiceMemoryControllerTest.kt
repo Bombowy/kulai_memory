@@ -71,6 +71,15 @@ class VoiceMemoryControllerTest {
 
     @Test
     fun `recoverable save retry keeps UUID and does not record twice`() = runTest {
+        verifyRecoverableRetry("memory.save_failed")
+    }
+
+    @Test
+    fun `indexing failure retains cache and retries the saved note`() = runTest {
+        verifyRecoverableRetry("memory.index_failed")
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyRecoverableRetry(code: String) {
         val fixture = fixture()
         val connection = fixture.connectAndStop()
         val ingestionId = fixture.controller.state.value.ingestionId
@@ -80,12 +89,16 @@ class VoiceMemoryControllerTest {
             testEvent(
                 "error",
                 4,
-                "{\"code\":\"memory.save_failed\",\"message\":\"safe\",\"recoverable\":true}",
+                "{\"code\":\"$code\",\"message\":\"safe\",\"recoverable\":true}",
             ),
         )
         runCurrent()
 
         assertEquals(VoiceMemoryPhase.RETRY_SAVE, fixture.controller.state.value.phase)
+        assertTrue(hasOwnedCache())
+        if (code == "memory.index_failed") {
+            assertTrue(fixture.controller.state.value.statusDetail?.contains("Memory saved") == true)
+        }
         fixture.controller.retrySave()
         runCurrent()
         assertEquals("memory.retry", JSONObject(connection.text.last()).getString("type"))
@@ -98,6 +111,7 @@ class VoiceMemoryControllerTest {
         assertEquals(VoiceMemoryPhase.SAVED, fixture.controller.state.value.phase)
         assertEquals(ingestionId, fixture.controller.state.value.ingestionId)
         assertEquals(1, fixture.recorder.callCount)
+        assertFalse(hasOwnedCache())
     }
 
     @Test

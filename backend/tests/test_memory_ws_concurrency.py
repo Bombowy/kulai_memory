@@ -20,6 +20,7 @@ from kulai_memory.application import IdempotentMemoryWrite, Memory
 from kulai_memory.database_safety import CheckResult, DoctorReport
 from kulai_memory.server import VoiceMemoryServerRuntime
 from kulai_memory.settings import Settings
+from backend.tests.indexing_fakes import FakeRuntimeIndexer
 
 
 class BlockingProvider:
@@ -135,7 +136,7 @@ def test_two_websocket_connections_share_one_serialized_provider() -> None:
         nonlocal runtime_factory_calls
         runtime_factory_calls += 1
         return VoiceMemoryServerRuntime(
-            settings=Settings(_env_file=None),
+            settings=Settings(_env_file=None, kulai_vector_dimension=1024),
             provider_factory=provider_factory,
             database_config_factory=lambda: DbConfig(
                 user="u", password="p", name="db"
@@ -144,6 +145,7 @@ def test_two_websocket_connections_share_one_serialized_provider() -> None:
             engine_factory=lambda ignored: engine,
             session_factory_builder=lambda ignored: FakeSession,
             repository_factory=lambda ignored: repository,
+            indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
         )
 
     app = create_app(voice_runtime_factory=runtime_factory)

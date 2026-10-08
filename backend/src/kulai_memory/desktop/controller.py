@@ -41,6 +41,10 @@ from kulai_memory.database_safety import (
     database_config,
     run_database_doctor,
 )
+from kulai_memory.application.indexing import IndexReconciliationReport
+from kulai_memory.automatic_indexing import (
+    AutomaticMemoryIndexer, RuntimeMemoryIndexer, RuntimeIndexerFactory,
+)
 from kulai_memory.persistence import PostgresMemoryRepository
 from kulai_memory.runtime import CudaRuntimeConfigurationError, ProcessCudaDllScope
 from kulai_memory.settings import Settings, get_settings
@@ -156,6 +160,7 @@ class DesktopController:
         session_factory_builder: SessionFactoryBuilder = _session_factory_builder,
         repository_factory: RepositoryFactory = _repository_factory,
         progress_callback: ProgressCallback = _noop_progress,
+        indexer_factory: RuntimeIndexerFactory = AutomaticMemoryIndexer,
     ) -> None:
         self._settings = settings or get_settings()
         self._recorder = recorder or MicrophoneRecorder()
@@ -166,6 +171,9 @@ class DesktopController:
         self._session_factory_builder = session_factory_builder
         self._repository_factory = repository_factory
         self._progress_callback = progress_callback
+        self._indexer_factory = indexer_factory
+        self._indexer: RuntimeMemoryIndexer | None = None
+        self._indexing_report = IndexReconciliationReport()
         self._operation_lock = asyncio.Lock()
         self._cuda_scope = ProcessCudaDllScope(self._settings.kulai_cuda_dll_dir)
         self._engine: _Engine | None = None
@@ -195,6 +203,7 @@ class DesktopController:
                 return DesktopStartupResult(
                     devices=await asyncio.to_thread(self._recorder.list_devices),
                     memories=await self._list_recent_unlocked(RECENT_MEMORY_LIMIT),
+                    indexing=self._indexing_report,
                 )
 
             self._validate_canonical_stt()
@@ -224,12 +233,16 @@ class DesktopController:
                 self._session_factory = session_factory
                 unexpected_error = DesktopPublicError
                 provider = self._provider_factory(self._settings)
+                self._indexer = self._indexer_factory(
+                    settings=self._settings, session_factory=session_factory,
+                )
                 devices = await asyncio.to_thread(self._recorder.list_devices)
                 self._provider = provider
                 self._transcription_service = TranscriptionService(provider=provider)
+                self._indexing_report = await self._indexer.reconcile()
                 self._started = True
                 memories = await self._list_recent_unlocked(RECENT_MEMORY_LIMIT)
-                return DesktopStartupResult(devices=devices, memories=memories)
+                return DesktopStartupResult(devices=devices, memories=memories, indexing=self._indexing_report)
             except asyncio.CancelledError:
                 await self._shutdown_resources_unlocked()
                 raise
@@ -308,12 +321,22 @@ class DesktopController:
             self._pending = None
             await self._shutdown_resources_unlocked()
 
+    async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
+        async with self._operation_lock:
+            self._require_started()
+            if self._indexer is None:
+                raise DesktopStateError
+            self._indexing_report = await self._indexer.reconcile()
+            return self._indexing_report
+
     def _validate_canonical_stt(self) -> None:
         if (
             self._settings.kulai_whisper_model != "large-v3"
             or self._settings.kulai_whisper_device != "cuda"
             or self._settings.kulai_whisper_compute_type != "int8_float16"
             or self._settings.kulai_whisper_vad_filter is not True
+            or self._settings.kulai_embedding_model != "bge-m3:567m-fp16"
+            or self._settings.kulai_vector_dimension != 1024
         ):
             raise DesktopConfigurationError
 
@@ -387,6 +410,21 @@ class DesktopController:
 
         status = DesktopResultStatus(result.status.value)
         memory_id = result.memory.id if result.memory is not None else None
+        if result.memory is not None:
+            self._progress_callback(DesktopProgress(state=DesktopProgressState.INDEXING))
+            try:
+                if self._indexer is None:
+                    raise DesktopStateError
+                await self._indexer.ensure(memory=result.memory)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return DesktopProcessingResult(
+                    status=DesktopResultStatus.INDEXING_FAILED,
+                    transcript=pending.transcription.text,
+                    memory_id=memory_id,
+                    save_pending=True,
+                )
         self._pending = None
         return DesktopProcessingResult(
             status=status,
@@ -418,6 +456,16 @@ class DesktopController:
         )
 
     async def _shutdown_resources_unlocked(self) -> None:
+        indexer = self._indexer
+        self._indexer = None
+        cancellation = None
+        if indexer is not None:
+            try:
+                await indexer.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+            except Exception:
+                pass
         try:
             await asyncio.to_thread(self._recorder.shutdown)
         except Exception:
@@ -434,3 +482,5 @@ class DesktopController:
             except Exception:
                 pass
         self._cuda_scope.close()
+        if cancellation is not None:
+            raise cancellation

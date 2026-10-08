@@ -46,6 +46,23 @@ def test_main_window_can_be_created_and_closed_offscreen() -> None:
     assert window.isVisible() is False
 
 
+def test_indexing_failed_ui_preserves_retry_and_displays_saved_status(monkeypatch):
+    from uuid import uuid4
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(autostart=False)
+    monkeypatch.setattr(window._worker, "request_recent", lambda: None)
+    window.show()
+    window._on_processing_finished(DesktopProcessingResult(
+        DesktopResultStatus.INDEXING_FAILED, "synthetic", uuid4(), True,
+    ))
+    assert window.retry_button.isVisible()
+    assert window.retry_button.text() == "RETRY INDEXING"
+    assert "Memory saved" in window.status_label.text()
+    assert window.save_status.text() == "INDEXING_FAILED"
+    window.close()
+    app.processEvents()
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [

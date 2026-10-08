@@ -31,7 +31,7 @@ from kulai_memory.application import (
     VoiceSession,
     VoiceSessionTranscriptionError,
 )
-from kulai_memory.server import ServerDatabaseError, ServerPersistenceError
+from kulai_memory.server import ServerDatabaseError, ServerPersistenceError, ServerIndexingError
 
 
 class FakeProvider:
@@ -241,6 +241,34 @@ def test_persistence_retry_reuses_transcript_ingestion_and_session() -> None:
     assert {call[0] for call in runtime.ingest_calls} == {ingestion_id}
     assert len({call[1] for call in runtime.ingest_calls}) == 1
     assert len({event["session_id"] for event in events}) == 1
+
+
+def test_indexing_retry_preserves_saved_memory_and_sequence_without_second_stt():
+    class IndexFailRuntime(FakeRuntime):
+        async def ingest(self, **kwargs):
+            result = await super().ingest(**kwargs)
+            if len(self.ingest_calls) == 1:
+                raise ServerIndexingError(memory_id=result.memory.id)
+            return result
+    runtime = IndexFailRuntime()
+    ingestion_id = uuid4()
+    with TestClient(create_app(voice_runtime_factory=lambda: runtime)) as client:
+        with client.websocket_connect("/ws/memory") as socket:
+            socket.send_json(_start_message(ingestion_id))
+            events = [socket.receive_json()]
+            socket.send_bytes(b"\0\0")
+            socket.send_json(_stop_message())
+            events.extend(socket.receive_json() for _ in range(3))
+            assert events[-1]["payload"]["code"] == "memory.index_failed"
+            assert events[-1]["payload"]["recoverable"] is True
+            assert "was saved" in events[-1]["payload"]["message"]
+            socket.send_json(_retry_message())
+            events.extend(socket.receive_json() for _ in range(2))
+            _assert_clean_close(socket)
+    assert [event["sequence"] for event in events] == list(range(1, 7))
+    assert len({event["session_id"] for event in events}) == 1
+    assert runtime.transcribe_count == len(runtime.memories) == 1
+    assert events[-1]["payload"]["memory_id"] == str(runtime.memories[ingestion_id].id)
 
 
 @pytest.mark.parametrize(

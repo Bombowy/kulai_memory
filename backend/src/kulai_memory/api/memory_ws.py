@@ -33,6 +33,7 @@ from kulai_memory.application import (
 )
 from kulai_memory.server import (
     ServerPersistenceError,
+    ServerIndexingError,
     ServerRuntimeError,
     VoiceMemoryServerRuntime,
 )
@@ -304,7 +305,7 @@ class _MemoryWebSocketConnection:
             self._state = ConnectionState.COMPLETED
             await self._close(1008)
             return
-        except ServerPersistenceError as exc:
+        except (ServerPersistenceError, ServerIndexingError) as exc:
             await self._send_error(
                 code=exc.code,
                 message=exc.public_message,

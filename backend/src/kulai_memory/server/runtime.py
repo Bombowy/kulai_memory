@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -41,9 +42,15 @@ from kulai_memory.database_safety import (
     database_config,
     run_database_doctor,
 )
+from kulai_memory.application.indexing import IndexReconciliationReport
+from kulai_memory.automatic_indexing import (
+    AutomaticMemoryIndexer, RuntimeMemoryIndexer, RuntimeIndexerFactory,
+)
 from kulai_memory.persistence import PostgresMemoryRepository
 from kulai_memory.runtime import CudaRuntimeConfigurationError, ProcessCudaDllScope
 from kulai_memory.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class _SessionFactory(Protocol):
@@ -85,6 +92,15 @@ class ServerDatabaseError(ServerRuntimeError):
 class ServerPersistenceError(ServerRuntimeError):
     code = "memory.save_failed"
     safe_message = "The memory could not be saved. Retry is available."
+
+
+class ServerIndexingError(ServerRuntimeError):
+    code = "memory.index_failed"
+    safe_message = "The memory was saved, but semantic indexing could not be completed. Retry is available."
+
+    def __init__(self, *, memory_id: UUID) -> None:
+        self.memory_id = memory_id
+        super().__init__()
 
 
 def _provider_factory(settings: Settings) -> TranscriptionProvider:
@@ -145,6 +161,7 @@ class VoiceMemoryServerRuntime:
         engine_factory: EngineFactory = _engine_factory,
         session_factory_builder: SessionFactoryBuilder = _session_factory_builder,
         repository_factory: RepositoryFactory = _repository_factory,
+        indexer_factory: RuntimeIndexerFactory = AutomaticMemoryIndexer,
     ) -> None:
         self._settings = settings or get_settings()
         self._provider_factory = provider_factory
@@ -153,6 +170,9 @@ class VoiceMemoryServerRuntime:
         self._engine_factory = engine_factory
         self._session_factory_builder = session_factory_builder
         self._repository_factory = repository_factory
+        self._indexer_factory = indexer_factory
+        self._indexer: RuntimeMemoryIndexer | None = None
+        self._indexing_report = IndexReconciliationReport()
         self._cuda_scope = ProcessCudaDllScope(self._settings.kulai_cuda_dll_dir)
         self._lifecycle_lock = asyncio.Lock()
         self._inference_lock = asyncio.Lock()
@@ -171,6 +191,10 @@ class VoiceMemoryServerRuntime:
     @property
     def started(self) -> bool:
         return self._started and not self._closed
+
+    @property
+    def indexing_report(self) -> IndexReconciliationReport:
+        return self._indexing_report
 
     async def startup(self) -> None:
         async with self._lifecycle_lock:
@@ -199,6 +223,11 @@ class VoiceMemoryServerRuntime:
                 self._transcription_service = TranscriptionService(
                     provider=self._provider
                 )
+                self._indexer = self._indexer_factory(
+                    settings=self._settings, session_factory=self._session_factory,
+                )
+                self._indexing_report = await self._indexer.reconcile()
+                self._report_indexing_state()
                 self._started = True
             except asyncio.CancelledError:
                 await self._shutdown_resources()
@@ -288,7 +317,6 @@ class VoiceMemoryServerRuntime:
                 )
                 if result.status is not TranscriptMemoryIngestionStatus.SKIPPED_EMPTY:
                     await session.commit()
-                return result
         except asyncio.CancelledError:
             raise
         except (MemoryIdempotencyConflictError, MemoryIngestionRetiredError):
@@ -296,12 +324,42 @@ class VoiceMemoryServerRuntime:
         except Exception as exc:
             raise ServerPersistenceError from exc
 
+        # Canonical COMMIT and session close precede any embedding request.
+        if result.memory is not None:
+            try:
+                if self._indexer is None:
+                    raise ServerRuntimeError
+                await self._indexer.ensure(memory=result.memory)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise ServerIndexingError(memory_id=result.memory.id) from None
+        return result
+
+    async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
+        self._require_started()
+        if self._indexer is None:
+            raise ServerRuntimeError
+        self._indexing_report = await self._indexer.reconcile()
+        self._report_indexing_state()
+        return self._indexing_report
+
+    def _report_indexing_state(self) -> None:
+        report = self._indexing_report
+        if report.degraded:
+            logger.warning(
+                "Semantic indexing degraded: missing=%d incompatible=%d failed=%d code=%s",
+                report.remaining_missing, report.incompatible_existing, report.failed, report.error_code,
+            )
+
     def _validate_canonical_stt(self) -> None:
         if (
             self._settings.kulai_whisper_model != "large-v3"
             or self._settings.kulai_whisper_device != "cuda"
             or self._settings.kulai_whisper_compute_type != "int8_float16"
             or self._settings.kulai_whisper_vad_filter is not True
+            or self._settings.kulai_embedding_model != "bge-m3:567m-fp16"
+            or self._settings.kulai_vector_dimension != 1024
         ):
             raise ServerConfigurationError
 
@@ -310,6 +368,16 @@ class VoiceMemoryServerRuntime:
             raise ServerRuntimeError
 
     async def _shutdown_resources(self) -> None:
+        indexer = self._indexer
+        self._indexer = None
+        cancellation = None
+        if indexer is not None:
+            try:
+                await indexer.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+            except Exception:
+                pass
         engine = self._engine
         self._engine = None
         self._session_factory = None
@@ -322,3 +390,5 @@ class VoiceMemoryServerRuntime:
             except Exception:
                 pass
         self._cuda_scope.close()
+        if cancellation is not None:
+            raise cancellation

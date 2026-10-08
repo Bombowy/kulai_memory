@@ -66,8 +66,13 @@ caller-owned SQLAlchemy `AsyncSession`. It flushes changes but never commits or
 rolls back; the desktop or server use case owns that transaction boundary.
 
 The host `memories` table stores the durable text and JSON metadata without an
-embedding. TASK 5 will write embeddings through the reusable vector store, using
-`str(Memory.id)` as its `record_id` under a stable memories namespace.
+embedding. Embeddings are stored through the reusable vector store, using
+`str(Memory.id)` as `record_id` in `kulai_memory.memories.v1`. Voice runtimes
+commit canonical Memory first, close that session, then ensure its compatible
+BGE-M3 vector in a separate short transaction. Duplicate retries and bounded
+startup reconciliation repair missing vectors; indexing failure leaves Memory
+durable and exposes a distinct retry status. Incompatible vectors require an
+explicit manual reindex and are never automatically overwritten.
 
 The provider-neutral `TranscriptMemoryIngestionService` is the persistence stage
 after STT/VAD. It accepts a `TranscriptionResult`, a voice `session_id`, and a

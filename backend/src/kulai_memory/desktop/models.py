@@ -8,12 +8,15 @@ from enum import Enum
 from pathlib import Path
 from uuid import UUID
 
+from kulai_memory.application.indexing import IndexReconciliationReport
+
 
 class DesktopResultStatus(str, Enum):
     CREATED = "created"
     DUPLICATE = "duplicate"
     SKIPPED_EMPTY = "skipped_empty"
     SAVE_FAILED = "save_failed"
+    INDEXING_FAILED = "indexing_failed"
     INGESTION_RETIRED = "ingestion_retired"
 
 
@@ -21,6 +24,7 @@ class DesktopProgressState(str, Enum):
     TRANSCRIBING = "transcribing"
     TRANSCRIPT_READY = "transcript_ready"
     SAVING = "saving"
+    INDEXING = "indexing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,7 @@ class MemorySummary:
 class DesktopStartupResult:
     devices: tuple[MicrophoneDevice, ...]
     memories: tuple[MemorySummary, ...]
+    indexing: IndexReconciliationReport = IndexReconciliationReport()
 
 
 @dataclass(frozen=True, slots=True)
