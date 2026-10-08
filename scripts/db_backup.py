@@ -19,6 +19,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kulai_memory.database_safety import (
+    DatabaseSafetyError,
     OwnedTemporaryDatabase,
     database_config,
     database_config_for_database,
@@ -28,14 +29,20 @@ from kulai_memory.database_safety import (
     require_owned_database,
     run_database_doctor,
     run_postgres_tool,
+    safe_error_message,
+    validate_backup_doctor,
+    validate_backup_output,
+    validate_restore_source,
     version_major,
 )
+from kulai_memory.settings import get_settings
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--output", required=True, type=Path)
     result.add_argument("--force", action="store_true")
+    result.add_argument("--pre-migration-from", metavar="REVISION")
     return result
 
 
@@ -52,32 +59,23 @@ async def _create_backup(
     *,
     force: bool,
     config: DbConfig,
+    pre_migration_from: str | None = None,
 ) -> tuple[int, str, str]:
-    output = output.expanduser()
-    if output.is_symlink():
-        raise ValueError("Backup output must not be a symbolic link.")
-    output = Path(os.path.abspath(output))
-    if output.exists() and not force:
-        raise FileExistsError("Output already exists; pass --force to replace it.")
-    if output.exists() and not output.is_file():
-        raise ValueError("Backup output must be a regular file path.")
-    if not output.parent.is_dir():
-        raise FileNotFoundError("Backup output directory does not exist.")
+    output = validate_backup_output(output, force=force)
 
     report = await run_database_doctor(async_url=config.async_url)
-    if not report.ok:
-        raise RuntimeError("Database invariants failed; backup was not started.")
+    validate_backup_doctor(report, pre_migration_from=pre_migration_from)
     version_check = next(
         check for check in report.checks if check.name == "postgres.version"
     )
     if not isinstance(version_check.value, dict):
-        raise RuntimeError("PostgreSQL server version is unavailable.")
+        raise DatabaseSafetyError("PostgreSQL server version is unavailable.")
     server_version = str(version_check.value["display"])
 
     pg_dump = find_postgres_tool("pg_dump")
     pg_dump_version = postgres_tool_version(pg_dump)
     if version_major(pg_dump_version) < version_major(server_version):
-        raise RuntimeError("pg_dump is older than the PostgreSQL server.")
+        raise DatabaseSafetyError("pg_dump is older than the PostgreSQL server.")
 
     connection = postgres_connection(config)
     temporary = output.parent / f".{output.name}.{uuid4().hex}.partial"
@@ -95,9 +93,14 @@ async def _create_backup(
             connection=connection,
         )
         if completed.returncode != 0:
-            raise RuntimeError(f"pg_dump failed with exit code {completed.returncode}.")
+            raise DatabaseSafetyError(f"pg_dump failed with exit code {completed.returncode}.")
         if not temporary.is_file() or temporary.stat().st_size == 0:
-            raise RuntimeError("pg_dump did not create a non-empty backup.")
+            raise DatabaseSafetyError("pg_dump did not create a non-empty backup.")
+        if pre_migration_from is not None:
+            validate_backup_doctor(
+                await run_database_doctor(async_url=config.async_url),
+                pre_migration_from=pre_migration_from,
+            )
         os.replace(temporary, output)
     finally:
         if temporary.exists():
@@ -106,10 +109,16 @@ async def _create_backup(
     return output.stat().st_size, sha256_file(output), pg_dump_version
 
 
-async def create_backup(output: Path, *, force: bool) -> tuple[int, str, str]:
+async def create_backup(
+    output: Path, *, force: bool, pre_migration_from: str | None = None,
+) -> tuple[int, str, str]:
     """Back up only the database selected by the host's active settings."""
 
-    return await _create_backup(output, force=force, config=database_config())
+    config = database_config()
+    validate_restore_source(config, app_env=get_settings().app_env)
+    return await _create_backup(
+        output, force=force, config=config, pre_migration_from=pre_migration_from,
+    )
 
 
 async def create_owned_database_backup(
@@ -118,16 +127,25 @@ async def create_owned_database_backup(
     force: bool,
     owned: OwnedTemporaryDatabase,
     config: DbConfig,
+    pre_migration_from: str | None = None,
 ) -> tuple[int, str, str]:
     """Internal backup API restricted to a marker-verified temporary database."""
 
+    validate_restore_source(config, app_env=get_settings().app_env)
     await require_owned_database(owned, config=config)
     target_config = database_config_for_database(owned.name, config=config)
-    return await _create_backup(output, force=force, config=target_config)
+    return await _create_backup(
+        output, force=force, config=target_config, pre_migration_from=pre_migration_from,
+    )
 
 
 async def run(args: argparse.Namespace) -> int:
-    size, digest, version = await create_backup(args.output, force=args.force)
+    size, digest, version = await create_backup(
+        args.output, force=args.force, pre_migration_from=args.pre_migration_from,
+    )
+    print(f"Mode: {'pre-migration' if args.pre_migration_from else 'strict'}")
+    if args.pre_migration_from:
+        print(f"Source revision: {args.pre_migration_from}")
     print(f"Backup: {args.output.expanduser().resolve()}")
     print(f"Size: {size} bytes")
     print(f"SHA-256: {digest}")
@@ -140,12 +158,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(run(args))
     except Exception as exc:
-        if isinstance(exc, (FileExistsError, FileNotFoundError, RuntimeError)):
+        if isinstance(exc, DatabaseSafetyError):
             message = str(exc)
+        elif isinstance(exc, FileExistsError):
+            message = "Output already exists; pass --force to replace it."
+        elif isinstance(exc, FileNotFoundError):
+            message = "Required directory or PostgreSQL client tool is unavailable."
         elif isinstance(exc, ValueError):
             message = "Invalid backup path or database configuration."
         else:
-            message = f"Unexpected {type(exc).__name__}."
+            message = safe_error_message(exc, operation="Backup")
         print(f"Backup failed safely: {message}", file=sys.stderr)
         return 1
 

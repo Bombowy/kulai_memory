@@ -84,10 +84,30 @@ owned temporary database with:
 .venv\Scripts\python.exe scripts\db_backup_restore_drill.py
 ```
 
-Backups can contain all user data and should be stored outside the repository.
+Backups can contain all user data and must be stored outside the repository.
 The backup tool requires compatible PostgreSQL client tools (`pg_dump` and, for
 the restore smoke, `pg_restore`, `createdb`, and `dropdb`). It never installs
-them. The real repository integration tests are opt-in and accept only a
+them. Normal backup and restore require full read-only `db_doctor` PASS, so an
+outdated schema is deliberately blocked. Before the reviewed migration from
+`kulai_memory_0002` to local head `kulai_memory_0003`, use the explicit mode:
+
+```text
+.venv\Scripts\python.exe scripts\db_backup.py --output <outside-repo-backup.dump> --pre-migration-from kulai_memory_0002
+.venv\Scripts\python.exe scripts\db_restore_smoke.py <outside-repo-backup.dump> --pre-migration-from kulai_memory_0002
+```
+
+This mode requires the source revision to be exactly 0002 and the single local
+head to be 0003. It permits exactly the pending `alembic.current`,
+`table.memory_ingestion_tombstones`, `schema.memory_ingestion_tombstones`, and
+`constraint.memory_ingestion_tombstones` failures. Every other doctor check must
+PASS; incomplete reports, diagnostics errors, and unrelated failures are
+rejected. Restore verifies 0002 without migrating it, compares both table
+fingerprints with the unchanged source, and removes only its owned temporary
+database. Keep the backup; migration remains a separate manual action. There is
+no generic doctor bypass. Source targets must be local development/test databases;
+protected and temporary names cannot be supplied through the CLI.
+
+The real repository integration tests are opt-in and accept only a
 loopback development/test database:
 
 ```text

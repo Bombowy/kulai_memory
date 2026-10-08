@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kulai_memory.database_safety import (
+    DatabaseSafetyError,
     MemoryFingerprint,
     OwnedTemporaryDatabase,
     VectorFingerprint,
@@ -30,6 +31,8 @@ from kulai_memory.database_safety import (
     require_owned_database,
     restore_archive_to_owned_database,
     run_database_doctor,
+    safe_error_message,
+    validate_backup_doctor,
     validate_restore_source,
     vector_fingerprint,
 )
@@ -39,6 +42,7 @@ from kulai_memory.settings import get_settings
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("backup", type=Path)
+    result.add_argument("--pre-migration-from", metavar="REVISION")
     return result
 
 
@@ -59,29 +63,42 @@ async def fingerprint_url(
         await engine.dispose()
 
 
-async def restore_smoke(backup: Path) -> tuple[str, int, int]:
+async def restore_smoke(
+    backup: Path, *, pre_migration_from: str | None = None,
+) -> tuple[str, int, int]:
     config = database_config()
     validate_restore_source(config, app_env=get_settings().app_env)
-    return await _restore_verified_source(backup, config=config)
+    return await _restore_verified_source(
+        backup, config=config, pre_migration_from=pre_migration_from,
+    )
 
 
 async def restore_owned_database_backup(
-    backup: Path, *, owned: OwnedTemporaryDatabase, config: DbConfig
+    backup: Path, *, owned: OwnedTemporaryDatabase, config: DbConfig,
+    pre_migration_from: str | None = None,
 ) -> tuple[str, int, int]:
     """Restore only a marker-verified owned source; no CLI target override."""
 
     validate_restore_source(config, app_env=get_settings().app_env)
     await require_owned_database(owned, config=config)
     target = database_config_for_database(owned.name, config=config)
-    return await _restore_verified_source(backup, config=target)
+    return await _restore_verified_source(
+        backup, config=target, pre_migration_from=pre_migration_from,
+    )
 
 
 async def _restore_verified_source(
-    backup: Path, *, config: DbConfig
+    backup: Path, *, config: DbConfig, pre_migration_from: str | None = None,
 ) -> tuple[str, int, int]:
     archive = backup.expanduser().resolve()
     if not archive.is_file():
         raise FileNotFoundError("Backup file does not exist.")
+
+    if pre_migration_from is not None:
+        validate_backup_doctor(
+            await run_database_doctor(async_url=config.async_url),
+            pre_migration_from=pre_migration_from,
+        )
 
     source_before = await fingerprint_url(config.async_url)
     owned: OwnedTemporaryDatabase | None = None
@@ -93,14 +110,18 @@ async def _restore_verified_source(
 
         restored_url = async_database_url(database=owned.name, config=config)
         doctor = await run_database_doctor(async_url=restored_url)
-        if not doctor.ok:
-            raise RuntimeError("Restored database invariants failed.")
+        validate_backup_doctor(doctor, pre_migration_from=pre_migration_from)
         restored = await fingerprint_url(restored_url)
         source_after = await fingerprint_url(config.async_url)
+        if pre_migration_from is not None:
+            validate_backup_doctor(
+                await run_database_doctor(async_url=config.async_url),
+                pre_migration_from=pre_migration_from,
+            )
         if source_before != source_after:
-            raise RuntimeError("Source database changed during restore verification.")
+            raise DatabaseSafetyError("Source database changed during restore verification.")
         if restored != source_before:
-            raise RuntimeError("Restored database fingerprints do not match source.")
+            raise DatabaseSafetyError("Restored database fingerprints do not match source.")
         verified = True
         return owned.name, restored[0].count, restored[1].count
     finally:
@@ -111,14 +132,19 @@ async def _restore_verified_source(
                 cleanup_error = exc
         if cleanup_error is not None:
             action = "after verification" if verified else "after failure"
-            raise RuntimeError(
+            raise DatabaseSafetyError(
                 f"Safe cleanup failed {action} for {owned.name}: "
                 f"{type(cleanup_error).__name__}."
             ) from cleanup_error
 
 
-async def run(backup: Path) -> int:
-    database, memories, vectors = await restore_smoke(backup)
+async def run(backup: Path, *, pre_migration_from: str | None = None) -> int:
+    database, memories, vectors = await restore_smoke(
+        backup, pre_migration_from=pre_migration_from,
+    )
+    print(f"Mode: {'pre-migration' if pre_migration_from else 'strict'}")
+    if pre_migration_from:
+        print(f"Source/restored revision verified: {pre_migration_from}")
     print(f"Restore verified in owned temporary database: {database}")
     print(f"Memory rows verified: {memories}")
     print(f"Vector rows verified: {vectors}")
@@ -129,14 +155,16 @@ async def run(backup: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        return asyncio.run(run(args.backup))
+        return asyncio.run(run(args.backup, pre_migration_from=args.pre_migration_from))
     except Exception as exc:
-        if isinstance(exc, (FileNotFoundError, RuntimeError)):
+        if isinstance(exc, DatabaseSafetyError):
             message = str(exc)
+        elif isinstance(exc, FileNotFoundError):
+            message = "Required backup file or PostgreSQL client tool is unavailable."
         elif isinstance(exc, ValueError):
             message = "Invalid backup or database safety configuration."
         else:
-            message = f"Unexpected {type(exc).__name__}."
+            message = safe_error_message(exc, operation="Restore smoke")
         print(f"Restore smoke failed safely: {message}", file=sys.stderr)
         return 1
 

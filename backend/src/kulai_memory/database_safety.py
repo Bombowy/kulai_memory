@@ -96,6 +96,81 @@ class DoctorReport:
         }
 
 
+class DatabaseSafetyError(RuntimeError):
+    """Controlled administration failure with a safe, host-authored message."""
+
+
+PRE_MIGRATION_FAILURES = frozenset({
+    "alembic.current",
+    "table.memory_ingestion_tombstones",
+    "schema.memory_ingestion_tombstones",
+    "constraint.memory_ingestion_tombstones",
+})
+_PRE_MIGRATION_REQUIRED_CHECKS = PRE_MIGRATION_FAILURES | frozenset({
+    "alembic.expected_head", "database.connection", "database.transaction_read_only",
+    "postgres.version", "extension.vector", "table.memories",
+    "table.kulai_vector_records", "schema.memories",
+    "constraint.memories_ingestion_id_unique", "vector.embedding_dimension",
+    "database.read_query",
+})
+
+
+def validate_backup_doctor(
+    report: DoctorReport, *, pre_migration_from: str | None = None,
+) -> None:
+    """Keep strict defaults; permit only the known, complete 0002 -> 0003 gap."""
+
+    if pre_migration_from is None:
+        if not report.ok:
+            raise DatabaseSafetyError("Database invariants failed; full doctor PASS is required.")
+        return
+
+    heads = expected_alembic_heads()
+    if len(heads) != 1:
+        raise DatabaseSafetyError("Pre-migration mode requires exactly one local Alembic head.")
+    if pre_migration_from == heads[0]:
+        raise DatabaseSafetyError("Source is already the local head; use strict backup/restore.")
+    if (pre_migration_from, heads[0]) != ("kulai_memory_0002", "kulai_memory_0003"):
+        raise DatabaseSafetyError("This pre-migration transition is not supported.")
+
+    checks = {check.name: check for check in report.checks}
+    if (
+        len(checks) != len(report.checks)
+        or not _PRE_MIGRATION_REQUIRED_CHECKS.issubset(checks)
+        or "database.diagnostics" in checks
+    ):
+        raise DatabaseSafetyError("Pre-migration doctor report is incomplete or contains diagnostics errors.")
+    if checks["alembic.expected_head"].value != heads[0]:
+        raise DatabaseSafetyError("Doctor and local Alembic head do not agree.")
+    if checks["alembic.current"].value != [pre_migration_from]:
+        raise DatabaseSafetyError("Database revision does not match the requested pre-migration source.")
+    failures = {check.name for check in report.checks if not check.ok}
+    if failures != PRE_MIGRATION_FAILURES:
+        raise DatabaseSafetyError("Doctor failures do not match the exact allowed pre-migration gap.")
+    if checks["schema.memory_ingestion_tombstones"].value != {"columns": []}:
+        raise DatabaseSafetyError("Pre-migration mode requires the pending tombstone table to be absent.")
+
+
+def validate_backup_output(output: Path, *, force: bool) -> Path:
+    """Require a regular output outside the repo, without symlink/junction traversal."""
+
+    absolute = Path(os.path.abspath(output.expanduser()))
+    for component in (absolute, *absolute.parents):
+        if component.is_symlink() or getattr(component, "is_junction", lambda: False)():
+            raise ValueError("Backup output must not traverse a symbolic link or junction.")
+    resolved = absolute.resolve()
+    root = PROJECT_ROOT.resolve()
+    if absolute.is_relative_to(root) or resolved.is_relative_to(root):
+        raise ValueError("Backup output must be outside the repository.")
+    if resolved.exists() and not force:
+        raise FileExistsError("Output already exists; pass --force to replace it.")
+    if resolved.exists() and not resolved.is_file():
+        raise ValueError("Backup output must be a regular file path.")
+    if not resolved.parent.is_dir():
+        raise FileNotFoundError("Backup output directory does not exist.")
+    return resolved
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryFingerprint:
     count: int

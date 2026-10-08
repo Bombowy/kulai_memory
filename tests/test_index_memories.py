@@ -317,7 +317,8 @@ def test_restore_owned_api_verifies_marker_before_restore(monkeypatch, tmp_path)
     from scripts import db_restore_smoke
     async def require(owned, *, config):
         calls.append("ownership")
-    async def restore(backup, *, config):
+    async def restore(backup, *, config, pre_migration_from):
+        assert pre_migration_from is None
         assert calls == ["ownership"]
         calls.append("restore")
         return "owned", 3, 0

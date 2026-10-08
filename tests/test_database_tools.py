@@ -222,7 +222,7 @@ def test_failed_backup_removes_only_its_partial_file(
     monkeypatch.setattr(
         db_backup,
         "database_config",
-        lambda: SimpleNamespace(async_url="postgresql+asyncpg://test/db"),
+        lambda: SimpleNamespace(async_url="postgresql+asyncpg://test@localhost/db"),
     )
     monkeypatch.setattr(
         db_backup,
@@ -276,7 +276,7 @@ def test_successful_backup_is_atomic_and_uses_portable_archive_options(
     monkeypatch.setattr(
         db_backup,
         "database_config",
-        lambda: SimpleNamespace(async_url="postgresql+asyncpg://test/db"),
+        lambda: SimpleNamespace(async_url="postgresql+asyncpg://test@localhost/db"),
     )
     monkeypatch.setattr(
         db_backup,
@@ -369,7 +369,7 @@ def test_restore_command_cannot_clean_or_accept_a_target() -> None:
     source = inspect.getsource(db_restore_smoke)
     assert '"--clean"' not in source
     actions = [action.dest for action in db_restore_smoke.parser()._actions]
-    assert actions == ["help", "backup"]
+    assert actions == ["help", "backup", "pre_migration_from"]
 
 
 def test_owned_database_cleanup_requires_marker_and_never_forces_drop() -> None:
@@ -398,9 +398,10 @@ def test_owned_backup_api_rechecks_marker(
         del config
         verified.append(candidate)
 
-    async def fake_create(output, *, force, config):
+    async def fake_create(output, *, force, config, pre_migration_from):
         del output, force
         assert config == "target-config"
+        assert pre_migration_from is None
         return (1, "a" * 64, "18.6")
 
     monkeypatch.setattr(db_backup, "require_owned_database", fake_require)
@@ -415,7 +416,7 @@ def test_owned_backup_api_rechecks_marker(
             tmp_path / "drill.dump",
             force=False,
             owned=owned,
-            config=object(),
+            config=SimpleNamespace(async_url="postgresql+asyncpg://test@localhost/db"),
         )
     )
     assert verified == [owned]

@@ -1,330 +1,213 @@
-﻿TASK 5D.1b — Durable deletion tombstone + stale-ingestion replay protection
+﻿TASK 5D.1c — Safe pre-migration backup + restore verification
 Data: 2026-10-07
-DECYZJA: OK DO COMMITA / GOTOWE DO MANUALNEJ MIGRACJI
 
-1. Start commit/status
-HEAD: 7ace35dd923b91207052fe17ebfb55f0c0dbb6c7
-Commit: feat: add atomic Memory deletion with indexing protection
-Branch: main, tracking origin/main.
-git status --porcelain na początku: pusty; host clean.
-Vendor working tree: clean.
-Vendor SHA przed/po: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Nie wykonano commit ani push. Zmiany TASK 5D.1b pozostają niezacommitowane.
+DECYZJA: OK DO COMMITA / GOTOWE DO PRE-MIGRATION BACKUP
 
-2. Migration 0003
-Nowy plik:
-backend/migrations/versions/kulai_memory_0003_memory_ingestion_tombstones.py
-Alembic revision: kulai_memory_0003
-down_revision: kulai_memory_0002
-Opisowa nazwa pliku jest długa, ale revision zachowuje krótką konwencję repo
-i mieści się w istniejącym alembic_version.
-Migration przetestowana WYŁĄCZNIE na owned temporary DB.
-Real upgrade 0002 -> 0003 zachował wcześniejsze syntetyczne Memory/vector fingerprints.
-Poprzednie migration files i reusable migration graph nie zostały zmienione.
-Configured main DB NIE została zmigrowana.
+1. Stan repo na początku
+HEAD: f9387410618b20b2051ec40506bfecbdbce41879
+Commit: feat: retire deleted Memory ingestion identities durably
+Branch: main, zgodny z origin/main; working tree clean.
+Vendor: 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
+Main revision: kulai_memory_0002. Local Alembic head: kulai_memory_0003.
 
-3. Tombstone schema
-Tabela: memory_ingestion_tombstones
-ingestion_id UUID PRIMARY KEY
-memory_id UUID NOT NULL UNIQUE
-deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
-PK: pk_memory_ingestion_tombstones
-UNIQUE: uq_memory_ingestion_tombstones_memory_id
-Brak FK do memories. Brak expiry/TTL. Repeated delete zachowuje pierwszy timestamp.
+2. Exact CLI contract
+.venv\Scripts\python.exe scripts\db_backup.py --output <PATH_POZA_REPO> --pre-migration-from kulai_memory_0002
+.venv\Scripts\python.exe scripts\db_restore_smoke.py <BACKUP> --pre-migration-from kulai_memory_0002
+Istniejący --force backupu pozostaje jedynym jawnym pozwoleniem na zastąpienie istniejącego pliku.
+Nie ma --force-doctor, --ignore-errors, environment bypass ani CLI override docelowej bazy.
+Public CLI używa wyłącznie configured DB. Owned source helpers wymagają ownership marker.
 
-4. Exact stored fields / privacy
-Dokładnie: ingestion_id, memory_id, deleted_at.
-Brak: content, transcript, metadata_json, session_id, source_kind, embedding,
-vector i provider diagnostics.
-Host ORM oraz read-only doctor kontrolują exact column set, typy, nullability,
-timestamp default, PK, UNIQUE(memory_id) i brak FK.
-Tombstone nie jest źródłem treści i nigdy nie jest embeddingowany.
+3. Strict default behavior
+Bez nowej flagi backup oraz restored DB nadal wymagają pełnego db_doctor PASS.
+DoctorReport.ok i startup doctor Desktop/server nie zostały zmienione.
+Strict backup owned 0002 został realnie odrzucony bez utworzenia archive.
+Strict restore archive 0002 został realnie odrzucony; owned restore target sprzątnięto.
+Normalny strict backup/restore owned 0003 realnie PASS.
 
-5. Advisory lock derivation
-Wspólny host helper persistence/ingestion_lock.py.
-SHA-256 nad bajtami stałego prefiksu kulai_memory.ingestion.v1 plus NUL,
-następnie ingestion UUID.bytes.
-Pierwsze 8 bajtów digestu -> big-endian signed int64.
-Parametryzowany SELECT pg_advisory_xact_lock z argumentem BIGINT.
-Bez Python hash(), bez process-local persistence locka.
-Deterministyczny across processes/restarts.
-Kolizja jedynie serializuje niezależne UUID; tombstone lookup używa pełnego UUID.
-Lock key nie jest logowany ani raportowany.
-Rzeczywisty local PostgreSQL transaction isolation potwierdzony: READ COMMITTED.
-Ten poziom zapewnia świeży snapshot dla tombstone check po oczekiwaniu na lock.
+4. Pre-migration revision checks
+Wspólny validate_backup_doctor w host database_safety odczytuje faktyczne local heads.
+Wymagany dokładnie jeden head. Source musi różnić się od head.
+Obsługiwane wyłącznie znane przejście kulai_memory_0002 -> kulai_memory_0003.
+Doctor current revision musi być dokładnie [kulai_memory_0002].
+Doctor expected head musi być zgodny z local head.
+Source == head jest odrzucone z instrukcją użycia strict mode.
+Report musi być kompletny i bez duplikatów check names.
+Pre-migration backup ponawia doctor po pg_dump przed publikacją archive.
+Pre-migration restore sprawdza source przed restore, restored DB oraz source po restore.
 
-6. Lock ordering / deadlock safety
-Ingestion: ingestion advisory lock -> tombstone check -> canonical INSERT/read.
-Deletion: initial identity read bez row lock -> ingestion advisory lock ->
-canonical identity re-check FOR UPDATE -> tombstone INSERT ->
-canonical DELETE -> reusable vector DELETE.
-Indexing: canonical FOR UPDATE -> vector upsert; nigdy nie bierze advisory locka.
-Caller COMMIT/ROLLBACK zwalnia transaction-scoped locks.
-Real retry/delete oraz oba indexing/delete ordering cases: PASS, brak deadlocka.
+5. Exact allowed doctor failures
+alembic.current
+table.memory_ingestion_tombstones
+schema.memory_ingestion_tombstones
+constraint.memory_ingestion_tombstones
+Wymagany dokładnie ten zestaw FAIL; pozostałe checks muszą PASS.
+Tombstone schema musi wskazywać pustą listę columns, czyli brak pending tabeli.
 
-7. Ingestion flow
-PostgresMemoryRepository.create_or_get_by_ingestion_id zajmuje lock,
-sprawdza tombstone i dopiero wtedy wykonuje existing INSERT ON CONFLICT.
-Tombstoned identity: MemoryIngestionRetiredError, ZERO INSERT.
-Zwykłe repository.create używa tego samego guarda, aby nie omijać ochrony.
-Bez zmiany accepted idempotency semantics:
-same ID + same content/source/session -> DUPLICATE;
-diagnostic metadata changes -> pierwszy canonical Memory, bez overwrite;
-different semantic payload dla aktywnego ID -> existing controlled conflict;
-fresh ID -> normal creation.
+6. Unexpected failure rejection
+Każdy dodatkowy FAIL blokuje operację, w tym connection/read-only/version/vector/schema/unique/read-query.
+database.diagnostics jest odrzucone, również gdy raport jest niekompletny.
+Nie tolerujemy częściowo utworzonej lub wadliwej tombstone table, nieznanego transition,
+wielu heads, niezgodnej rewizji source/restored ani niezgodnego expected head.
+Unit tests sprawdzają osobno każdy unrelated failed check.
 
-8. Deletion flow / transaction ownership
-Repository odkrywa ingestion_id, zajmuje wspólny advisory lock i ponownie
-sprawdza canonical identity pod FOR UPDATE.
-Tworzy techniczny tombstone przed canonical DELETE.
-Existing MemoryDeletionService wykonuje reusable vector DELETE dla:
-namespace=kulai_memory.memories.v1, record_id=str(memory_id).
-Oba adaptery współdzielą caller-owned AsyncSession i transaction.
-delete_memory zwraca wynik dopiero po caller-owned COMMIT.
-Nie dodano hidden commit/rollback w repository ani application service.
-Public MemoryDeletionResult pozostaje bez zmian.
-Brak Delete UI, CLI i public endpointu.
+7. Dump safety
+Uzupełniono brakujący canonical guard lokalnego targetu i ścieżki poza repo.
+Reużywany validate_restore_source wymaga loopback oraz APP_ENV dev/development/local/test;
+odrzuca postgres/template0/template1 oraz owned temporary prefixes dla public CLI.
+Owned helper weryfikuje base config oraz marker source; nie jest publicznym obejściem.
+Output poza repo, bez symlink/junction w path components, regular file, istniejący parent.
+No overwrite bez --force.
+Zachowane: pg_dump major-version guard, custom format, no-owner, no-privileges,
+password wyłącznie PGPASSWORD, własny .partial, os.replace, cleanup własnego .partial,
+non-empty archive oraz SHA-256.
+Klienci PostgreSQL 18.6; main PostgreSQL 18.6. Bez instalacji lub modyfikacji systemu.
 
-9. Retired ingestion error / precedence
-Neutralny MemoryIngestionRetiredError:
-code=memory.ingestion_retired
-message=This note was deleted and cannot be saved again.
-Error nie zawiera UUID, timestampu, contentu, SQL parameters ani tombstone internals.
-Retirement ma pierwszeństwo przed duplicate/content conflict dla usuniętego ID.
+8. Restore safety
+Istniejące create_owned_temporary_database / restore_archive_to_owned_database /
+drop_owned_temporary_database oraz ownership guard zostały reużyte.
+Restore nie przyjmuje target DB z CLI i nie używa --clean.
+Restored DB pozostaje na source revision 0002; smoke nie wykonuje upgrade.
+Memory/vector fingerprints restored == source_before.
+Source_before == source_after, wraz z końcowym pre-migration doctor/revision check.
+Mismatch lub cleanup failure kończy operację non-zero.
+Unit tests potwierdzają cleanup przy błędzie i cancellation.
+Backup nie jest usuwany przez restore.
 
-10. Retry after committed delete — real proof
-Owned DB, first delete COMMIT, następne niezależne sessions:
-same ingestion_id + same content/session -> RETIRED.
-same ingestion_id + different content -> RETIRED.
-Zwykłe repository.create z retired identity -> RETIRED.
-Po każdej próbie: Memory=0, vector=0, tombstone=1 i bez zmian.
-Fresh ingestion UUID z tym samym contentem -> CREATED.
-Existing duplicate przed deletion zachowuje canonical Memory i metadata.
+9. Owned 0002 real backup
+PASS. Owned source zmigrowano tylko do kulai_memory_0002.
+Utworzono 2 synthetic Memories oraz 2 synthetic vectors wyłącznie w owned source.
+Archive non-empty; size=8115 bytes w focused real run.
+SHA-256=51123bceacc92f23dd7557b561d532f39153916e5af8d093c66ec3d82baa6fd2
+Późniejszy pełny integration suite ponownie przeszedł ten sam flow na nowym owned source.
 
-11. Retry-wins race — real proof
-Dwie osobne AsyncSession/transakcje, również osobne DB engines/pools.
-Retry istniejącej Memory najpierw uzyskuje DUPLICATE i trzyma advisory lock.
-Delete rzeczywiście czeka: pg_locks pokazuje advisory lock NOT granted,
-a pg_blocking_pids wskazuje zwycięski PostgreSQL backend.
-Po retry COMMIT delete kontynuuje i commitnie kończy operację.
-Final: tombstone=1, Memory=0, vector=0.
-Timeout/deadlock: PASS; brak deadlocka.
+10. Owned 0002 real restore
+PASS. Strict restore 0002 został odrzucony, explicit pre-migration restore przeszedł.
+Expected doctor failure set dokładnie zgodny z whitelistą.
+Restored Memory count=2, vector count=2.
+Source unchanged=true; restored fingerprints match=true.
+Owned restore targets i owned source zostały usunięte istniejącym guardem.
 
-12. Delete-wins race — real proof
-Delete trzyma advisory lock po tombstone i obu DELETE, przed COMMIT.
-Retry rzeczywiście czeka na ten sam PostgreSQL advisory lock.
-Po delete COMMIT retry budzi się i zwraca MemoryIngestionRetiredError.
-Final: tombstone=1, Memory=0, vector=0; ZERO recreated canonical Memory/vector.
-Lock observation limit=5 s, task completion limit=15 s,
-outer owned-fixture operation timeout=90 s.
+11. Restored revision
+Owned pre-migration restore: kulai_memory_0002.
+Main backup restore smoke: kulai_memory_0002.
+Nie migrowano restored 0002 podczas tych smoke.
 
-13. Duplicate delete
-Sequential repeated delete: false/zero, pierwszy tombstone/timestamp bez zmian.
-Real concurrent duplicate deletes: jeden successful canonical/vector delete,
-drugi false/zero, dokładnie jeden tombstone.
-Unknown Memory bez tombstone nadal pozwala na existing orphan-vector cleanup;
-nie tworzymy tombstone bez znanego ingestion_id.
-Other namespace pozostaje bez zmian.
+12. Owned source/restored fingerprints
+Memory count=2; source/restored SHA-256:
+2ed9867e5fa87fcb4382fc048cf884c5041ee63431b25ff725a226bcfe6ff2e6
+Vector count=2; source/restored SHA-256:
+40f4bdd922b51f8ffa3a5f7dfed5823f5d88f0fb20c60c79556482117d792cc9
+Dotyczy focused owned real run; dane są syntetyczne.
+Równość ponownie potwierdzona w pełnym suite.
 
-14. Indexing/delete regression
-Existing canonical FOR UPDATE before vector upsert zachowany.
-Index-wins: index kończy się pierwszy, delete następnie usuwa vector i Memory.
-Delete-wins: oczekujące indexing failnie controlled bez vector upsert.
-Prepared request sprzed completed delete nie może odtworzyć vectora.
-Wszystkie istniejące real indexing/delete cases PASS.
+13. Strict owned 0003 backup/restore
+PASS. Upgrade wykonano wyłącznie na owned source po udowodnieniu backup/restore 0002.
+Doctor 0003 full PASS; normalny strict backup PASS; strict restore PASS.
+Restored revision=kulai_memory_0003, counts=2/2, fingerprints match/source unchanged.
+Main nigdy nie była targetem migracji.
 
-15. Rollback proof
-Real failure po wykonanym tombstone INSERT: tombstone rollback, oba fingerprinty bez zmian.
-Real failure po canonical DELETE: tombstone/canonical delete rollback.
-Real failure po vector DELETE: tombstone i oba DELETE rollback.
-Injected before-COMMIT failure: wszystkie trzy zmiany rollback.
-Existing Memory i vector pozostają; advisory lock jest zwolniony;
-następny retry może nadal zwrócić DUPLICATE.
-Nie zmienia się canonical Memory przy nieudanej operacji.
+14. Unit/focused tests
+Focused backup/restore/database safety + reproducibility + tombstone + application boundaries:
+124 passed, 1 skipped.
+Coverage: strict defaults, exact CLI, local head checks, revision checks, exact allowed gap,
+każdy extra FAIL, diagnostics, incomplete/duplicate report, partial tombstone table,
+remote/prod/protected/temp targets, path/force/link guards, dump revision-change cleanup,
+restore revision mismatch, fingerprints mismatch, source mutation/revision change,
+failure/cancellation cleanup, cleanup failure oraz sentinel privacy.
+Jedyny unit SKIP: realny OS symlink wymaga niedostępnego uprawnienia Windows.
+Deterministyczne testy symlink i junction guards bez uprawnienia OS obydwa PASS.
 
-16. Cancellation proof
-Cancellation po wykonanym tombstone INSERT: rollback i tombstone=0.
-Cancellation po vector DELETE: wszystkie zmiany rollback.
-Rzeczywiste task.cancel podczas oczekiwania na advisory lock:
-bezpieczne transaction/session cleanup, fingerprinty bez zmian;
-następna sesja może uzyskać DUPLICATE.
-Brak broken session state albo pozostawionego locka.
-
-17. Privacy / boundary proof
-Exact technical-only schema sprawdzana przez unit i real migration/doctor.
-Private content/metadata sentinels nie trafiają do retired public error/traceback.
-Existing deletion SQL/credential/vector sentinel safety tests nadal PASS.
-WebSocket retired error/log nie zawiera prywatnego transcript sentinel.
-Transcript pozostaje widoczny tylko w jawnych UI transcript events/controls.
-Nie dodano logowania audio, transcriptu, SQL parameters ani lock keys.
-Application boundary tests PASS.
-Reusable vector store nie zna tombstone; vendor pozostaje clean.
-
-18. Desktop/server transport behavior
-Server runtime przepuszcza neutralny retired error zamiast memory.save_failed.
-WebSocket:
-session.ready -> transcript.final -> memory.saving -> error.
-Retired error recoverable=false, completed lifecycle, close code=1008.
-Pending save czyszczony; brak memory.saved i brak retranscription przy retry save.
-Test także dla memory.save_failed -> memory.retry -> retired.
-Sequence rośnie, session_id stabilny, temp WAV sprzątany.
-Desktop:
-INGESTION_RETIRED, save_pending=false, pending state czyszczony.
-RETRY SAVE ukryty/disabled; safe message; nowe nagranie możliwe z fresh UUID.
-Controller oraz offscreen UI tests PASS.
-Android wire schema, mobile code, Whisper model/device/compute/VAD bez zmian.
-
-19. Owned PostgreSQL tests
-Focused real suites:
-test_memory_tombstones_postgres.py
-test_memory_deletion_postgres.py
-test_memory_postgres.py
-Wynik po poprawce: 22 passed, 27.15 s.
-Full owned integrations:
+15. PostgreSQL integration tests
+Nowy focused owned 0002/0003 backup/restore: 1 passed.
+Pełny backend/tests/integration z:
 KULAI_RUN_POSTGRES_INTEGRATION=1
 KULAI_RUN_OLLAMA_INTEGRATION=1
 KULAI_RUN_WHISPER_INTEGRATION=0
-pytest backend/tests/integration -q -s
-Wynik: 34 passed, 5 skipped, 67.38 s.
-5 skipped = opt-in Whisper tests; STT inference nie było potrzebne do tego fixa.
-Owned DB lifecycle używa existing ownership guard i cleanup.
-Końcowy read-only count DB z owned backup/restore prefixes: 0.
+Wynik: 35 passed, 5 skipped.
+Wyłączone 5 Whisper tests; STT nie było zmieniane.
+Przeszły także real migration/tombstone/delete/indexing races, ingestion, backfill,
+retrieval i embedding regressions. Fixtures wyłącznie owned DB.
 
-Podczas pierwszego focused run: 21 PASS, 1 FAIL w nowym doctor constraints check.
-asyncpg zwraca PostgreSQL internal char contype jako bytes.
-Naprawiono przez jawny CAST(contype AS text) w read-only catalog query.
-Nie osłabiono constraints check. Kolejny focused i full integrations: PASS.
+16. Backend full
+261 passed, 40 skipped (opt-in integration wyłączone w zwykłym suite).
+Jedno istniejące DeprecationWarning Starlette/AnyIO BlockingPortal.
+Desktop/WebSocket i application boundary regressions PASS.
 
-20. Backend tests / focused regressions
-Desktop/controller/UI/WebSocket/server + tombstone/persistence/deletion focused:
-79 passed.
-Focused ingestion/indexing/retrieval/embedding/application boundaries/root safety
-oraz reproducibility regressions: 154 passed.
-Full backend bez opt-ins: 261 passed, 39 skipped.
-Existing warning: Starlette TestClient deprecated AnyIO BlockingPortal alias.
-Brak test failures w finalnej walidacji.
+17. Root full
+179 passed, 1 skipped.
+Test mocks dostosowano do nowego opcjonalnego keyword bez zmiany backfill semantics.
+Reproducibility oraz exporter regressions PASS.
 
-21. Root tests / reproducibility / golden
-Full root: 105 passed.
-Golden dataset SHA-256 before/after:
-73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
-16 synthetic documents, 16 queries, 8 EN + 8 PL.
-Thresholds untouched: Recall@1 >= 0.60, Recall@3 >= 0.80, Recall@5 >= 0.90.
-Real BGE golden during full regressions:
-Recall@1=1.0; Recall@3=1.0; Recall@5=1.0; MRR@5=1.0.
-EN i PL: wszystkie wymienione metrics=1.0.
-Provider counters: clients=1, requests=32, native_1024=32, overrides=0, closed=1.
-Memory/vector fingerprints during golden retrieval unchanged.
-Android nie był przebudowywany; mobile/ nie zmieniono.
-
-22. pip check
+18. pip check
 PASS: No broken requirements found.
-Runtime: project root .venv, Python 3.13.15, zgodnie z PyCharm environment lookup.
-Nie zmieniano dependency versions ani system tooling.
+Runtime/test interpreter: project .venv, Python 3.13.15.
+Nie zmieniano dependency versions.
 
-23. git diff --check
-PASS, exit code 0.
-Bez commitowania/stagingu/pushowania i bez zmian vendora.
+19. git diff --check
+PASS. Końcowa kontrola obejmuje również wynik.txt.
+Git informuje o LF -> CRLF zgodnie z lokalnym ustawieniem; brak whitespace errors.
 
-24. Main DB counts przed/po
-memories: 7 -> 7
-kulai_vector_records: 7 -> 7
-Zero main INSERT/UPDATE/DELETE/backfill/reindex/migration.
-Wszystkie fixture writes były w owned temporary DB.
+20. Main revision / doctor
+Przed i po: kulai_memory_0002.
+Local head: kulai_memory_0003.
+scripts/db_doctor.py exit code=1 jest OCZEKIWANY; dokładnie cztery known pending FAIL.
+Connection/read-only/PostgreSQL/vector extension/memories schema/ingestion unique/vector dimension/read query PASS.
+DB vector dimension=1024, configured dimension=1024; vector extension=0.8.6.
+Nie maskowano mismatch i nie migrowano main.
 
-25. Main DB fingerprints przed/po
-Memory before:
+21. Main counts/fingerprints przed/po całym taskiem
+Memory count: 7 -> 7
+Vector count: 7 -> 7
+Memory SHA-256 przed:
 4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
-Memory after:
+Memory SHA-256 po:
 4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
-Vector before:
+Vector SHA-256 przed:
 bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
-Vector after:
+Vector SHA-256 po:
 bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
-Memory fingerprint identical=true.
-Vector fingerprint identical=true.
-Read-only SQL używa SET TRANSACTION READ ONLY, kończy rollback/close.
+Oba fingerprinty identyczne również z odczytem na samym początku taska.
+Zero main DB writes; brak backfill/reindex/delete/update/schema changes.
 
-26. Expected migration/doctor status
-Main przed/po: kulai_memory_0002.
-Local migration head: kulai_memory_0003.
-Main doctor przed zmianą local head: PASS.
-Main doctor po zmianie: EXPECTED FAIL, CLI exit code 1.
-Fail checks:
-alembic.current — configured DB nadal 0002, local head 0003;
-table.memory_ingestion_tombstones — jeszcze nie istnieje w main;
-schema.memory_ingestion_tombstones;
-constraint.memory_ingestion_tombstones.
-Connection, read-only transaction, PostgreSQL 18.6, existing Memory schema,
-uq_memories_ingestion_id, pgvector 0.8.6, vector(1024), read query: PASS.
-Owned DB na 0003: doctor pełny PASS.
-Nie maskowano mismatchu, nie wykonano upgrade/stamp/downgrade/reset main.
-Po review potrzebna będzie osobna manualna migracja main; do niej startup
-desktop/server pozostaje prawidłowo blokowany przez doctor.
+22. Actual main pre-migration backup retained
+TAK — canonical public CLI parsers/main wykonały explicit backup oraz restore smoke, oba exit=0.
+Backup location:
+C:\Users\patry\AppData\Local\Temp\kulai_memory_pre_migration_0002_20261007T122316Z_723f5e3f7c0a4cde922229371124f6e4.dump
+Size: 44617 bytes
+SHA-256: 9a2786fab1df536584ab2bf12eca6083611278c6fbe379275aa31e6357959a9d
+pg_dump: 18.6
+Main archive restored as 0002, Memory/vector counts=7/7, oba fingerprinty match.
+Owned restore DB usunięto i source pozostaje unchanged.
+Archive zachowano; nie usuwano go po sukcesie. Backup jest poza repo i nie jest stagingowany.
 
-27. Vendor / git status
-Vendor SHA:
-720d0f26c75ba4af24d395f98f15a37e4bd5067e
-git -C vendor/kulai_modules status --porcelain: pusty.
-git submodule status:
-720d0f26c75ba4af24d395f98f15a37e4bd5067e vendor/kulai_modules
-Gitlink bez zmian; żadnego host workaround w reusable VectorStore.
-Host status: zmiany niżej są niezacommitowane.
-wynik.txt jest lokalnym raportem i nie jest dodawany do eksportu repo.
+23. Vendor status
+SHA: 720d0f26c75ba4af24d395f98f15a37e4bd5067e
+Working tree clean, gitlink unchanged.
+Nie modyfikowano reusable modules.
 
-28. Exact changed files / git porcelain
- M README.md
- M backend/src/kulai_memory/api/memory_ws.py
- M backend/src/kulai_memory/application/__init__.py
- M backend/src/kulai_memory/application/deletion.py
- M backend/src/kulai_memory/application/memory.py
- M backend/src/kulai_memory/database_safety.py
- M backend/src/kulai_memory/deletion_persistence.py
- M backend/src/kulai_memory/desktop/app.py
- M backend/src/kulai_memory/desktop/controller.py
- M backend/src/kulai_memory/desktop/models.py
- M backend/src/kulai_memory/persistence/__init__.py
- M backend/src/kulai_memory/persistence/models.py
- M backend/src/kulai_memory/persistence/repository.py
- M backend/src/kulai_memory/server/runtime.py
- M backend/tests/integration/test_memory_deletion_postgres.py
- M backend/tests/integration/test_memory_postgres.py
- M backend/tests/test_desktop_controller.py
- M backend/tests/test_desktop_ui.py
- M backend/tests/test_memory_persistence.py
- M backend/tests/test_memory_ws.py
- M backend/tests/test_server_runtime.py
-?? backend/migrations/versions/kulai_memory_0003_memory_ingestion_tombstones.py
-?? backend/src/kulai_memory/persistence/ingestion_lock.py
-?? backend/tests/integration/test_memory_tombstones_postgres.py
-?? backend/tests/test_memory_tombstones.py
- M wynik.txt
+24. Changed files / final git status
+M README.md
+M backend/src/kulai_memory/database_safety.py
+M scripts/db_backup.py
+M scripts/db_restore_smoke.py
+M tests/test_database_tools.py
+M tests/test_index_memories.py
+M wynik.txt
+?? backend/tests/integration/test_pre_migration_backup_postgres.py
+?? tests/test_pre_migration_backup.py
+Zmiany wyłącznie backup/restore/safety/docs/tests/report.
+Nie zmieniano application core, Desktop/server/Android, schema lub migration graph.
+README opisuje strict default, exact pending gap i osobną manualną migrację.
 
-Dodatkowo zaktualizowany lokalny raport: wynik.txt.
-README dokumentuje tombstone, advisory derivation, lock ordering, retired
-transport behavior i expected 0002/0003 migration mismatch.
-Brak zmian mobile/, embedding modelu, schema vector store i golden datasetu.
-Ochrona dotyczy identity wycofywanych po wdrożeniu migration 0003;
-historycznie utraconych ingestion UUID sprzed tombstone schema nie odtwarzamy.
+25. Proposed commit message
+feat: add guarded pre-migration backup and restore verification
 
-29. Proposed commit message
-feat: retire deleted Memory ingestion identities durably
-
-30. Quality gate / decyzja
-OK DO COMMITA / GOTOWE DO MANUALNEJ MIGRACJI
-
-Durable stale-replay protection: PASS.
-Retry/delete real PostgreSQL serialization: PASS.
-Fresh ingestion i accepted duplicate semantics: PASS.
-Technical-only tombstone: PASS.
-Indexing/delete races i stale prepared embedding: PASS.
-Rollback/commit failure/cancellation: PASS.
-Desktop/server retired error nonrecoverable: PASS.
-Full regressions: PASS.
-Main DB counts/fingerprints/revision unchanged: PASS.
-Vendor clean, exact SHA unchanged: PASS.
-
-Nie commitowano.
-Nie pushowano.
-Nie migrowano i nie modyfikowano main DB.
-Nie dodano Delete UI/API/CLI, RAG, LLM ani automatic indexing.
+26. Quality gate / remaining action
+OK DO COMMITA / GOTOWE DO PRE-MIGRATION BACKUP
+Realny pre-migration backup i restore main wykonano, zweryfikowano i archive zachowano.
+Default strict behavior nie został osłabiony; brak generic doctor bypass.
+Main DB jest nadal 0002, bez zmian counts/fingerprints.
+Manualna migracja main do 0003 pozostaje osobną czynnością po review.
+Nie commitowano, nie pushowano, nie migrowano main.
+Raport nie zawiera real Memory content, vector values, metadata, DB password,
+full DB URL ani SQL parameters.
