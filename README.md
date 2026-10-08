@@ -84,6 +84,13 @@ owned temporary database with:
 .venv\Scripts\python.exe scripts\db_backup_restore_drill.py
 ```
 
+Backup publication verifies that the source did not change during the dump.
+Restore verification compares complete read-only snapshots: revision, canonical
+Memory, vectors, and ingestion tombstones. Tombstones protect deleted ingestion
+identities from replay; their count and SHA-256 must match even when Memory and
+vectors match. The owned drill includes a production-deleted synthetic Memory.
+Only counts/hashes are reported, without tombstone IDs or timestamps.
+
 Backups can contain all user data and must be stored outside the repository.
 The backup tool requires compatible PostgreSQL client tools (`pg_dump` and, for
 the restore smoke, `pg_restore`, `createdb`, and `dropdb`). It never installs
@@ -101,11 +108,14 @@ head to be 0003. It permits exactly the pending `alembic.current`,
 `table.memory_ingestion_tombstones`, `schema.memory_ingestion_tombstones`, and
 `constraint.memory_ingestion_tombstones` failures. Every other doctor check must
 PASS; incomplete reports, diagnostics errors, and unrelated failures are
-rejected. Restore verifies 0002 without migrating it, compares both table
-fingerprints with the unchanged source, and removes only its owned temporary
+rejected. Restore verifies 0002 without migrating it, compares Memory/vector
+fingerprints and the explicit absent tombstone state with the unchanged source,
+and removes only its owned temporary
 database. Keep the backup; migration remains a separate manual action. There is
 no generic doctor bypass. Source targets must be local development/test databases;
 protected and temporary names cannot be supplied through the CLI.
+The absent state is distinct from the real zero-row tombstone fingerprint
+required on 0003. A missing tombstone table never passes strict verification.
 
 The real repository integration tests are opt-in and accept only a
 loopback development/test database:
@@ -346,10 +356,13 @@ Deletion currently has no UI, CLI or transport endpoint. Real deletion and
 concurrency tests use owned temporary databases under
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; automatic validation never deletes main DB
 Memory. Host revision `kulai_memory_0003` adds the technical tombstone table;
-the reviewed vendor pin is unchanged. Until the main DB is manually migrated
-after review, it remains on 0002 and `db_doctor` intentionally reports a head
-mismatch and missing tombstone schema. Desktop/server startup remains blocked
-on that schema; no automatic upgrade, stamp or diagnostic bypass is performed.
+the reviewed vendor pin is unchanged. The main DB has been manually migrated
+to `kulai_memory_0003`, matching the local Alembic head. `db_doctor` passes and
+the tombstone schema is present. The real create/duplicate/index/retrieve/delete/
+stale-replay lifecycle and strict 0003 backup/restore have passed, verifying
+7 Memory rows, 7 vectors and 1 tombstone with matching fingerprints.
+Desktop/server startup is no longer blocked by missing tombstone schema.
+No automatic upgrade, stamp or diagnostic bypass is performed.
 
 ## Guarded Memory backfill
 

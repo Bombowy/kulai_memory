@@ -315,13 +315,18 @@ def test_owned_entry_requires_capability_before_any_target_operation(harness, mo
 def test_restore_owned_api_verifies_marker_before_restore(monkeypatch, tmp_path):
     calls = []
     from scripts import db_restore_smoke
+    from kulai_memory.database_safety import DatabaseSnapshot, MemoryFingerprint, VectorFingerprint, TombstoneFingerprint
+    expected = db_restore_smoke.RestoreVerificationResult("owned", DatabaseSnapshot(
+        ("kulai_memory_0003",), MemoryFingerprint(3, "a" * 64),
+        VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64),
+    ))
     async def require(owned, *, config):
         calls.append("ownership")
     async def restore(backup, *, config, pre_migration_from):
         assert pre_migration_from is None
         assert calls == ["ownership"]
         calls.append("restore")
-        return "owned", 3, 0
+        return expected
     monkeypatch.setattr(db_restore_smoke, "validate_restore_source", lambda *a, **k: None)
     monkeypatch.setattr(db_restore_smoke, "require_owned_database", require)
     monkeypatch.setattr(db_restore_smoke, "database_config_for_database", lambda *a, **k: object())
@@ -329,7 +334,7 @@ def test_restore_owned_api_verifies_marker_before_restore(monkeypatch, tmp_path)
     result = asyncio.run(db_restore_smoke.restore_owned_database_backup(
         tmp_path / "test.dump", owned=SimpleNamespace(name="owned"), config=object()
     ))
-    assert result == ("owned", 3, 0)
+    assert result == expected
     assert calls == ["ownership", "restore"]
 
 

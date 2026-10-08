@@ -29,23 +29,23 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kulai_db import DbConfig
-from kulai_memory.application import Memory, MemoryService
+from kulai_memory.application import MEMORY_VECTOR_NAMESPACE, Memory, MemoryService
+from kulai_memory.deletion_persistence import delete_memory
 from kulai_memory.database_safety import (
-    MemoryFingerprint,
+    DatabaseSnapshot,
     OwnedTemporaryDatabase,
-    VectorFingerprint,
     async_database_url,
     create_owned_temporary_database,
     database_config,
     database_exists,
+    database_snapshot_url,
     drop_owned_temporary_database,
-    memory_fingerprint,
     postgres_connection,
     require_owned_database,
     restore_archive_to_owned_database,
     run_database_doctor,
+    safe_error_message,
     validate_restore_source,
-    vector_fingerprint,
 )
 from kulai_memory.persistence import PostgresMemoryRepository
 from kulai_memory.settings import get_settings
@@ -53,15 +53,9 @@ from scripts.db_backup import create_owned_database_backup
 
 
 @dataclass(frozen=True, slots=True)
-class DatabaseSnapshot:
-    revision: tuple[str, ...]
-    memories: MemoryFingerprint
-    vectors: VectorFingerprint
-
-
-@dataclass(frozen=True, slots=True)
 class DrillFixtures:
     memories: tuple[Memory, Memory]
+    retired_memory: Memory
     namespace: str
     record_id: str
     vector_values: tuple[float, ...]
@@ -84,32 +78,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 async def database_snapshot(url: str) -> DatabaseSnapshot:
-    engine = create_async_engine(url)
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(text("SET TRANSACTION READ ONLY"))
-            revisions = tuple(
-                (
-                    await connection.execute(
-                        text(
-                            "SELECT version_num FROM alembic_version "
-                            "ORDER BY version_num"
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            memories = await memory_fingerprint(connection)
-            vectors = await vector_fingerprint(connection)
-            await connection.rollback()
-            return DatabaseSnapshot(
-                revision=revisions,
-                memories=memories,
-                vectors=vectors,
-            )
-    finally:
-        await engine.dispose()
+    return await database_snapshot_url(url)
 
 
 async def migrate_owned_database(
@@ -214,15 +183,21 @@ async def seed_owned_source(
                     ),
                 )
             )
+            retired = await service.create_memory(content="synthetic retired backup identity")
+            await vector_store.upsert(VectorUpsertRequest(
+                namespace=MEMORY_VECTOR_NAMESPACE,
+                records=(VectorRecord(
+                    id=str(retired.id), vector=EmbeddingVector(values=vector_values),
+                ),),
+            ))
             await require_owned_database(owned, config=config)
             await session.commit()
-            return DrillFixtures(
-                memories=(first, second),
-                namespace=namespace,
-                record_id=str(first.id),
-                vector_values=vector_values,
-                vector_metadata=vector_metadata,
-            )
+        await delete_memory(memory_id=retired.id, session_factory=factory)
+        return DrillFixtures(
+            memories=(first, second), retired_memory=retired,
+            namespace=namespace, record_id=str(first.id),
+            vector_values=vector_values, vector_metadata=vector_metadata,
+        )
     finally:
         await engine.dispose()
 
@@ -247,6 +222,13 @@ async def verify_fixtures(
             )
             if restored_memories != fixtures.memories:
                 raise RuntimeError("Restored Memory fields do not match fixtures.")
+            if await repository.get_by_id(fixtures.retired_memory.id) is not None:
+                raise RuntimeError("Retired Memory unexpectedly exists in drill database.")
+            retired_identity = (await session.execute(text(
+                "SELECT memory_id FROM memory_ingestion_tombstones WHERE ingestion_id = :id"
+            ), {"id": fixtures.retired_memory.ingestion_id})).scalar_one_or_none()
+            if retired_identity != fixtures.retired_memory.id:
+                raise RuntimeError("Restored tombstone identity does not match fixture.")
             if not all(
                 isinstance(memory.id, UUID)
                 and memory.session_id is not None
@@ -329,7 +311,10 @@ async def run_drill() -> DrillResult:
             dimension=dimension,
         )
         source_snapshot = await database_snapshot(source_url)
-        if source_snapshot.memories.count != 2 or source_snapshot.vectors.count != 1:
+        if (
+            source_snapshot.memories.count != 2 or source_snapshot.vectors.count != 1
+            or source_snapshot.tombstones is None or source_snapshot.tombstones.count != 1
+        ):
             raise RuntimeError("Temporary source fixture counts are invalid.")
         await verify_fixtures(source_url, fixtures, dimension=dimension)
 
@@ -360,6 +345,8 @@ async def run_drill() -> DrillResult:
             await verify_fixtures(restored_url, fixtures, dimension=dimension)
             if restored_snapshot != source_snapshot:
                 raise RuntimeError("Restored database fingerprints do not match source.")
+            if await database_snapshot(source_url) != source_snapshot:
+                raise RuntimeError("Source database changed during drill restore verification.")
             result = DrillResult(
                 source_database=source.name,
                 restore_database=restored.name,
@@ -407,6 +394,9 @@ async def run() -> int:
     print(f"Restored Memory SHA-256: {result.restored_snapshot.memories.sha256}")
     print(f"Source vector SHA-256: {result.source_snapshot.vectors.sha256}")
     print(f"Restored vector SHA-256: {result.restored_snapshot.vectors.sha256}")
+    print(f"Tombstone rows: {result.source_snapshot.tombstones.count}")
+    print(f"Source tombstone SHA-256: {result.source_snapshot.tombstones.sha256}")
+    print(f"Restored tombstone SHA-256: {result.restored_snapshot.tombstones.sha256}")
     print(f"Backup SHA-256: {result.backup_sha256}")
     print(f"Backup size: {result.backup_size} bytes")
     print(f"pg_dump: {result.pg_dump_version}")
@@ -422,10 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(run())
     except Exception as exc:
-        if isinstance(exc, (FileNotFoundError, RuntimeError, ValueError)):
-            message = str(exc)
-        else:
-            message = f"Unexpected {type(exc).__name__}."
+        message = safe_error_message(exc, operation="Backup/restore drill")
         print(f"Backup/restore drill failed safely: {message}", file=sys.stderr)
         return 1
 

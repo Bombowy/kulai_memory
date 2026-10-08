@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 from kulai_db import DbConfig
 
 
@@ -19,22 +18,20 @@ if str(SRC_ROOT) not in sys.path:
 
 from kulai_memory.database_safety import (
     DatabaseSafetyError,
-    MemoryFingerprint,
+    DatabaseSnapshot,
     OwnedTemporaryDatabase,
-    VectorFingerprint,
     async_database_url,
     create_owned_temporary_database,
     database_config,
     database_config_for_database,
+    database_snapshot_url,
     drop_owned_temporary_database,
-    memory_fingerprint,
     require_owned_database,
     restore_archive_to_owned_database,
     run_database_doctor,
     safe_error_message,
     validate_backup_doctor,
     validate_restore_source,
-    vector_fingerprint,
 )
 from kulai_memory.settings import get_settings
 
@@ -46,26 +43,21 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class RestoreVerificationResult:
+    database: str
+    snapshot: DatabaseSnapshot
+
+
 async def fingerprint_url(
-    url: str,
-) -> tuple[MemoryFingerprint, VectorFingerprint]:
-    engine = create_async_engine(url)
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(
-                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            )
-            memories = await memory_fingerprint(connection)
-            vectors = await vector_fingerprint(connection)
-            await connection.rollback()
-            return memories, vectors
-    finally:
-        await engine.dispose()
+    url: str, *, pre_migration_from: str | None = None,
+) -> DatabaseSnapshot:
+    return await database_snapshot_url(url, pre_migration_from=pre_migration_from)
 
 
 async def restore_smoke(
     backup: Path, *, pre_migration_from: str | None = None,
-) -> tuple[str, int, int]:
+) -> RestoreVerificationResult:
     config = database_config()
     validate_restore_source(config, app_env=get_settings().app_env)
     return await _restore_verified_source(
@@ -76,7 +68,7 @@ async def restore_smoke(
 async def restore_owned_database_backup(
     backup: Path, *, owned: OwnedTemporaryDatabase, config: DbConfig,
     pre_migration_from: str | None = None,
-) -> tuple[str, int, int]:
+) -> RestoreVerificationResult:
     """Restore only a marker-verified owned source; no CLI target override."""
 
     validate_restore_source(config, app_env=get_settings().app_env)
@@ -89,18 +81,17 @@ async def restore_owned_database_backup(
 
 async def _restore_verified_source(
     backup: Path, *, config: DbConfig, pre_migration_from: str | None = None,
-) -> tuple[str, int, int]:
+) -> RestoreVerificationResult:
     archive = backup.expanduser().resolve()
     if not archive.is_file():
         raise FileNotFoundError("Backup file does not exist.")
 
-    if pre_migration_from is not None:
-        validate_backup_doctor(
-            await run_database_doctor(async_url=config.async_url),
-            pre_migration_from=pre_migration_from,
-        )
+    validate_backup_doctor(
+        await run_database_doctor(async_url=config.async_url),
+        pre_migration_from=pre_migration_from,
+    )
 
-    source_before = await fingerprint_url(config.async_url)
+    source_before = await fingerprint_url(config.async_url, pre_migration_from=pre_migration_from)
     owned: OwnedTemporaryDatabase | None = None
     verified = False
     cleanup_error: Exception | None = None
@@ -111,19 +102,18 @@ async def _restore_verified_source(
         restored_url = async_database_url(database=owned.name, config=config)
         doctor = await run_database_doctor(async_url=restored_url)
         validate_backup_doctor(doctor, pre_migration_from=pre_migration_from)
-        restored = await fingerprint_url(restored_url)
-        source_after = await fingerprint_url(config.async_url)
-        if pre_migration_from is not None:
-            validate_backup_doctor(
-                await run_database_doctor(async_url=config.async_url),
-                pre_migration_from=pre_migration_from,
-            )
+        restored = await fingerprint_url(restored_url, pre_migration_from=pre_migration_from)
+        source_after = await fingerprint_url(config.async_url, pre_migration_from=pre_migration_from)
+        validate_backup_doctor(
+            await run_database_doctor(async_url=config.async_url),
+            pre_migration_from=pre_migration_from,
+        )
         if source_before != source_after:
             raise DatabaseSafetyError("Source database changed during restore verification.")
         if restored != source_before:
             raise DatabaseSafetyError("Restored database fingerprints do not match source.")
         verified = True
-        return owned.name, restored[0].count, restored[1].count
+        return RestoreVerificationResult(database=owned.name, snapshot=restored)
     finally:
         if owned is not None:
             try:
@@ -139,15 +129,21 @@ async def _restore_verified_source(
 
 
 async def run(backup: Path, *, pre_migration_from: str | None = None) -> int:
-    database, memories, vectors = await restore_smoke(
+    result = await restore_smoke(
         backup, pre_migration_from=pre_migration_from,
     )
     print(f"Mode: {'pre-migration' if pre_migration_from else 'strict'}")
     if pre_migration_from:
         print(f"Source/restored revision verified: {pre_migration_from}")
-    print(f"Restore verified in owned temporary database: {database}")
-    print(f"Memory rows verified: {memories}")
-    print(f"Vector rows verified: {vectors}")
+    print(f"Restore verified in owned temporary database: {result.database}")
+    print(f"Memory rows verified: {result.snapshot.memories.count}")
+    print(f"Vector rows verified: {result.snapshot.vectors.count}")
+    tombstones = result.snapshot.tombstones
+    if tombstones is None:
+        print("Tombstones verified: absent (pre-migration 0002)")
+    else:
+        print(f"Tombstone rows verified: {tombstones.count}")
+        print(f"Tombstone SHA-256: {tombstones.sha256}")
     print("Owned temporary database removed.")
     return 0
 

@@ -1,213 +1,351 @@
-﻿TASK 5D.1c — Safe pre-migration backup + restore verification
-Data: 2026-10-07
+﻿TASK 5D.1d — Tombstone backup/restore integrity
+Data: 2026-10-08
+Decyzja: OK DO COMMITA
 
-DECYZJA: OK DO COMMITA / GOTOWE DO PRE-MIGRATION BACKUP
+1. Start commit/status
+Repo: C:\Bombowy\Projekty\kulai_memory
+Branch: main, zgodny z origin/main.
+HEAD: 98e8dea386776452a0f45b98d48967a387f18e0a
+Commit: feat: add guarded pre-migration backup and restore verification
+Host był clean przed implementacją. Vendor clean.
+Nie wykonano commit ani push.
 
-1. Stan repo na początku
-HEAD: f9387410618b20b2051ec40506bfecbdbce41879
-Commit: feat: retire deleted Memory ingestion identities durably
-Branch: main, zgodny z origin/main; working tree clean.
-Vendor: 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
-Main revision: kulai_memory_0002. Local Alembic head: kulai_memory_0003.
+2. Main revision
+Odczytano faktyczny stan: kulai_memory_0003.
+Local Alembic head: kulai_memory_0003.
+db_doctor PASS przed i po walidacji.
+Nie wykonano migracji, downgrade, stamp ani zmian schematu.
+PostgreSQL 18.6; extension vector 0.8.6; embedding column vector(1024).
 
-2. Exact CLI contract
-.venv\Scripts\python.exe scripts\db_backup.py --output <PATH_POZA_REPO> --pre-migration-from kulai_memory_0002
-.venv\Scripts\python.exe scripts\db_restore_smoke.py <BACKUP> --pre-migration-from kulai_memory_0002
-Istniejący --force backupu pozostaje jedynym jawnym pozwoleniem na zastąpienie istniejącego pliku.
-Nie ma --force-doctor, --ignore-errors, environment bypass ani CLI override docelowej bazy.
-Public CLI używa wyłącznie configured DB. Owned source helpers wymagają ownership marker.
+3. Durable snapshot contract
+Wspólny DatabaseSnapshot jest frozen dataclass ze slots:
+revision: tuple[str, ...]
+memories: MemoryFingerprint
+vectors: VectorFingerprint
+tombstones: TombstoneFingerprint | None
+Backup, restore smoke i backup/restore drill korzystają ze wspólnego readera
+database_snapshot_url. Snapshot powstaje w jednej transakcji
+REPEATABLE READ, READ ONLY; po odczycie rollback, close i dispose.
+RestoreVerificationResult zawiera database oraz typed snapshot.
+Zaktualizowano dotychczasowych testowych konsumentów tuple API.
+CLI nie zmienia dotychczasowych flag ani strict default.
 
-3. Strict default behavior
-Bez nowej flagi backup oraz restored DB nadal wymagają pełnego db_doctor PASS.
-DoctorReport.ok i startup doctor Desktop/server nie zostały zmienione.
-Strict backup owned 0002 został realnie odrzucony bez utworzenia archive.
-Strict restore archive 0002 został realnie odrzucony; owned restore target sprzątnięto.
-Normalny strict backup/restore owned 0003 realnie PASS.
+4. TombstoneFingerprint contract
+Frozen dataclass ze slots:
+count: int
+sha256: str
+Fingerprint obejmuje dokładnie ingestion_id, memory_id, deleted_at.
+Query: ORDER BY ingestion_id.
+UUID serializowany kanonicznie jako string; deleted_at musi być timezone-aware,
+jest konwertowany do UTC i zapisywany z dokładnością do mikrosekund.
+Każdy rekord: JSON UTF-8, sort_keys=True, separators=(",", ":").
+Hash: SHA-256 kolejnych rekordów poprzedzonych 8-byte big-endian length.
+Publiczny wynik zawiera wyłącznie count i SHA-256.
+Tombstone fingerprint nie zawiera contentu, metadata, session data ani vectora.
 
-4. Pre-migration revision checks
-Wspólny validate_backup_doctor w host database_safety odczytuje faktyczne local heads.
-Wymagany dokładnie jeden head. Source musi różnić się od head.
-Obsługiwane wyłącznie znane przejście kulai_memory_0002 -> kulai_memory_0003.
-Doctor current revision musi być dokładnie [kulai_memory_0002].
-Doctor expected head musi być zgodny z local head.
-Source == head jest odrzucone z instrukcją użycia strict mode.
-Report musi być kompletny i bez duplikatów check names.
-Pre-migration backup ponawia doctor po pg_dump przed publikacją archive.
-Pre-migration restore sprawdza source przed restore, restored DB oraz source po restore.
-
-5. Exact allowed doctor failures
+5. 0002 absent semantics
+Wyłącznie jawny --pre-migration-from kulai_memory_0002 przy local head 0003,
+source/restored revision 0002 oraz faktycznie nieistniejącej tabeli:
+tombstones=None.
+Nie jest to fingerprint pustej istniejącej tabeli.
+Nadal obowiązuje dokładny reviewed zestaw dozwolonych doctor failures:
 alembic.current
 table.memory_ingestion_tombstones
 schema.memory_ingestion_tombstones
 constraint.memory_ingestion_tombstones
-Wymagany dokładnie ten zestaw FAIL; pozostałe checks muszą PASS.
-Tombstone schema musi wskazywać pustą listę columns, czyli brak pending tabeli.
+Dowolny dodatkowy FAIL, database.diagnostics, zły revision albo inny transition
+blokuje workflow. Nie dodano ogólnego bypassa.
 
-6. Unexpected failure rejection
-Każdy dodatkowy FAIL blokuje operację, w tym connection/read-only/version/vector/schema/unique/read-query.
-database.diagnostics jest odrzucone, również gdy raport jest niekompletny.
-Nie tolerujemy częściowo utworzonej lub wadliwej tombstone table, nieznanego transition,
-wielu heads, niezgodnej rewizji source/restored ani niezgodnego expected head.
-Unit tests sprawdzają osobno każdy unrelated failed check.
+6. 0003 zero/nonzero semantics
+Na strict 0003 tabela jest wymagana, a fingerprint zawsze rzeczywisty.
+Dla zero rows:
+count=0
+sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+Brak tabeli jest błędem strict verification.
+Dla nonzero rows liczony jest hash wszystkich trzech technicznych pól.
+Doctor sprawdza schema, snapshot sprawdza durable data; oba są wymagane.
 
-7. Dump safety
-Uzupełniono brakujący canonical guard lokalnego targetu i ścieżki poza repo.
-Reużywany validate_restore_source wymaga loopback oraz APP_ENV dev/development/local/test;
-odrzuca postgres/template0/template1 oraz owned temporary prefixes dla public CLI.
-Owned helper weryfikuje base config oraz marker source; nie jest publicznym obejściem.
-Output poza repo, bez symlink/junction w path components, regular file, istniejący parent.
-No overwrite bez --force.
-Zachowane: pg_dump major-version guard, custom format, no-owner, no-privileges,
-password wyłącznie PGPASSWORD, własny .partial, os.replace, cleanup własnego .partial,
-non-empty archive oraz SHA-256.
-Klienci PostgreSQL 18.6; main PostgreSQL 18.6. Bez instalacji lub modyfikacji systemu.
+7. Strict restore verification
+Full doctor PASS wymagany dla source przed restore, restored DB i source po restore.
+Porównania:
+source Memory == restored Memory
+source vectors == restored vectors
+source tombstones == restored tombstones
+source revision == restored revision
+source before == source after dla kompletnego snapshotu.
+Mismatch lub mutacja źródła oznacza controlled failure / non-zero CLI.
+Restore odbywa się wyłącznie w owned temporary DB z ownership guard.
+Nie wykonuje migracji restored DB.
+Cleanup działa także po failure i cancellation.
 
-8. Restore safety
-Istniejące create_owned_temporary_database / restore_archive_to_owned_database /
-drop_owned_temporary_database oraz ownership guard zostały reużyte.
-Restore nie przyjmuje target DB z CLI i nie używa --clean.
-Restored DB pozostaje na source revision 0002; smoke nie wykonuje upgrade.
-Memory/vector fingerprints restored == source_before.
-Source_before == source_after, wraz z końcowym pre-migration doctor/revision check.
-Mismatch lub cleanup failure kończy operację non-zero.
-Unit tests potwierdzają cleanup przy błędzie i cancellation.
-Backup nie jest usuwany przez restore.
+8. Pre-migration regression
+Real owned 0002 backup/restore PASS:
+2 synthetic Memories, 2 synthetic vectors, tombstones=None.
+Restored revision pozostał 0002.
+Source/restored fingerprints zgodne; source unchanged; owned target usunięty.
+Strict mode na 0002 nadal odmawia działania.
+Po upgrade tylko owned source do 0003 strict backup/restore PASS:
+Memory/vector fingerprints zachowane, tombstone count=0 z rzeczywistym hashem.
+Main DB nie była używana jako fixture target.
 
-9. Owned 0002 real backup
-PASS. Owned source zmigrowano tylko do kulai_memory_0002.
-Utworzono 2 synthetic Memories oraz 2 synthetic vectors wyłącznie w owned source.
-Archive non-empty; size=8115 bytes w focused real run.
-SHA-256=51123bceacc92f23dd7557b561d532f39153916e5af8d093c66ec3d82baa6fd2
-Późniejszy pełny integration suite ponownie przeszedł ten sam flow na nowym owned source.
+9. Owned tombstone backup/restore
+Owned 0003 fixture powstaje przez production Memory create,
+vector upsert oraz production delete_memory.
+Drill zachowuje 2 synthetic Memories, 1 synthetic vector, 1 tombstone
+usuniętej synthetic Memory.
+Strict backup/restore z nonzero tombstone PASS.
+Source/restored pełne snapshoty identyczne.
+Retired canonical Memory oraz jej vector nie istnieją.
+Source pozostaje bez zmian; owned source/targets zostały usunięte.
+Canonical backup/restore drill również PASS.
 
-10. Owned 0002 real restore
-PASS. Strict restore 0002 został odrzucony, explicit pre-migration restore przeszedł.
-Expected doctor failure set dokładnie zgodny z whitelistą.
-Restored Memory count=2, vector count=2.
-Source unchanged=true; restored fingerprints match=true.
-Owned restore targets i owned source zostały usunięte istniejącym guardem.
+10. Behavioral retired replay after restore
+Na osobnym owned restored DB po faktycznym pg_restore:
+same ingestion_id + original synthetic content -> MemoryIngestionRetiredError
+same ingestion_id + changed synthetic content -> MemoryIngestionRetiredError
+Resurrected canonical Memory count = 0.
+Snapshot po odrzuconych replayach identyczny z restored baseline.
+To jest behavioral proof zachowania replay protection po restore,
+nie tylko porównanie hash/count.
 
-11. Restored revision
-Owned pre-migration restore: kulai_memory_0002.
-Main backup restore smoke: kulai_memory_0002.
-Nie migrowano restored 0002 podczas tych smoke.
+11. Fresh ingestion after restore
+Fresh ingestion_id -> CREATED.
+Commit wykonany przez caller; canonical Memory potwierdzona w nowej session.
+Existing tombstone i vector state bez zmian.
+Wszystkie te zapisy wykonano wyłącznie w owned fixture DB.
 
-12. Owned source/restored fingerprints
-Memory count=2; source/restored SHA-256:
-2ed9867e5fa87fcb4382fc048cf884c5041ee63431b25ff725a226bcfe6ff2e6
-Vector count=2; source/restored SHA-256:
-40f4bdd922b51f8ffa3a5f7dfed5823f5d88f0fb20c60c79556482117d792cc9
-Dotyczy focused owned real run; dane są syntetyczne.
-Równość ponownie potwierdzona w pełnym suite.
+12. Tamper mismatch regression
+Real owned restored DB: trzy osobne tamper cases:
+zmiana ingestion_id,
+zmiana memory_id,
+zmiana deleted_at.
+W każdym case:
+Memory fingerprint unchanged,
+vector fingerprint unchanged,
+tombstone count unchanged,
+tombstone SHA-256 different.
+Canonical restore verification odrzuca mismatch bez ujawnienia danych.
+Owned target cleanup PASS, source unchanged, backup zachowany.
+Unit regression dodatkowo wykrywa source tombstone mutation podczas restore.
+Backup sprawdza pełny source snapshot przed/po dump:
+mutacja tombstone blokuje atomic publication i zachowuje wcześniejszy archive.
 
-13. Strict owned 0003 backup/restore
-PASS. Upgrade wykonano wyłącznie na owned source po udowodnieniu backup/restore 0002.
-Doctor 0003 full PASS; normalny strict backup PASS; strict restore PASS.
-Restored revision=kulai_memory_0003, counts=2/2, fingerprints match/source unchanged.
-Main nigdy nie była targetem migracji.
+13. Privacy
+CLI/report ujawniają wyłącznie counts, hashes, revision, status i backup path/size.
+Nie wypisano real main tombstone ingestion_id, memory_id ani deleted_at.
+Nie wypisano Memory contentu, metadata, vector values, DB URL, password
+ani SQL parameters.
+Fingerprint error i infrastructure error mapping są controlled.
+Drill nie przepuszcza raw RuntimeError message do publicznego outputu.
+Testy używają synthetic sentinels i potwierdzają brak wycieku.
+Delete/ingestion/indexing semantics pozostają bez zmian.
 
-14. Unit/focused tests
-Focused backup/restore/database safety + reproducibility + tombstone + application boundaries:
-124 passed, 1 skipped.
-Coverage: strict defaults, exact CLI, local head checks, revision checks, exact allowed gap,
-każdy extra FAIL, diagnostics, incomplete/duplicate report, partial tombstone table,
-remote/prod/protected/temp targets, path/force/link guards, dump revision-change cleanup,
-restore revision mismatch, fingerprints mismatch, source mutation/revision change,
-failure/cancellation cleanup, cleanup failure oraz sentinel privacy.
-Jedyny unit SKIP: realny OS symlink wymaga niedostępnego uprawnienia Windows.
-Deterministyczne testy symlink i junction guards bez uprawnienia OS obydwa PASS.
+14. Main Memory count before/after
+Przed taskiem: 7.
+Po testach, przed final backup: 7.
+Po real strict backup + restore smoke: 7.
 
-15. PostgreSQL integration tests
-Nowy focused owned 0002/0003 backup/restore: 1 passed.
-Pełny backend/tests/integration z:
+15. Main vector count before/after
+Przed taskiem: 7.
+Po testach, przed final backup: 7.
+Po real strict backup + restore smoke: 7.
+
+16. Main tombstone count before/after
+Przed taskiem: 1.
+Po testach, przed final backup: 1.
+Po real strict backup + restore smoke: 1.
+Nie usunięto testowego tombstone z main.
+
+17. Three main fingerprints before/after
+Memory before:
+4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
+Memory after:
+4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
+
+Vector before:
+bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
+Vector after:
+bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
+
+Tombstone before:
+33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Tombstone after:
+33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+
+Wszystkie trzy fingerprints identyczne także po testach przed backupem.
+Revision pozostaje 0003.
+Zero main data writes przez ten task.
+
+18. Real strict main backup
+Canonical scripts/db_backup.py, strict default, bez pre-migration flag,
+bez --force; nowy output poza repo.
+Path:
+C:\Bombowy\Backups\kulai_memory\kulai_memory_0003_tombstones_20261008T061936Z_7a79cd194f954c4181e04bb22fb3ffca.dump
+Size: 46248 bytes.
+SHA-256:
+18520c7b21918be927ac041e5ba1ece99b33f831ec3be33f996fb7378e173450
+pg_dump: 18.6.
+Exit code: 0.
+Custom format, no-owner, no-privileges, password przez PGPASSWORD.
+Atomic temporary output + os.replace, source before/after full snapshot gate.
+Backup istnieje i został zachowany.
+
+19. Real main restore
+Canonical scripts/db_restore_smoke.py tego backupu, strict default.
+Exit code: 0.
+Restored Memory count: 7.
+Restored vector count: 7.
+Restored tombstone count: 1.
+Wszystkie trzy restored fingerprints == source fingerprints.
+Full doctor restored PASS.
+Source before == source after.
+Owned temporary restore DB usunięta.
+Backup zachowany.
+
+20. Backend tests
+Full backend bez opt-ins:
+261 passed, 45 skipped.
+Obejmuje deletion, tombstones, ingestion, indexing, retrieval,
+desktop/server i application boundaries.
+Jedno istniejące DeprecationWarning Starlette / AnyIO BlockingPortal.
+Nie uruchamiano ponownie real Whisper inference: STT nie zmieniano.
+
+21. Root tests
+Focused fingerprint/safety/backup/restore/backfill:
+164 passed, 1 skipped.
+Full root:
+200 passed, 1 skipped.
+Skip: istniejący test real symlink na Windows bez wymaganej możliwości tworzenia;
+deterministic symlink/junction safety coverage pozostaje PASS.
+Regresje Memory/vector, default strict guard, pre-migration revision/failure
+guards, output safety, cancellation i cleanup PASS.
+
+22. PostgreSQL integrations
+Focused real pre-migration + tombstone backup:
+6 passed.
+Full backend/tests/integration:
+40 passed, 5 skipped.
 KULAI_RUN_POSTGRES_INTEGRATION=1
 KULAI_RUN_OLLAMA_INTEGRATION=1
 KULAI_RUN_WHISPER_INTEGRATION=0
-Wynik: 35 passed, 5 skipped.
-Wyłączone 5 Whisper tests; STT nie było zmieniane.
-Przeszły także real migration/tombstone/delete/indexing races, ingestion, backfill,
-retrieval i embedding regressions. Fixtures wyłącznie owned DB.
+Nowe real cases: strict tombstone restore + behavioral replay/fresh ingestion,
+3 tamper cases, canonical drill.
+Existing real ingestion/deletion/indexing/backfill/retrieval regressions PASS.
+Owned test databases only; main służyła wyłącznie do read-only safety snapshots.
+Golden dataset/queries/thresholds nietknięte.
+Frozen dataset hash:
+73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
+Hash potwierdzony po testach i plik nie został zmieniony.
 
-16. Backend full
-261 passed, 40 skipped (opt-in integration wyłączone w zwykłym suite).
-Jedno istniejące DeprecationWarning Starlette/AnyIO BlockingPortal.
-Desktop/WebSocket i application boundary regressions PASS.
+23. pip check
+.venv Python 3.13.15, SDK potwierdzony przez PyCharm get_python_environment.
+python -m pip check: PASS — No broken requirements found.
+Nie zmieniono dependencies ani ich wersji.
 
-17. Root full
-179 passed, 1 skipped.
-Test mocks dostosowano do nowego opcjonalnego keyword bez zmiany backfill semantics.
-Reproducibility oraz exporter regressions PASS.
+24. git diff --check
+PASS, również po zapisaniu raportu.
+Git informuje o normalizacji LF/CRLF; brak whitespace errors.
 
-18. pip check
-PASS: No broken requirements found.
-Runtime/test interpreter: project .venv, Python 3.13.15.
-Nie zmieniano dependency versions.
+25. db_doctor
+Main full PASS, head/current 0003.
+Connection, transaction_read_only, PostgreSQL version, vector extension,
+Memory schema, ingestion unique constraint, vector dimension,
+tombstone table/schema/constraint i read query PASS.
+PASS także po strict final backup/restore.
 
-19. git diff --check
-PASS. Końcowa kontrola obejmuje również wynik.txt.
-Git informuje o LF -> CRLF zgodnie z lokalnym ustawieniem; brak whitespace errors.
+26. Vendor status
+SHA: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Working tree clean, submodule gitlink bez zmian.
+Nie edytowano vendora.
 
-20. Main revision / doctor
-Przed i po: kulai_memory_0002.
-Local head: kulai_memory_0003.
-scripts/db_doctor.py exit code=1 jest OCZEKIWANY; dokładnie cztery known pending FAIL.
-Connection/read-only/PostgreSQL/vector extension/memories schema/ingestion unique/vector dimension/read query PASS.
-DB vector dimension=1024, configured dimension=1024; vector extension=0.8.6.
-Nie maskowano mismatch i nie migrowano main.
+27. Exact changed files
+README.md
+backend/src/kulai_memory/database_safety.py
+backend/tests/integration/test_pre_migration_backup_postgres.py
+backend/tests/integration/test_tombstone_backup_postgres.py (new)
+scripts/db_backup.py
+scripts/db_backup_restore_drill.py
+scripts/db_restore_smoke.py
+tests/test_database_tools.py
+tests/test_index_memories.py
+tests/test_pre_migration_backup.py
+tests/test_tombstone_fingerprint.py (new)
+wynik.txt
 
-21. Main counts/fingerprints przed/po całym taskiem
-Memory count: 7 -> 7
-Vector count: 7 -> 7
-Memory SHA-256 przed:
-4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
-Memory SHA-256 po:
-4951aef1f720f5146a9b0dd09d94c351f6f3cc2d2263af28263cedd7da696fdc
-Vector SHA-256 przed:
-bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
-Vector SHA-256 po:
-bcef3c50792b136dd42b7c85b26541812ca9807836ad9ffe5ac344c3faace5d5
-Oba fingerprinty identyczne również z odczytem na samym początku taska.
-Zero main DB writes; brak backfill/reindex/delete/update/schema changes.
+Git status: powyższe istniejące pliki modified; dwa nowe test files untracked.
+Branch main, bez nowego commit/push.
+Application core, persistence/delete/ingestion implementation, migrations,
+golden dataset, Android i WebSocket protocol bez zmian.
 
-22. Actual main pre-migration backup retained
-TAK — canonical public CLI parsers/main wykonały explicit backup oraz restore smoke, oba exit=0.
-Backup location:
-C:\Users\patry\AppData\Local\Temp\kulai_memory_pre_migration_0002_20261007T122316Z_723f5e3f7c0a4cde922229371124f6e4.dump
-Size: 44617 bytes
-SHA-256: 9a2786fab1df536584ab2bf12eca6083611278c6fbe379275aa31e6357959a9d
-pg_dump: 18.6
-Main archive restored as 0002, Memory/vector counts=7/7, oba fingerprinty match.
-Owned restore DB usunięto i source pozostaje unchanged.
-Archive zachowano; nie usuwano go po sukcesie. Backup jest poza repo i nie jest stagingowany.
+28. Proposed commit message
+feat: verify tombstone integrity in database backup and restore
 
-23. Vendor status
-SHA: 720d0f26c75ba4af24d395f98f15a37e4bd5067e
-Working tree clean, gitlink unchanged.
-Nie modyfikowano reusable modules.
+29. Known limitations
+Fingerprint verification czyta wszystkie durable rows; koszt rośnie z bazą.
+Concurrent zmiana source podczas dump/restore powoduje kontrolowany failure;
+należy powtórzyć w stabilnym stanie source.
+Restore smoke porównuje archive z bieżącym source, nie z osobnym persisted
+manifestem starego backupu. Backup wcześniejszego stanu wymaga odpowiadającego
+mu verification source.
+Jawne absent semantics dotyczą wyłącznie reviewed 0002 -> 0003 transition.
+Nie zmieniano migration 0003 ani delete/ingestion semantics.
 
-24. Changed files / final git status
-M README.md
-M backend/src/kulai_memory/database_safety.py
-M scripts/db_backup.py
-M scripts/db_restore_smoke.py
-M tests/test_database_tools.py
-M tests/test_index_memories.py
-M wynik.txt
-?? backend/tests/integration/test_pre_migration_backup_postgres.py
-?? tests/test_pre_migration_backup.py
-Zmiany wyłącznie backup/restore/safety/docs/tests/report.
-Nie zmieniano application core, Desktop/server/Android, schema lub migration graph.
-README opisuje strict default, exact pending gap i osobną manualną migrację.
+30. Decyzja
+OK DO COMMITA
 
-25. Proposed commit message
-feat: add guarded pre-migration backup and restore verification
+Tombstones są częścią complete durable backup/restore verification.
+Real restore zachowuje techniczne identity i replay protection.
+0002 absent oraz strict 0003 zero/nonzero workflows PASS.
+Tamper przy tym samym count jest wykrywany.
+Main 7/7/1, revision i trzy fingerprints bez zmian.
+Real strict main backup + canonical restore PASS; backup zachowany.
+Full regressions PASS; vendor clean.
+Nie wykonano commit ani push.
 
-26. Quality gate / remaining action
-OK DO COMMITA / GOTOWE DO PRE-MIGRATION BACKUP
-Realny pre-migration backup i restore main wykonano, zweryfikowano i archive zachowano.
-Default strict behavior nie został osłabiony; brak generic doctor bypass.
-Main DB jest nadal 0002, bez zmian counts/fingerprints.
-Manualna migracja main do 0003 pozostaje osobną czynnością po review.
-Nie commitowano, nie pushowano, nie migrowano main.
-Raport nie zawiera real Memory content, vector values, metadata, DB password,
-full DB URL ani SQL parameters.
+KOREKTA DOKUMENTACJI PRZED COMMIT TASK 5D.1d
+Data: 2026-10-08
+Status: OK DO COMMITA
+
+Zakres: poprawiono wyłącznie stale wording w sekcji Atomic Memory deletion
+w README.md oraz dopisano niniejszy raport. Pełny wcześniejszy raport TASK
+5D.1d i wszystkie jego niezacommitowane zmiany pozostają zachowane.
+
+Usunięto nieaktualne informacje o main DB pozostającej na 0002, oczekiwaniu
+na manual migration, doctor mismatch oraz blokadzie Desktop/server wynikającej
+z braku tombstone schema.
+
+README opisuje teraz aktualny stan, potwierdzony wcześniej w TASK 5D.1d:
+- main DB = kulai_memory_0003;
+- local Alembic head = kulai_memory_0003;
+- db_doctor PASS;
+- tombstone schema istnieje;
+- real create/duplicate/index/retrieve/delete/stale-replay lifecycle PASS;
+- strict 0003 backup/restore PASS: 7 Memory / 7 vectors / 1 tombstone,
+  matching fingerprints;
+- Desktop/server nie są już blokowane brakiem tego schematu.
+Zachowano informację, że aplikacja nie wykonuje automatycznych migracji,
+stamp ani diagnostic bypass.
+
+Walidacja tej korekty:
+git diff --check: PASS, również po dopisaniu raportu.
+git status --short: wykonany; dotychczasowe zmiany TASK 5D.1d pozostają obecne.
+Git wyświetla wyłącznie informacyjne ostrzeżenia LF/CRLF, bez whitespace errors.
+Nie uruchamiano ponownie testów ani DB smoke w tym dokumentacyjnym zakresie.
+
+Końcowy git status --short:
+ M README.md
+ M backend/src/kulai_memory/database_safety.py
+ M backend/tests/integration/test_pre_migration_backup_postgres.py
+ M scripts/db_backup.py
+ M scripts/db_backup_restore_drill.py
+ M scripts/db_restore_smoke.py
+ M tests/test_database_tools.py
+ M tests/test_index_memories.py
+ M tests/test_pre_migration_backup.py
+ M wynik.txt
+?? backend/tests/integration/test_tombstone_backup_postgres.py
+?? tests/test_tombstone_fingerprint.py
+
+Pliki kodu i testów na powyższej liście są wcześniejszymi zmianami TASK 5D.1d;
+ta korekta ich nie edytowała. Migrations, vendor i DB bez zmian.
+Nie wykonano commit ani push.

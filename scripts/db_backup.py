@@ -23,6 +23,7 @@ from kulai_memory.database_safety import (
     OwnedTemporaryDatabase,
     database_config,
     database_config_for_database,
+    database_snapshot_url,
     find_postgres_tool,
     postgres_connection,
     postgres_tool_version,
@@ -77,6 +78,9 @@ async def _create_backup(
     if version_major(pg_dump_version) < version_major(server_version):
         raise DatabaseSafetyError("pg_dump is older than the PostgreSQL server.")
 
+    source_before = await database_snapshot_url(
+        config.async_url, pre_migration_from=pre_migration_from,
+    )
     connection = postgres_connection(config)
     temporary = output.parent / f".{output.name}.{uuid4().hex}.partial"
     try:
@@ -96,11 +100,15 @@ async def _create_backup(
             raise DatabaseSafetyError(f"pg_dump failed with exit code {completed.returncode}.")
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise DatabaseSafetyError("pg_dump did not create a non-empty backup.")
-        if pre_migration_from is not None:
-            validate_backup_doctor(
-                await run_database_doctor(async_url=config.async_url),
-                pre_migration_from=pre_migration_from,
-            )
+        validate_backup_doctor(
+            await run_database_doctor(async_url=config.async_url),
+            pre_migration_from=pre_migration_from,
+        )
+        source_after = await database_snapshot_url(
+            config.async_url, pre_migration_from=pre_migration_from,
+        )
+        if source_after != source_before:
+            raise DatabaseSafetyError("Source database changed during backup; archive was not published.")
         os.replace(temporary, output)
     finally:
         if temporary.exists():

@@ -44,6 +44,15 @@ def changed(original, name, **kwargs):
     ))
 
 
+def snapshot(*, strict=False):
+    return safety.DatabaseSnapshot(
+        revision=(HEAD if strict else SOURCE,),
+        memories=safety.MemoryFingerprint(2, "a" * 64),
+        vectors=safety.VectorFingerprint(1, "b" * 64),
+        tombstones=safety.TombstoneFingerprint(0, "c" * 64) if strict else None,
+    )
+
+
 @pytest.fixture(autouse=True)
 def local_settings(monkeypatch):
     monkeypatch.setattr(safety, "expected_alembic_heads", lambda: (HEAD,))
@@ -139,6 +148,9 @@ def install_backup(monkeypatch, doctor_report):
     monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
     monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
     monkeypatch.setattr(db_backup, "run_postgres_tool", dump)
+    async def fingerprint(*args, **kwargs):
+        return snapshot(strict=kwargs.get("pre_migration_from") is None)
+    monkeypatch.setattr(db_backup, "database_snapshot_url", fingerprint)
     return calls
 
 
@@ -239,13 +251,13 @@ def install_restore(monkeypatch, tmp_path, *, reports=None, fingerprints=None, r
         safety.RESTORE_DATABASE_PREFIX + "a" * 32,
         "kulai-memory-restore:" + "b" * 32, "restore",
     )
-    before = (safety.MemoryFingerprint(2, "a" * 64), safety.VectorFingerprint(1, "b" * 64))
+    before = snapshot(strict=reports is not None and reports[0].ok)
     doctor_reports = iter(reports if reports is not None else [report(), report(), report()])
     fingerprint_results = iter(fingerprints if fingerprints is not None else [before, before, before])
     async def doctor(**kwargs):
         calls.append("doctor")
         return next(doctor_reports)
-    async def fingerprint(url):
+    async def fingerprint(url, *, pre_migration_from):
         calls.append("fingerprint")
         return next(fingerprint_results)
     async def create(**kwargs):
@@ -267,28 +279,28 @@ def install_restore(monkeypatch, tmp_path, *, reports=None, fingerprints=None, r
 
 def test_restore_pre_migration_success_retains_archive_and_cleans_db(tmp_path, monkeypatch):
     archive, owned, before, calls = install_restore(monkeypatch, tmp_path)
-    assert asyncio.run(db_restore_smoke.restore_smoke(archive, pre_migration_from=SOURCE)) == (owned.name, 2, 1)
+    assert asyncio.run(db_restore_smoke.restore_smoke(archive, pre_migration_from=SOURCE)) == db_restore_smoke.RestoreVerificationResult(owned.name, before)
     assert calls == ["doctor", "fingerprint", "create", "restore", "doctor", "fingerprint", "fingerprint", "doctor", "drop"]
     assert archive.is_file()
 
 
 def test_strict_restore_requires_full_pass(tmp_path, monkeypatch):
-    archive, _, _, calls = install_restore(monkeypatch, tmp_path, reports=[report()])
+    archive, _, _, calls = install_restore(monkeypatch, tmp_path, reports=[report(current=HEAD, strict=True), report()])
     with pytest.raises(safety.DatabaseSafetyError, match="full doctor PASS"):
         asyncio.run(db_restore_smoke.restore_smoke(archive))
     assert calls[-1] == "drop"
 
 
 def test_strict_restore_success(tmp_path, monkeypatch):
-    archive, owned, _, calls = install_restore(monkeypatch, tmp_path, reports=[report(current=HEAD, strict=True)])
-    assert asyncio.run(db_restore_smoke.restore_smoke(archive)) == (owned.name, 2, 1)
+    archive, owned, before, calls = install_restore(monkeypatch, tmp_path, reports=[report(current=HEAD, strict=True)] * 3)
+    assert asyncio.run(db_restore_smoke.restore_smoke(archive)) == db_restore_smoke.RestoreVerificationResult(owned.name, before)
     assert calls[-1] == "drop"
 
 
 @pytest.mark.parametrize("failure", ["source-revision", "restored-revision", "extra-check", "fingerprint", "source-mutation", "source-revision-change"])
 def test_restore_rejects_mismatch_and_always_cleans_owned_target(tmp_path, monkeypatch, failure):
-    baseline = (safety.MemoryFingerprint(2, "a" * 64), safety.VectorFingerprint(1, "b" * 64))
-    modified = (baseline[0], safety.VectorFingerprint(1, "c" * 64))
+    baseline = snapshot()
+    modified = replace(baseline, vectors=safety.VectorFingerprint(1, "c" * 64))
     reports = [report(), report(), report()]
     fingerprints = [baseline, baseline, baseline]
     if failure == "source-revision":
@@ -329,6 +341,38 @@ def test_cleanup_failure_cannot_report_success(tmp_path, monkeypatch):
     with pytest.raises(safety.DatabaseSafetyError, match="Safe cleanup failed") as caught:
         asyncio.run(db_restore_smoke.restore_smoke(archive, pre_migration_from=SOURCE))
     assert PRIVATE not in str(caught.value)
+
+
+@pytest.mark.parametrize("position", [1, 2])
+def test_strict_restore_tombstone_mismatch_or_source_mutation_rejected(tmp_path, monkeypatch, position):
+    before = replace(snapshot(strict=True), tombstones=safety.TombstoneFingerprint(1, "c" * 64))
+    modified = replace(before, tombstones=safety.TombstoneFingerprint(1, "d" * 64))
+    assert modified.memories == before.memories and modified.vectors == before.vectors
+    assert modified.tombstones.count == before.tombstones.count
+    states = [before, before, before]
+    states[position] = modified
+    archive, _, _, calls = install_restore(
+        monkeypatch, tmp_path, reports=[report(current=HEAD, strict=True)] * 3,
+        fingerprints=states,
+    )
+    with pytest.raises(safety.DatabaseSafetyError, match="changed|do not match"):
+        asyncio.run(db_restore_smoke.restore_smoke(archive))
+    assert calls[-1] == "drop"
+
+
+def test_backup_tombstone_change_blocks_publication_and_keeps_previous_archive(tmp_path, monkeypatch):
+    install_backup(monkeypatch, report(current=HEAD, strict=True))
+    before = replace(snapshot(strict=True), tombstones=safety.TombstoneFingerprint(1, "c" * 64))
+    states = iter([before, replace(before, tombstones=safety.TombstoneFingerprint(1, "d" * 64))])
+    async def fingerprint(*args, **kwargs):
+        return next(states)
+    monkeypatch.setattr(db_backup, "database_snapshot_url", fingerprint)
+    archive = tmp_path / "retained.dump"
+    archive.write_bytes(b"previous user backup")
+    with pytest.raises(safety.DatabaseSafetyError, match="archive was not published"):
+        asyncio.run(db_backup.create_backup(archive, force=True))
+    assert archive.read_bytes() == b"previous user backup"
+    assert list(tmp_path.iterdir()) == [archive]
 
 
 @pytest.mark.parametrize("module,arguments", [

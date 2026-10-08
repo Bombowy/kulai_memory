@@ -32,7 +32,10 @@ async def _exercise(tmp_path, monkeypatch):
     async def observe_doctor(*, async_url):
         report = await original_doctor(async_url=async_url)
         if async_url != url:
-            fingerprints = await db_restore_smoke.fingerprint_url(async_url)
+            current = next(c.value for c in report.checks if c.name == "alembic.current")
+            fingerprints = await db_restore_smoke.fingerprint_url(
+                async_url, pre_migration_from="kulai_memory_0002" if current == ["kulai_memory_0002"] else None,
+            )
             observed_restores.append((report, fingerprints))
         return report
 
@@ -61,8 +64,8 @@ async def _exercise(tmp_path, monkeypatch):
         finally:
             await engine.dispose()
 
-        before = await db_restore_smoke.fingerprint_url(url)
-        assert before[0].count == before[1].count == 2
+        before = await db_restore_smoke.fingerprint_url(url, pre_migration_from="kulai_memory_0002")
+        assert before.memories.count == before.vectors.count == 2 and before.tombstones is None
         pending = await run_database_doctor(async_url=url)
         assert not pending.ok
         assert {c.name for c in pending.checks if not c.ok} == PRE_MIGRATION_FAILURES
@@ -85,42 +88,43 @@ async def _exercise(tmp_path, monkeypatch):
         # Even a valid 0002 archive is rejected by the default restore doctor.
         with pytest.raises(DatabaseSafetyError):
             await db_restore_smoke.restore_owned_database_backup(archive, owned=source, config=config)
-        assert not observed_restores[-1][0].ok
-
-        restored_name, memories, vectors = await db_restore_smoke.restore_owned_database_backup(
+        result = await db_restore_smoke.restore_owned_database_backup(
             archive, owned=source, config=config, pre_migration_from="kulai_memory_0002",
         )
-        assert memories == vectors == 2
-        assert not await database_exists(restored_name, config=config)
+        assert result.snapshot == before
+        assert not await database_exists(result.database, config=config)
         restored_doctor, restored_fingerprints = observed_restores[-1]
         checks = {c.name: c for c in restored_doctor.checks}
         assert checks["alembic.current"].value == ["kulai_memory_0002"]
         assert {c.name for c in restored_doctor.checks if not c.ok} == PRE_MIGRATION_FAILURES
         assert restored_fingerprints == before
-        assert await db_restore_smoke.fingerprint_url(url) == before
+        assert await db_restore_smoke.fingerprint_url(url, pre_migration_from="kulai_memory_0002") == before
         assert archive.is_file()
         print(json.dumps({
             "owned_0002": "PASS", "restored_revision": "kulai_memory_0002",
             "backup_size": size, "backup_sha256": digest,
-            "memory_source_restored": asdict(before[0]), "vector_source_restored": asdict(before[1]),
+            "memory_source_restored": asdict(before.memories), "vector_source_restored": asdict(before.vectors),
+            "tombstones": None,
             "source_unchanged": True, "restore_target_removed": True,
         }))
 
         # Only the owned fixture is upgraded. Main is never a migration target.
         await asyncio.to_thread(_upgrade_database, url, "kulai_memory_0003")
         assert (await run_database_doctor(async_url=url)).ok
-        assert await db_restore_smoke.fingerprint_url(url) == before
+        upgraded = await db_restore_smoke.fingerprint_url(url)
+        assert upgraded.memories == before.memories and upgraded.vectors == before.vectors
+        assert upgraded.tombstones is not None and upgraded.tombstones.count == 0
         strict_archive = tmp_path / "owned_0003.dump"
         await db_backup.create_owned_database_backup(strict_archive, force=False, owned=source, config=config)
-        restored_name, memories, vectors = await db_restore_smoke.restore_owned_database_backup(
+        result = await db_restore_smoke.restore_owned_database_backup(
             strict_archive, owned=source, config=config,
         )
         strict_report, strict_fingerprints = observed_restores[-1]
-        assert strict_report.ok and strict_fingerprints == before
+        assert strict_report.ok and strict_fingerprints == upgraded
         assert next(c.value for c in strict_report.checks if c.name == "alembic.current") == ["kulai_memory_0003"]
-        assert memories == vectors == 2
-        assert await db_restore_smoke.fingerprint_url(url) == before
-        assert not await database_exists(restored_name, config=config)
+        assert result.snapshot == upgraded
+        assert await db_restore_smoke.fingerprint_url(url) == upgraded
+        assert not await database_exists(result.database, config=config)
         print("owned_0003.strict_backup=PASS;strict_restore=PASS;fingerprints_match=true;source_unchanged=true")
     finally:
         await drop_owned_temporary_database(source, config=config)

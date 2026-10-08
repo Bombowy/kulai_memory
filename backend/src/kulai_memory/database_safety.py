@@ -184,6 +184,26 @@ class VectorFingerprint:
 
 
 @dataclass(frozen=True, slots=True)
+class TombstoneFingerprint:
+    count: int
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseSnapshot:
+    """Complete durable state; None denotes the absent, pre-migration table."""
+
+    revision: tuple[str, ...]
+    memories: MemoryFingerprint
+    vectors: VectorFingerprint
+    tombstones: TombstoneFingerprint | None
+
+    def __post_init__(self) -> None:
+        if self.tombstones is None and self.revision != ("kulai_memory_0002",):
+            raise DatabaseSafetyError("Tombstone absence is valid only for the 0002 snapshot.")
+
+
+@dataclass(frozen=True, slots=True)
 class OwnedTemporaryDatabase:
     """Capability identifying one temporary database owned by this process."""
 
@@ -444,6 +464,84 @@ async def vector_fingerprint(connection: AsyncConnection) -> VectorFingerprint:
         digest.update(canonical)
         count += 1
     return VectorFingerprint(count=count, sha256=digest.hexdigest())
+
+
+async def tombstone_fingerprint(connection: AsyncConnection) -> TombstoneFingerprint:
+    """Hash technical identities and UTC timestamps without exposing rows."""
+
+    digest = hashlib.sha256()
+    count = 0
+    result = await connection.stream(text(
+        "SELECT ingestion_id, memory_id, deleted_at "
+        "FROM memory_ingestion_tombstones ORDER BY ingestion_id"
+    ))
+    async for row in result:
+        deleted_at = row._mapping["deleted_at"]
+        if not isinstance(deleted_at, datetime) or deleted_at.utcoffset() is None:
+            raise DatabaseSafetyError("Tombstone timestamp must be timezone-aware.")
+        canonical = json.dumps(
+            {
+                "ingestion_id": str(row._mapping["ingestion_id"]),
+                "memory_id": str(row._mapping["memory_id"]),
+                "deleted_at": deleted_at.astimezone(UTC).isoformat(timespec="microseconds"),
+            },
+            ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+        ).encode("utf-8")
+        digest.update(len(canonical).to_bytes(8, "big"))
+        digest.update(canonical)
+        count += 1
+    return TombstoneFingerprint(count=count, sha256=digest.hexdigest())
+
+
+async def database_snapshot_url(
+    url: str, *, pre_migration_from: str | None = None,
+) -> DatabaseSnapshot:
+    """Read all durable tables in one consistent, read-only transaction.
+
+    Backup/restore callers additionally require validate_backup_doctor. Absence
+    is represented only for the explicit, known 0002 -> 0003 transition.
+    """
+
+    engine = create_async_engine(url)
+    try:
+        async with engine.connect() as connection:
+            try:
+                await connection.execute(text(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                ))
+                revisions = tuple((await connection.execute(text(
+                    "SELECT version_num FROM alembic_version ORDER BY version_num"
+                ))).scalars())
+                present = await connection.scalar(text(
+                    "SELECT to_regclass('public.memory_ingestion_tombstones') IS NOT NULL"
+                ))
+                if pre_migration_from is not None:
+                    if (
+                        pre_migration_from != "kulai_memory_0002"
+                        or expected_alembic_heads() != ("kulai_memory_0003",)
+                        or revisions != (pre_migration_from,)
+                        or present
+                    ):
+                        raise DatabaseSafetyError("Invalid pre-migration tombstone absence state.")
+                    tombstones = None
+                else:
+                    if not present:
+                        raise DatabaseSafetyError("Strict snapshot requires the tombstone table.")
+                    tombstones = await tombstone_fingerprint(connection)
+                return DatabaseSnapshot(
+                    revision=revisions,
+                    memories=await memory_fingerprint(connection),
+                    vectors=await vector_fingerprint(connection),
+                    tombstones=tombstones,
+                )
+            finally:
+                await connection.rollback()
+    except DatabaseSafetyError:
+        raise
+    except Exception:
+        raise DatabaseSafetyError("Database snapshot could not be read safely.") from None
+    finally:
+        await engine.dispose()
 
 
 EXPECTED_MEMORY_COLUMNS: dict[str, tuple[str, bool, int | None]] = {

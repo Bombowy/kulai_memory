@@ -19,6 +19,10 @@ from kulai_memory.database_safety import (
     BACKUP_TEST_DATABASE_PREFIX,
     CheckResult,
     DoctorReport,
+    DatabaseSnapshot,
+    MemoryFingerprint,
+    VectorFingerprint,
+    TombstoneFingerprint,
     OwnedTemporaryDatabase,
     PostgresConnection,
     RESTORE_DATABASE_PREFIX,
@@ -216,6 +220,10 @@ def test_failed_backup_removes_only_its_partial_file(
         del kwargs
         return report
 
+    async def snapshot(*args, **kwargs):
+        return DatabaseSnapshot(("head",), MemoryFingerprint(0, "a" * 64),
+                                VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64))
+    monkeypatch.setattr(db_backup, "database_snapshot_url", snapshot)
     monkeypatch.setattr(db_backup, "run_database_doctor", fake_doctor)
     monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
     monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
@@ -270,6 +278,10 @@ def test_successful_backup_is_atomic_and_uses_portable_archive_options(
         partial.write_bytes(b"PGDMP test archive")
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
+    async def snapshot(*args, **kwargs):
+        return DatabaseSnapshot(("head",), MemoryFingerprint(0, "a" * 64),
+                                VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64))
+    monkeypatch.setattr(db_backup, "database_snapshot_url", snapshot)
     monkeypatch.setattr(db_backup, "run_database_doctor", fake_doctor)
     monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
     monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
