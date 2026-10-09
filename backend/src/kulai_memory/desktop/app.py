@@ -38,6 +38,7 @@ from .models import (
     DesktopStartupResult,
     MemorySummary,
     DesktopRagProgress, DesktopRagProgressState, DesktopRagResult, DesktopRagStatus,
+    DesktopVoiceQuestionProgress, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionResult,
 )
 from .recorder import DEFAULT_MAX_DURATION_SECONDS
 
@@ -54,6 +55,8 @@ class AsyncDesktopThread(QThread):
     progress = Signal(object)
     processing_finished = Signal(object)
     rag_finished = Signal(object)
+    voice_question_started = Signal()
+    voice_question_finished = Signal(object)
     recent_loaded = Signal(object)
     operation_failed = Signal(str, str)
     shutdown_finished = Signal()
@@ -154,6 +157,16 @@ class AsyncDesktopThread(QThread):
             self.rag_finished.emit,
         )
 
+    def request_start_voice_question(self, device_id: int) -> None:
+        self._submit("voice_question_start",
+                     lambda controller: controller.start_voice_question(device_id=device_id),
+                     lambda ignored: self.voice_question_started.emit())
+
+    def request_stop_voice_question_and_ask(self, top_k: int = 5) -> None:
+        self._rag_future = self._submit("voice_question",
+            lambda controller: controller.stop_voice_question_and_ask(top_k=top_k),
+            self.voice_question_finished.emit)
+
     def request_shutdown(self) -> None:
         if self._shutdown_requested.is_set():
             return
@@ -222,7 +235,7 @@ def _public_message(exc: Exception) -> str:
 
 
 class MainWindow(QMainWindow):
-    """Voice notes and read-only text questions on the existing worker loop."""
+    """Separate voice notes and read-only text/voice questions on one worker."""
 
     def __init__(
         self,
@@ -239,6 +252,8 @@ class MainWindow(QMainWindow):
         self._rag_ready = False
         self._busy = False
         self._rag_active = False
+        self._voice_question_active = False
+        self._question_recording = False
         self._save_pending = False
         self._closing = False
         self._shutdown_done = False
@@ -246,6 +261,9 @@ class MainWindow(QMainWindow):
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(250)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
+        self._question_timer = QTimer(self)
+        self._question_timer.setSingleShot(True)
+        self._question_timer.timeout.connect(self._toggle_voice_question)
 
         self._build_ui()
         self._connect_worker()
@@ -295,8 +313,10 @@ class MainWindow(QMainWindow):
         self.query_input.setPlaceholderText("Ask something about your memories...")
         self.query_input.setMaxLength(10000)
         self.ask_button = QPushButton("ASK", self.ask_group)
+        self.voice_ask_button = QPushButton("ASK BY VOICE", self.ask_group)
         question_row.addWidget(self.query_input, 1)
         question_row.addWidget(self.ask_button)
+        question_row.addWidget(self.voice_ask_button)
         ask_layout.addLayout(question_row)
         self.rag_status = QLabel("Starting...", self.ask_group)
         ask_layout.addWidget(self.rag_status)
@@ -340,6 +360,7 @@ class MainWindow(QMainWindow):
         self.query_input.textChanged.connect(self._update_controls)
         self.query_input.returnPressed.connect(self._ask_memory)
         self.ask_button.clicked.connect(self._ask_memory)
+        self.voice_ask_button.clicked.connect(self._toggle_voice_question)
         self._update_controls()
 
     def _connect_worker(self) -> None:
@@ -349,6 +370,8 @@ class MainWindow(QMainWindow):
         self._worker.progress.connect(self._on_progress)
         self._worker.processing_finished.connect(self._on_processing_finished)
         self._worker.rag_finished.connect(self._on_rag_finished)
+        self._worker.voice_question_started.connect(self._on_voice_question_started)
+        self._worker.voice_question_finished.connect(self._on_voice_question_finished)
         self._worker.recent_loaded.connect(self._set_recent)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._worker.shutdown_finished.connect(self._on_shutdown_finished)
@@ -356,11 +379,17 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_controls(self) -> None:
-        blocked = self._busy or self._recording or self._save_pending or self._closing
+        blocked = (self._busy or self._recording or self._voice_question_active
+                   or self._save_pending or self._closing)
         self.record_button.setEnabled(self._ready and not blocked)
         self.query_input.setEnabled(self._rag_ready and not blocked)
         self.ask_button.setEnabled(self._rag_ready and not blocked and bool(self.query_input.text().strip()))
-        self.refresh_button.setEnabled(self._rag_ready and not self._busy and not self._recording and not self._closing)
+        self.voice_ask_button.setText("STOP QUESTION" if self._question_recording else "ASK BY VOICE")
+        self.voice_ask_button.setEnabled(
+            (self._question_recording and not self._busy and not self._closing)
+            or (self._ready and self._rag_ready and not blocked))
+        self.refresh_button.setEnabled(self._rag_ready and not self._busy and not self._recording
+                                       and not self._voice_question_active and not self._closing)
         self.device_selector.setEnabled(not blocked)
 
     @Slot()
@@ -373,6 +402,55 @@ class MainWindow(QMainWindow):
         self.rag_status.setText("Searching memory...")
         self._update_controls()
         self._worker.request_ask_memory(self.query_input.text(), top_k=5)
+
+    @Slot()
+    def _toggle_voice_question(self) -> None:
+        if not self.voice_ask_button.isEnabled():
+            return
+        if self._question_recording:
+            self._question_recording = False
+            self._busy = True
+            self._question_timer.stop()
+            self.rag_status.setText("Transcribing question...")
+            self._update_controls()
+            self._worker.request_stop_voice_question_and_ask(top_k=5)
+            return
+        device_id = self.device_selector.currentData()
+        if device_id is None:
+            return
+        self._busy = self._voice_question_active = self._rag_active = True
+        self.answer.clear()
+        self.sources_table.setRowCount(0)
+        self.query_input.clear()
+        self.rag_status.setText("Opening microphone...")
+        self._update_controls()
+        self._worker.request_start_voice_question(int(device_id))
+
+    @Slot()
+    def _on_voice_question_started(self) -> None:
+        if self._closing or not self._voice_question_active:
+            return
+        self._busy = False
+        self._question_recording = True
+        self._question_timer.start(round(DEFAULT_MAX_DURATION_SECONDS * 1000))
+        self.rag_status.setText("Listening...")
+        self._update_controls()
+
+    @Slot(object)
+    def _on_voice_question_finished(self, result: DesktopVoiceQuestionResult) -> None:
+        if self._closing or not self._voice_question_active:
+            return
+        self._voice_question_active = self._question_recording = False
+        self._question_timer.stop()
+        self.query_input.setText(result.transcript)
+        if result.rag_result is not None:
+            self._on_rag_finished(result.rag_result)
+        else:
+            self._busy = self._rag_active = False
+            self.answer.clear()
+            self.sources_table.setRowCount(0)
+            self.rag_status.setText("No speech detected")
+            self._update_controls()
 
     @Slot(object)
     def _on_rag_finished(self, result: DesktopRagResult) -> None:
@@ -433,7 +511,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _start_recording(self) -> None:
-        if self._busy or self._recording or self._save_pending or self._closing:
+        if (self._busy or self._recording or self._voice_question_active
+                or self._save_pending or self._closing):
             return
         device_id = self.device_selector.currentData()
         if device_id is None:
@@ -475,8 +554,15 @@ class MainWindow(QMainWindow):
         self._worker.request_stop_and_process()
 
     @Slot(object)
-    def _on_progress(self, progress: DesktopProgress | DesktopRagProgress) -> None:
+    def _on_progress(self, progress: DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress) -> None:
         if self._closing:
+            return
+        if isinstance(progress, DesktopVoiceQuestionProgress):
+            if self._voice_question_active:
+                if progress.state is DesktopVoiceQuestionProgressState.TRANSCRIBING:
+                    self.rag_status.setText("Transcribing question...")
+                elif progress.state is DesktopVoiceQuestionProgressState.TRANSCRIPT_READY:
+                    self.query_input.setText(progress.transcript or "")
             return
         if isinstance(progress, DesktopRagProgress):
             if self._rag_active:
@@ -539,7 +625,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _retry_save(self) -> None:
-        if self._busy or self._closing:
+        if self._busy or self._voice_question_active or self._closing:
             return
         self._busy = True
         self._update_controls()
@@ -566,8 +652,10 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self._busy = False
-        if operation == "ask":
+        if operation in {"ask", "voice_question_start", "voice_question"}:
             self._rag_active = False
+            self._voice_question_active = self._question_recording = False
+            self._question_timer.stop()
             self.answer.clear()
             self.sources_table.setRowCount(0)
             self.rag_status.setText(message)
@@ -609,6 +697,7 @@ class MainWindow(QMainWindow):
         if not self._closing:
             self._closing = True
             self._elapsed_timer.stop()
+            self._question_timer.stop()
             self.status_label.setText("Closing...")
             self.record_button.setEnabled(False)
             self.stop_button.setEnabled(False)

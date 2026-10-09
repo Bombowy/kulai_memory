@@ -11,6 +11,8 @@ from .models import (
     MicrophoneDevice,
     DesktopRagStatus, DesktopRagProgressState, DesktopRagProgress,
     DesktopRagResult, DesktopRagCitation,
+    DesktopVoiceMode, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionProgress,
+    DesktopVoiceQuestionResult,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "MicrophoneDevice",
     "DesktopRagStatus", "DesktopRagProgressState", "DesktopRagProgress",
     "DesktopRagResult", "DesktopRagCitation",
+    "DesktopVoiceMode", "DesktopVoiceQuestionProgressState", "DesktopVoiceQuestionProgress",
+    "DesktopVoiceQuestionResult",
 ]

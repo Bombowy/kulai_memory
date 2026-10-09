@@ -103,14 +103,20 @@ read-only `scripts/ask_memory.py` CLI, documented in the root README.
 `application.rag` uses only neutral retrieval and LLM contracts. Desktop reuses
 the canonical `rag_runtime.MemoryRagRuntime`. In Desktop, this runtime borrows
 one shared BGE provider also used by automatic indexing and owns one reusable
-local Qwen provider. In the CLI, the runtime owns both providers.
+local Qwen provider. **ASK BY VOICE** shares the existing Voice Note Whisper
+provider/model and recorder, transcribes into the question field, then calls the
+same text ASK path. Voice questions are never saved as Memory, allocate no
+ingestion identity and perform no indexing writes or Recent Memory refresh.
+Empty speech skips RAG. Private question WAVs are always cleaned; cancellation
+drains thread-backed Whisper before deleting audio, while Qwen cancellation does
+not wait for its generation timeout. In the CLI, the runtime owns both providers.
 `KULAI_LLM_MODEL=qwen3.5:9b` shares the loopback `KULAI_OLLAMA_BASE_URL` setting.
 Canonical retrieval closes its short read-only snapshot before structured Qwen
 generation. Bounded untrusted JSON evidence contains only IDs, ranks and content;
 answers require validated citations or return canonical insufficient context.
-Zero evidence skips the LLM. There is no reviewed score cutoff/reranker,
-voice-question RAG, TTS, Android RAG UI, WebSocket RAG, or multi-turn conversation
-yet. Tests use only owned DBs with synthetic evidence.
+Zero evidence skips the LLM. There is no reviewed score cutoff/reranker, TTS,
+Android RAG UI, WebSocket voice RAG, or multi-turn conversation yet. Tests use
+only owned DBs with synthetic evidence and controlled audio.
 
 Local PostgreSQL is started only through `scripts/postgres.py`, which passes
 `backend/.env` explicitly to Compose. `scripts/db_doctor.py` performs read-only

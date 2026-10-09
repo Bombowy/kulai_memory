@@ -40,6 +40,22 @@ class DesktopRagProgressState(str, Enum):
     GENERATING = "generating"
 
 
+class DesktopVoiceMode(str, Enum):
+    NOTE = "note"
+    QUESTION = "question"
+
+
+class DesktopVoiceQuestionProgressState(str, Enum):
+    TRANSCRIBING = "transcribing"
+    TRANSCRIPT_READY = "transcript_ready"
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopVoiceQuestionProgress:
+    state: DesktopVoiceQuestionProgressState
+    transcript: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class DesktopRagProgress:
     state: DesktopRagProgressState
@@ -58,6 +74,14 @@ class DesktopRagResult:
     answer: str
     citations: tuple[DesktopRagCitation, ...] = ()
     error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopVoiceQuestionResult:
+    """No RAG result means no speech; never contains audio or hidden context."""
+
+    transcript: str
+    rag_result: DesktopRagResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,3 +171,7 @@ class DesktopRagInputError(DesktopPublicError):
 
 class DesktopRagConfigurationError(DesktopPublicError):
     safe_message = "Memory assistant configuration is invalid."
+
+
+class DesktopVoiceQuestionTranscriptionError(DesktopPublicError):
+    safe_message = "Question transcription failed."

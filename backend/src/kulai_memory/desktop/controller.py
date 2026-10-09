@@ -74,6 +74,12 @@ from .models import (
     DesktopRagProgressState,
     DesktopRagResult,
     DesktopRagStatus,
+    DesktopRecordingError,
+    DesktopVoiceMode,
+    DesktopVoiceQuestionProgress,
+    DesktopVoiceQuestionProgressState,
+    DesktopVoiceQuestionResult,
+    DesktopVoiceQuestionTranscriptionError,
     MemorySummary,
 )
 from .recorder import MicrophoneRecorder
@@ -103,7 +109,7 @@ Doctor = Callable[[str], Awaitable[DoctorReport]]
 EngineFactory = Callable[[DbConfig], _Engine]
 SessionFactoryBuilder = Callable[[_Engine], _SessionFactory]
 RepositoryFactory = Callable[[AsyncSession], MemoryRepository]
-ProgressCallback = Callable[[DesktopProgress | DesktopRagProgress], None]
+ProgressCallback = Callable[[DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress], None]
 
 
 class DesktopMemoryRag(Protocol):
@@ -165,7 +171,7 @@ def _repository_factory(session: AsyncSession) -> MemoryRepository:
     return PostgresMemoryRepository(db=session)
 
 
-def _noop_progress(progress: DesktopProgress | DesktopRagProgress) -> None:
+def _noop_progress(progress: DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress) -> None:
     del progress
 
 
@@ -214,6 +220,8 @@ class DesktopController:
         self._provider: TranscriptionProvider | None = None
         self._transcription_service: TranscriptionService | None = None
         self._active_ingestion_id: UUID | None = None
+        self._voice_mode: DesktopVoiceMode | None = None
+        self._voice_question_task: asyncio.Task[Any] | None = None
         self._pending: _PendingSave | None = None
         self._started = False
         self._closed = False
@@ -300,22 +308,25 @@ class DesktopController:
             raise DesktopStateError
         async with self._operation_lock:
             self._require_started()
-            if self._pending is not None or self._active_ingestion_id is not None:
+            if (self._pending is not None or self._voice_mode is not None
+                    or self._voice_question_task is not None):
                 raise DesktopStateError
             ingestion_id = uuid4()
             await asyncio.to_thread(self._recorder.start, device_id=device_id)
             self._active_ingestion_id = ingestion_id
+            self._voice_mode = DesktopVoiceMode.NOTE
             return ingestion_id
 
     async def stop_and_process(self) -> DesktopProcessingResult:
         async with self._operation_lock:
             self._require_started()
             ingestion_id = self._active_ingestion_id
-            if ingestion_id is None:
+            if ingestion_id is None or self._voice_mode is not DesktopVoiceMode.NOTE:
                 raise DesktopStateError
 
             artifact = None
             self._active_ingestion_id = None
+            self._voice_mode = None
             try:
                 artifact = await asyncio.to_thread(self._recorder.stop)
                 self._progress_callback(
@@ -371,15 +382,18 @@ class DesktopController:
             raise
 
     async def _shutdown(self) -> None:
-        task = self._rag_task
-        if task is not None and not task.done():
+        tasks = {task for task in (self._rag_task, self._voice_question_task)
+                 if task is not None and not task.done()}
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         async with self._operation_lock:
             if self._closed:
                 return
             self._closed = True
             self._active_ingestion_id = None
+            self._voice_mode = None
             self._pending = None
             await self._shutdown_resources_unlocked()
 
@@ -394,7 +408,9 @@ class DesktopController:
             raise DesktopStateError
         async with self._operation_lock:
             self._require_started()
-            if self._active_ingestion_id is not None or self._pending is not None or self._rag is None:
+            if (self._voice_mode is not None or self._pending is not None or self._rag is None
+                    or (self._voice_question_task is not None
+                        and self._voice_question_task is not asyncio.current_task())):
                 raise DesktopStateError
             self._rag_task = asyncio.current_task()
             try:
@@ -417,9 +433,93 @@ class DesktopController:
             finally:
                 self._rag_task = None
 
+    async def start_voice_question(self, *, device_id: int) -> None:
+        """Explicit question capture: no ingestion identity, no new provider."""
+
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        async with self._operation_lock:
+            self._require_started()
+            if (self._pending is not None or self._voice_mode is not None
+                    or self._voice_question_task is not None):
+                raise DesktopStateError
+            try:
+                await _finish_audio_before_cancellation(asyncio.create_task(
+                    asyncio.to_thread(self._recorder.start, device_id=device_id)))
+            except asyncio.CancelledError:
+                await _finish_audio_before_cancellation(asyncio.create_task(
+                    self._discard_question_capture()))
+                raise
+            except Exception:
+                raise DesktopRecordingError from None
+            self._voice_mode = DesktopVoiceMode.QUESTION
+
+    async def stop_voice_question_and_ask(self, *, top_k: int = 5) -> DesktopVoiceQuestionResult:
+        """Drain protected audio work, then call the existing public text ASK."""
+
+        try:
+            MemoryRetrievalService.validate_input(query="voice question", top_k=top_k)
+        except MemoryRetrievalError:
+            raise DesktopRagInputError from None
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        task = asyncio.current_task()
+        try:
+            async with self._operation_lock:
+                self._require_started()
+                if self._voice_mode is not DesktopVoiceMode.QUESTION:
+                    raise DesktopStateError
+                self._voice_question_task = task
+                self._progress_callback(DesktopVoiceQuestionProgress(
+                    DesktopVoiceQuestionProgressState.TRANSCRIBING))
+                transcription = await _finish_audio_before_cancellation(asyncio.create_task(
+                    self._transcribe_question_audio()))
+                self._voice_mode = None
+                self._progress_callback(DesktopVoiceQuestionProgress(
+                    DesktopVoiceQuestionProgressState.TRANSCRIPT_READY, transcription.text))
+            if not transcription.text.strip():
+                return DesktopVoiceQuestionResult(transcription.text)
+            if self._closing:
+                raise asyncio.CancelledError
+            result = await self.ask_memory(query=transcription.text, top_k=top_k)
+            return DesktopVoiceQuestionResult(transcription.text, result)
+        finally:
+            if self._voice_question_task is task:
+                self._voice_question_task = None
+                self._voice_mode = None
+
+    async def _transcribe_question_audio(self) -> TranscriptionResult:
+        artifact = None
+        try:
+            artifact = await asyncio.to_thread(self._recorder.stop)
+            service = self._transcription_service
+            if service is None:
+                raise DesktopStateError
+            return await service.transcribe(request=TranscriptionRequest(
+                audio=AudioPathInput(path=artifact.path), mode=TranscriptionMode.TRANSCRIBE,
+                timestamp_mode=TranscriptionTimestampMode.NONE))
+        except Exception:
+            raise DesktopVoiceQuestionTranscriptionError from None
+        finally:
+            if artifact is not None:
+                # This task is shielded until Whisper's thread has finished reading.
+                try:
+                    await asyncio.to_thread(self._recorder.cleanup, artifact)
+                except Exception:
+                    raise DesktopVoiceQuestionTranscriptionError from None
+
+    async def _discard_question_capture(self) -> None:
+        try:
+            artifact = await asyncio.to_thread(self._recorder.stop)
+        except (DesktopStateError, DesktopRecordingError):
+            return
+        await asyncio.to_thread(self._recorder.cleanup, artifact)
+
     async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
         async with self._operation_lock:
             self._require_started()
+            if self._voice_mode is not None or self._voice_question_task is not None:
+                raise DesktopStateError
             if self._indexer is None:
                 raise DesktopStateError
             self._indexing_report = await self._indexer.reconcile()
@@ -611,3 +711,22 @@ def _rag_error_message(code: str) -> str:
     if code == "rag.invalid_configuration":
         return "Memory assistant configuration is invalid."
     return "An answer could not be generated."
+
+
+async def _finish_audio_before_cancellation(task: asyncio.Task[Any]) -> Any:
+    """Never unlink audio or release resources while thread-backed STT uses it."""
+
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        # Consume a possible failure; the caller's cancellation has precedence.
+        if not task.cancelled():
+            task.exception()
+        raise

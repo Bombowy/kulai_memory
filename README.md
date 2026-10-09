@@ -188,6 +188,12 @@ The **Ask Memory** panel accepts text questions directly in Desktop. Start
 loopback Ollama with `bge-m3:567m-fp16` and `qwen3.5:9b` available; configure
 `KULAI_LLM_MODEL=qwen3.5:9b` and the shared
 `KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434`. Enter a question and click **ASK**.
+For a spoken question, choose the microphone and click **ASK BY VOICE**, then
+**STOP QUESTION**. The panel shows **Listening...** and **Transcribing question...**;
+the recognized question appears in the query field, independently of the Voice
+Note transcript. The same text ASK path handles the transcribed question. Empty
+speech shows **No speech detected** and skips retrieval and Qwen. Voice Note and
+voice question are explicit separate modes; the app does not infer your intent.
 The panel shows **Searching memory...**, then **Generating answer...**, the
 grounded answer, and validated sources (rank, Memory UUID and score). It does
 not show source content, vector metadata or prompts. Qwen can answer only from
@@ -205,13 +211,21 @@ worker asyncio loop, outside the Qt UI thread. Recording, processing, pending
 save/indexing and ASK are serialized; the controls prevent conflicting starts.
 The retrieval session closes before Qwen generation. Closing the window cancels
 an active question before closing Qwen, the shared BGE, recorder and engine;
-it does not wait for the 180-second generation timeout. Whisper remains one
-reused lazy provider for voice notes.
+it does not wait for the 180-second generation timeout. Voice Note and Ask by
+Voice share the same lazy Whisper large-v3/cuda/int8_float16/VAD provider and
+model. Question WAVs are private temporary files, removed after transcription
+on success, empty speech, failure and cancellation. Closing during capture stops
+the recorder and deletes its WAV without invoking RAG. Thread-backed Whisper
+inference cannot be interrupted immediately: shutdown waits for its audio read
+to finish before deleting the WAV and releasing resources. No audio is retained.
+Voice questions allocate no ingestion identity, never become Memory and never
+trigger indexing writes or refresh Recent Memory.
 
 The local `scripts/ask_memory.py` CLI remains available for diagnostics. There
-is no reviewed semantic score cutoff or reranker yet. Desktop has no
-voice-question input, TTS, conversational multi-turn or partial STT; Android has
-no RAG UI. The existing voice-note save/index/Recent Memory flow is unchanged.
+is no reviewed semantic score cutoff or reranker yet. Desktop has no TTS,
+conversational multi-turn or partial STT; Android has no RAG UI, and WebSocket
+has no voice RAG flow. The existing voice-note save/index/Recent Memory flow is
+unchanged.
 
 ## Local WebSocket voice-memory adapter
 
@@ -382,8 +396,8 @@ exact revisions, then rolls back and closes its session **before Qwen**.
 The LLM has an explicit 180-second generation/HTTP timeout and the CLI a
 300-second overall deadline. Qwen uses non-streaming schema output with
 thinking disabled; no Whisper is loaded by the CLI. Desktop uses this same
-canonical RAG through its Ask Memory panel and borrows its shared BGE provider.
-Microphone questions, WebSocket and Android RAG UX are not integrated.
+canonical RAG through its text ASK and ASK BY VOICE controls and borrows its
+shared BGE provider. WebSocket and Android RAG UX are not integrated.
 
 The real RAG integration uses **only owned temporary databases and synthetic
 Memories**, never real main content:

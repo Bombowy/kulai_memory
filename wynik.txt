@@ -1,374 +1,237 @@
-TASK 6A.2 — Desktop RAG UI over existing canonical Memory RAG
+﻿TASK 6A.3 — Desktop voice question -> existing Memory RAG
+Raport końcowy, 2026-10-09
 Repo: C:\Bombowy\Projekty\kulai_memory
-Data: 2026-10-09
-DECYZJA: OK DO COMMITA
-Nie wykonano commita ani pusha dla 6A.2. Main DB pozostaje READ ONLY.
-Automated LLM tests używały wyłącznie synthetic Memories w owned temporary DB.
-Raport zawiera counts/fingerprints, bez realnego main Memory content, promptów i credentials.
+Decyzja: OK DO COMMITA
+Nie wykonano commita ani pusha. Manualny microphone/main smoke pozostaje po review.
+Raport nie zawiera realnej treści main Memory, audio użytkownika, promptów, wektorów, payloadów ani credentials.
 
 1. Start commit/status
-Branch main; HEAD 3c0a27bda38013ca3b112869da3c906623676299.
-6A.1 został wcześniej committed/pushed na osobne polecenie użytkownika:
-feat: add grounded local text RAG with validated Memory citations.
-Przed 6A.2: git status clean; git status -sb: main...origin/main.
-Start log -5: 3c0a27b, d060298, 76f7df0, 2e20c74, 98e8dea.
-Vendor gitlink/HEAD: 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
-HEAD/branch bez zmian po 6A.2; wszystkie nowe zmiany unstaged.
-Python CLI/tests: PyCharm root SDK .venv, Python 3.13.15, pip, sprawdzany przed komendami.
+HEAD: 339cd307448c8a918f542fed3dd1f4697655f7f6
+feat: add Desktop Memory assistant with shared BGE and cancellable RAG
+6A.2 był committed/pushed przed zmianami: origin/main i git ls-remote origin main wskazywały ten sam commit; HEAD...origin/main = 0/0.
+Start: git status clean, main...origin/main, vendor clean.
+Ostatnie 5 commitów: 339cd30, 3c0a27b, d060298, 76f7df0, 2e20c74.
+Submodule: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Start doctor PASS, main revision kulai_memory_0004. Complete DatabaseSnapshot zapisany przed zmianami.
 
-2. Main complete DatabaseSnapshot BEFORE
-{"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
-Memory/vector/tombstone = 8/8/1; revision kulai_memory_0004.
-db_doctor BEFORE PASS. Nie odczytywano main context do testów LLM.
+2. Architecture audit
+Przeczytano rzeczywiste desktop/app.py, controller.py, models.py, recorder.py, rag_runtime.py, application/rag.py, transcription.py i reusable Whisper API oraz istniejące testy Desktop/RAG.
+Desktop pozostaje in-process: jeden QThread, jeden asyncio loop, istniejący _submit/run_coroutine_threadsafe i operation lock.
+VoiceSession pozostaje wyłącznie w flow notatki. Pytanie używa istniejącego TranscriptionService, po czym publicznego ask_memory(); nie kopiuje retrieval, context buildera, promptu ani walidacji cytowań.
+Application core pozostaje neutralny; nie dodano Qt/SQLAlchemy ani concrete providerów do application.
 
-3. Audited Desktop architecture
-Przeczytano rzeczywiste desktop/app.py, controller.py, models.py,
-rag_runtime.py, application/rag.py, automatic_indexing.py, embedding_provider.py,
-llm_provider.py oraz reusable Whisper/provider lifecycle.
-Desktop pracuje in-process na jednym AsyncDesktopThread/QThread i jednym asyncio loop.
-Qt widgets wysyłają korutyny przez run_coroutine_threadsafe/_submit; brak localhost HTTP.
-Existing voice flow: recorder -> Whisper -> canonical ingestion -> commit -> indexing -> Recent.
-Whisper transcribe offloaduje inference przez asyncio.to_thread; model jest lazy i reused.
+3. Chosen voice mode separation
+Jawny DesktopVoiceMode: NOTE lub QUESTION. Brak automatycznego rozpoznawania intencji.
+NOTE: recorder -> Whisper -> istniejący save Memory -> automatic indexing -> Recent Memory.
+QUESTION: recorder -> Whisper -> istniejący ask_memory -> answer/citations.
+Question nie alokuje ingestion_id ani VoiceSession/session_id, nie uruchamia ingestion ani indexing write, nie odświeża Recent Memory.
+Operation lock i mode/task guards wykluczają równoległe note, text ASK, question, STT/save/indexing i pending retry. UI blokuje konfliktujące przyciski.
 
-4. Audited provider ownership
-Przed zmianą AutomaticMemoryIndexer tworzył/posiadał własne BGE,
-a MemoryRagRuntime tworzył/posiadał BGE oraz Qwen przez AsyncExitStack.
-Embedding neutral port nie wymaga close; host OwnedEmbeddingProvider ma async aclose.
-Ollama BGE oraz LLM mają jeden AsyncClient i async close/context-manager lifecycle.
-Reusable Whisper provider nie ma aclose; existing lifecycle usuwa odniesienia po voice cleanup.
-Nie dodawano wymyślonego Whisper close ani concrete provider coupling do application core.
+4. Whisper reuse proof
+Controller używa tej samej _transcription_service i tego samego provider object w NOTE i QUESTION.
+Kontrolowany test rzeczywistej reusable klasy WhisperTranscriptionProvider: providers created=1, model factory calls=1, inference=2 (note+question), bez drugiego load.
+Real CUDA test: providers_created=1, models_loaded=1, inference_requests=2, tożsamość modelu zachowana po obu transkrypcjach.
+Nie dodano nowej produkcyjnej Whisper factory.
 
-5. Chosen shared-BGE ownership model
-DesktopController tworzy i posiada jeden shared BGE.
-AutomaticMemoryIndexer(provider=...) i MemoryRagRuntime(embedding_provider=...)
-pożyczają dokładnie ten sam obiekt i nigdy go nie zamykają.
-Brak injected provider zachowuje dotychczasowy factory-owned lifecycle servera/CLI.
-RAG zawsze posiada jeden Qwen. Controller zamyka Qwen/RAG, indexer, następnie shared BGE.
-Indexer's aclose nadal czeka na swój lock, lecz borrowed provider nie jest double-closed.
-Bez modyfikacji vendor i bez drugiego embedding clienta w Desktop.
+5. Controller API
+async start_voice_question(*, device_id: int) -> None
+async stop_voice_question_and_ask(*, top_k: int = 5) -> DesktopVoiceQuestionResult
+Top-k walidowany przed stop; zakres 1..20, bool odrzucony. Rozpoznany niepusty tekst trafia dokładnie do publicznego ask_memory(query=transcription.text, top_k=top_k).
+Istniejąca walidacja query (nonblank, max 10000 chars) i canonical RAG pozostają źródłem reguł.
 
-6. Desktop RAG models
-Frozen dataclasses bez Qt/SQLAlchemy:
-DesktopRagStatus: ANSWERED, INSUFFICIENT_CONTEXT, FAILED.
-DesktopRagProgressState: RETRIEVING, GENERATING; DesktopRagProgress(state).
-DesktopRagCitation(memory_id: UUID, rank: int, score: float).
-DesktopRagResult(status, answer, citations, optional safe error_message).
-Brak contextu, source content, vectors, raw provider payload i system promptu w result.
+6. Typed result
+Frozen neutral DesktopVoiceQuestionResult(transcript, rag_result: DesktopRagResult | None).
+rag_result=None oznacza brak mowy. Wynik nie zawiera raw audio, hidden context, prompts, vectors ani provider payload.
+Dodano neutralne progress states TRANSCRIBING i TRANSCRIPT_READY oraz bezpieczny DesktopVoiceQuestionTranscriptionError.
+Istniejące ANSWERED/INSUFFICIENT_CONTEXT/FAILED i validated citation models używane bez kopii logiki.
 
-7. DesktopController ask flow
-async ask_memory(*, query: str, top_k: int = 5) -> DesktopRagResult.
-Canonical validation: nonblank query <=10000 chars; integer top_k 1..20, bool rejected.
-Validation przed provider/DB; operation lock + recording/pending-save guard.
-RETRIEVING -> existing runtime retrieval/context -> GENERATING callback -> grounded Qwen
--> validated application result -> neutral Desktop result.
-Brak duplikacji retrieval, promptu, SQL albo citation validation w Desktop.
-Callback GENERATING występuje dopiero po zamknięciu retrieval session i przy niepustym context.
+7. UI changes
+Ask Memory ma osobne ASK i ASK BY VOICE. ASK BY VOICE przełącza się na STOP QUESTION podczas capture.
+Używa wybranego istniejącego mikrofonu i bounded recordera. Rozpoznane pytanie pojawia się w query input.
+Voice Note transcript pozostaje oddzielny; pytanie go nie nadpisuje.
+Answer i Rank/Memory ID/Score renderuje istniejący path; sources pochodzą wyłącznie z validated DesktopRagResult, score z 4 miejscami.
+Nie pokazano contextu ani source content. README root/backend opisują wszystkie trzy flow: Voice Note, Text Ask Memory, Ask by Voice.
 
-8. RAG runtime reuse
-Runtime tworzony i __aenter__ wykonywany raz na startup; reused przez kolejne ASK.
-Startup: doctor -> CUDA scope/engine/session factory -> lazy Whisper/shared BGE
--> indexer/borrowed-BGE RAG/Qwen -> existing reconciliation -> Recent -> Ready.
-Startup nie wykonuje Qwen request ani cold-loadu modelu; pierwszy ASK może cold-loadować.
-aclose RAG idempotentnie zamyka wyłącznie owned resources.
-Test initialization failure Qwen potwierdza cleanup wcześniej utworzonych BGE/indexer/engine/recorder,
-usunięcie Whisper references i safe configuration error.
+8. State machine
+Idle -> Opening microphone... -> Listening... -> Transcribing question... -> Searching memory... -> Generating answer... -> Answered.
+Unsupported: Not enough information + canonical insufficient answer + zero sources.
+No speech: No speech detected -> idle.
+Failure: safe public message, answer/sources wyczyszczone, controls ponownie aktywne.
+Podczas question disabled: text ASK/query, Voice Note start/stop, refresh i konfliktujące controls; STOP QUESTION aktywny wyłącznie podczas capture. Capture timer przestrzega istniejącego limitu 10 minut.
+Całe recorder/STT/BGE/PostgreSQL/Qwen wykonują się na workerze; Qt UI thread nie wykonuje blocking model/database calls ani asyncio.run().
 
-9. UI layout/controls
-Osobny QGroupBox "Ask Memory": QLineEdit (maxLength=10000), ASK,
-read-only QPlainTextEdit answer, Sources QTableWidget: Rank / Memory ID / Score.
-Placeholder: Ask something about your memories...
-Default top_k=5. Enter albo ASK submituje dokładny tekst.
-Brak source content/debug-context toggle w UI. Existing Voice note i Recent są zachowane.
-Text questions działają również przy braku mikrofonu (voice capture pozostaje disabled).
+9. No-speech behavior
+Empty/whitespace transcript zwraca result bez RAG.
+Zero RAG, zero BGE requests, zero Qwen requests, zero DB queries/writes, zero ingestion/indexing/Recent refresh.
+Istniejący VAD=true jest zachowany. Kontroler i UI pokrywają oba empty przypadki.
 
-10. UI state machine
-Ready: query enabled, ASK enabled tylko dla nonblank query.
-ASK: stara odpowiedź/sources wyczyszczone, controls blocked, "Searching memory...".
-Po retrieval/context: "Generating answer...".
-ANSWERED -> "Answered"; INSUFFICIENT_CONTEXT -> "Not enough information".
-FAILED -> safe public message i pusta odpowiedź/sources.
-Po zakończeniu controls ponownie enabled; przy closing pozostają disabled.
-Qt pozostaje responsywne podczas całego requestu; zero asyncio.run w UI thread.
+10. Temp audio lifecycle
+Ten sam bounded MicrophoneRecorder tworzy private temporary mono PCM16/16k WAV, limit 600s.
+Question audio jest cleaned po success, empty, Whisper failure, RAG failure, cancellation i shutdown.
+Shielded audio task obejmuje stop, provider inference i cleanup. WAV nie jest usuwany przed zakończeniem rzeczywistego odczytu thread-backed Whisper.
+Cancellation podczas start capture również drenuje start, następnie stop/cleanup; test potwierdza brak pozostawionego WAV i brak STT/RAG.
+Close podczas capture zatrzymuje recorder i usuwa plik bez wywołania RAG.
+Nowe testy pozytywne, empty, failures i cancellation potwierdzają brak retained question audio.
 
-11. Citations rendering
-Wyłącznie MemoryRagResult.citations po existing validation.
-Id/rank/score i kolejność zachowane; score formatowane do 4 miejsc po przecinku.
-UI nie generuje sources z top-k i nie odczytuje source content.
-Unknown IDs, missing citation przy sufficient, duplicates i subset validation pozostają w 6A.1.
+11. Cancellation/shutdown
+Śledzony current question task oraz existing RAG task; zbiór tasków dedupe zapobiega double-cancel tego samego flow.
+Shutdown cancels/waits question przed operation lock i zamknięciem zasobów.
+Qwen sleep=180s anulowany; kontrolowany shutdown kończy się w limicie 1s bez czekania na generation timeout.
+Thread-backed Whisper nie jest natychmiast przerywalny. Cancellation jest propagowana po zakończeniu audio read i cleanup; test z blokowanym readerem i powtórnym cancel potwierdza, że plik jest dostępny do końca odczytu.
+QThread testy close podczas capture, Whisper i RAG: zero stale success/error signals po close, zero unhandled/pending task errors, cleanup dokładnie raz.
+Nie dodano ręcznego CANCEL; window close obsługuje cancellation.
 
-12. Insufficient-context rendering
-Canonical answer: Nie mam wystarczających informacji w pamięci.
-Status INSUFFICIENT_CONTEXT, sources empty.
-Zero hits -> zero Qwen calls i brak GENERATING progress.
-Real unsupported question -> insufficient, bez wymyślonych faktów i cytowań.
-Nie dodano arbitrary score cutoff ani rerankera.
+12. Error/privacy mapping
+Question Whisper failure: Question transcription failed.
+RAG: istniejące Memory search could not be completed. / An answer could not be generated. / Memory assistant configuration is invalid.
+Bez raw exceptions/query/context/prompt/provider payload w public error. Nowa transcription exception używa from None.
+Fake private sentinels nie pojawiają się w public result/error; failure czyści poprzednią odpowiedź i citations.
 
-13. Error mapping/privacy
-rag.retrieval_failed -> Memory search could not be completed.
-rag.invalid_configuration -> Memory assistant configuration is invalid.
-Pozostałe generation/internal exceptions -> An answer could not be generated.
-Invalid input -> safe fixed DesktopRagInputError; no private query/context in result/error text.
-FAILED answer/sources zawsze puste. Nie pokazuje się raw exceptions/prompts/payload/DB URL/password.
-CancelledError propaguje i nie jest przekształcany w FAILED.
-Application core/rag.py nie został zmieniony; brak Qt/SQLAlchemy/Ollama imports w application.
+13. Proof query is never Memory
+Unit test zabrania uuid4 w question path i sprawdza brak repository create/ingest, indexer write, DB session i pending save.
+Owned PostgreSQL fixture powstaje przez normalną Voice Note i indexing; dopiero później pobierany jest baseline.
+SQL observer podczas question dopuszcza wyłącznie SELECT/SET/SHOW i odrzuca każdy write; commits=0.
+Complete snapshot identyczny dla sufficient, insufficient, empty, STT failure, RAG failure, cancel STT oraz cancel Qwen.
+Memory/vector/tombstone counts pozostają 1/1/0. UI testy potwierdzają zero Recent refresh od question.
 
-14. Operation serialization
-Jeden existing asyncio operation lock.
-Recording/processing/save/indexing/pending-save i ASK nie startują równolegle.
-Conflicting starts są odrzucane, zamiast kolejkować nagranie po zakończeniu ASK.
-UI blokuje ASK podczas recording/transcription/save/indexing/retry i voice start podczas ASK.
-Kontrolowane tests sprawdzają busy ASK, active recording, transcription i pending save.
-Recent refresh nie jest wywoływany przez ASK; existing voice refresh semantics bez zmian.
+14. Controller tests
+17 nowych controller cases PASS w backend/root full.
+Pokrycie: start/stop, exact transcript/top-k, public ask reuse, no UUID/ingestion/indexing/Recent, empty/whitespace, sufficient/insufficient, safe Whisper/RAG failure, serialization z NOTE/text ASK/pending retry, shared provider/model, WAV cleanup, invalid top-k, cancel start/STT, repeated cancel, shutdown Qwen i capture.
+Dotychczasowy Desktop/controller/RAG/recorder/application-boundaries focused baseline: 63 PASS.
+Początkowy nowy controller+UI run: 24 PASS; po dodaniu cancel-start case pełne zestawy obejmują 25 nowych unit cases.
+Existing voice save i text ASK testy nadal PASS.
 
-15. Shutdown cancellation behavior
-Controller trackuje bieżący RAG task; worker przechowuje submitted future.
-shutdown ustawia closing, anuluje/gatheruje RAG przed wejściem do operation lock.
-Jeden shielded shutdown task zapewnia cleanup także przy cancellation caller.
-Zamyka Qwen raz, indexer bez close borrowed BGE, shared BGE raz, recorder,
-engine, Whisper references i CUDA process scope.
-Worker tłumi progress/success/error signals po shutdown request; UI także ignoruje late signals.
-shutdown_finished następuje po drain/cancel pending tasks i zamknięciu event loop;
-window czeka na zakończenie QThread. Brak stale success i unhandled pending tasks w testach.
-Controller cancellation test: sleep(180) przerwany i cleanup w wait_for(1s).
-Owned DB cancellation: shutdown w wait_for(2s); UI worker test kończy w <=2s wait.
-Manual CANCEL nie dodano; zamknięcie okna anuluje aktywne pytanie.
+15. UI tests
+8 nowych UI cases PASS: button/start/STOP/listening/transcribing, transcript w query bez zmiany notatki, searching/generating, existing answer/citations rendering, empty, safe Whisper/RAG failure, insufficient, disabled/re-enabled controls, zero Recent refresh.
+Rzeczywisty AsyncDesktopThread testuje close w trzech fazach i brak stale signals/tasks.
+Bez real network/model/microphone i bez pixel-layout assertions.
 
-16. Proof query is never Memory
-ASK nie tworzy ingestion_id/VoiceSession, nie uruchamia recorder/Whisper,
-nie wywołuje ingestion/repository write/indexer.ensure ani refresh Recent.
-Unit spies: zero STT/voice writes/index writes/additional recent sessions.
-Owned complete DatabaseSnapshot BEFORE == AFTER dla sufficient, insufficient,
-generation failure i cancellation. SQL observer dopuszcza SELECT/SET/SHOW, zero commit/write.
-Nie dodano conversation history/table, schema change albo migration.
+16. Owned PostgreSQL results
+Nowe owned synthetic tests PASS zarówno osobno (2 PASS / 19.15s), jak i w pełnym root.
+Normalny controller note/save/index tworzy wyłącznie syntetyczną Memory: The green dragon currently lives on Venus.
+Fake STT query: Gdzie mieszka zielony smok? -> existing RAG -> ANSWERED + exact canonical Memory ID.
+Wszystkie outcome snapshots identyczne, question writes=0. Test obejmuje również text ASK w tym samym runtime.
+Owned source DBs są tworzone/migrowane/usuwane przez istniejący helper; main nie jest używany do fixtures ani model context.
 
-17. Shared provider counters
-Real Desktop integration:
-desktop.real.whisper={"creations": 1, "inference": 0}
-desktop.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 3}
-desktop.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 2}
-Ten sam BGE wykonał 1 fixture index + 2 query embeddings; native1024, brak dimensions override.
-Whisper created=1, inference=0: text RAG nie wymaga microphone/inference.
-Controlled owned Desktop: BGE clients=1, requests=5, closed=1;
-Qwen clients=1, generate attempts=3 + 1 cancelled generation, closed=1.
-Standalone default CLI/server ownership regressions PASS.
+17. Real/controlled Whisper result
+Opt-in KULAI_RUN_WHISPER_INTEGRATION=1 + owned PG: PASS, standalone 1 PASS / 12.32s i ponownie w root full.
+Real large-v3 / cuda / int8_float16 / VAD=true transkrybuje kontrolowane angielskie audio dla NOTE i QUESTION. Question chars=33; exact wording nie jest wymuszany.
+Lokalny Windows System.Speech służy wyłącznie do wygenerowania fixture WAV; nie dodaje produktu TTS. Generated originals i recorder copies są usuwane, audio_retained=0.
+Initial fixture corrections: jawne 1024 zamiast unset test setting oraz przekazanie istniejącego host CUDA DLL dir; final test PASS, vendor i kod providerów bez zmian.
+Root dodatkowo przechodzi real Whisper silence/VAD matrix, websocket silence i STT smoke. KULAI_WHISPER_AUDIO unset, więc żadne user audio nie jest odczytywane.
 
-18. Controller unit tests
-backend/tests/test_desktop_rag.py: 20 przypadków PASS w full backend/root.
-Sufficient/citations, insufficient, invalid query/top-k before I/O,
-safe errors/private sentinels, zero voice/save/index/recent side effects,
-multiple ASK runtime/Qwen reuse, actual runtime/indexer borrowed BGE reuse,
-exactly-once closes, configuration cleanup, serialization, external cancellation,
-shutdown cancellation i zero-hit/zero-Qwen/no-generating.
-Existing backend/tests/test_desktop_controller.py voice assertions bez zmian;
-tylko Harness uzyskał isolated provider/runtime factories.
+18. Real BGE result
+bge-m3:567m-fp16, native 1024, dimensions_override_count=0.
+Ten sam BGE klient obsługuje indexing syntetycznej Voice Note, text ASK, voice ASK oraz unsupported voice ASK.
+clients=1, requests=4, closed=1. Shared identity indexer.provider == controller._embedding_provider == RAG retrieval provider.
+Frozen golden BGE także PASS; nie zmieniono modelu/dimension/namespace/datasetu ani thresholds.
 
-19. UI unit tests
-backend/tests/test_desktop_rag_ui.py: 6 przypadków PASS w full backend/root.
-Widgets/initial states, blank input, exact submit/top-k, searching/generating,
-read-only answer/citation formatting, insufficient/failure rendering, controls reenabled,
-no Recent refresh, voice controls i real dedicated QThread with cancellable ask.
-QTimer nadal tickuje podczas generation; request thread różni się od UI thread.
-Close: zero stale result/error, providers closed, loop/thread drained, brak pending-task errors.
-Existing test_desktop_ui.py oraz recorder/configuration tests PASS; bez pixel tests.
+19. Real Qwen result
+qwen3.5:9b, reusable local Ollama provider: clients=1, requests=3, closed=1.
+Text ASK oraz voice query Gdzie mieszka zielony smok? -> ANSWERED, answer mentions Wenus/Venus, exact Memory ID citation, bez invented IDs.
+Unsupported voice query o ulubiony instrument -> INSUFFICIENT_CONTEXT, canonical answer, zero citations i bez invented factual answer.
+STT fake dopuszczony w real BGE+Qwen integration; real Whisper sprawdzony osobno na controlled audio.
+engine.pool.checkedout() podczas wszystkich 3 real Qwen requests: [0,0,0].
 
-20. Owned PostgreSQL Desktop RAG results
-backend/tests/integration/test_desktop_rag_postgres.py: dwa testy PASS.
-Dedicated run: 2 passed in 20.94s; ponownie PASS w root full.
-Owned fixture: The green dragon currently lives on Venus.
-Actual DesktopController + AutomaticMemoryIndexer + MemoryRagRuntime + canonical retrieval.
-Doctor sprawdza owned schema, startup reconciliation indeksuje fixture jednym shared BGE.
-Fake Qwen potwierdza exact canonical content/UUID; sufficient -> ANSWERED i exact citation.
-Snapshots/read-only observer obejmują success, insufficient, failure oraz cancellation.
-Wszystkie temporary databases są usuwane przez ownership helper, bez main writes.
+20. Provider counters
+Controlled all-outcomes owned: Whisper providers=1/inferences=8; BGE clients=1/requests=6/closed=1; LLM clients=1/requests=5 (w tym cancelled generation)/closed=1; audio_retained=0, checkout during LLM=0.
+Real BGE+Qwen owned: Whisper fake providers=1/inferences=3 (note+2 voice); BGE clients=1/requests=4/closed=1/native_dimension=1024/overrides=0; Qwen clients=1/requests=3/closed=1/model=qwen3.5:9b.
+Real Whisper: providers_created=1/models_loaded=1/inference_requests=2; borrowed synthetic BGE requests=2/closed=1, fake LLM closed=1.
+Jeden existing Desktop engine/session factory; bez drugiego runtime, bez drugiego BGE/Whisper/Qwen. Reuse i exactly-once cleanup potwierdzone również przy shutdown cancellation.
+Reusable Whisper nie ma aclose; po drenażu controller zwalnia service/provider references, zachowując istniejący lifecycle i cleanup CUDA scope.
 
-21. Real BGE Desktop result
-desktop.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 3}
-bge-m3:567m-fp16, dimension=1024 native, namespace kulai_memory.memories.v1 bez zmian.
-One client obsługuje automatic indexing fixture i oba questions, closed once.
-Existing real BGE retrieval/indexing/lifecycle regressions także PASS w root full.
+21. Owned DatabaseSnapshot BEFORE/AFTER
+Poniższe complete snapshots z final root run; każda para identyczna, revision=[kulai_memory_0004].
+Controlled all-outcomes:
+Memory count=1 sha256=19dfc89ca7fdeff79f4f312483647eec566b756abd90bdec220c265a51da23c6
+Vector count=1 sha256=1e6a3a4df38a1bc3f1e0dfe2bbfcb03edcc7791f02bf85f8c318eeb60ee4ed79
+Tombstone count=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+Real BGE+Qwen:
+Memory count=1 sha256=b348cc717e30d659976397c9c0709da12eef4f26bc94d28ab41ee7463a36777a
+Vector count=1 sha256=a99f65510bf84ccc8e41f991b7d1c59f32bed55247aa68d127ecc5f7c8b4fdb4
+Tombstone count=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+Real Whisper:
+Memory count=1 sha256=c74bb6f2711e342a1e82f62c0f40784fe32799b90120707fb1311c4d1de5df75
+Vector count=1 sha256=e35eda8ffae7ce4d0780d23a83d339963110fa39f9d1fff783823a3de69c799e
+Tombstone count=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+SQL observer: zero writes/commits dla questions; session zamknięta przed LLM, checkedout=0.
 
-22. Real Qwen Desktop result
-desktop.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 2}
-desktop.real.pl=PASS;mentions_venus=true;exact_memory_citation=true;status=ANSWERED
-qwen3.5:9b through reusable kulai-llm/kulai-provider-ollama contracts.
-PL question: Gdzie obecnie mieszka zielony smok?
-Summary: ANSWERED, odpowiedź wskazuje Wenus/Venus, exact synthetic Memory citation.
-Bez exact wording assertion i bez raw prompt/context/payload dump w raporcie.
-Existing standalone real Qwen grounding/injection tests również PASS.
+22. Main DatabaseSnapshot BEFORE/AFTER
+IDENTICAL complete snapshots, automatyczna asercja porównania PASS. Revision=[kulai_memory_0004].
+BEFORE i AFTER:
+Memory count=8 sha256=45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f
+Vector count=8 sha256=21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11
+Tombstone count=1 sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Main pozostawał READ ONLY. Zero automated main Memory/audio use przez LLM/STT. Nie wykonano manualnego main RAG/microphone smoke.
+Safe JSON artifacts: .venv/task6a3/main_before.json i main_after.json; katalog jest lokalnie ignorowany.
 
-23. Unsupported-question result
-Question: Jaki jest ulubiony instrument smoka?
-desktop.real.unsupported=PASS;status=INSUFFICIENT_CONTEXT;citations=0;invented_facts=false
-Canonical insufficient answer, sources empty; brak factual fabrication w reviewed test.
-No-context remains zero Qwen calls.
-Existing prompt-injection regressions i real smoke:
-rag.real.injection=PASS;prompt_exposed=false;memory_commands_followed=false
-Desktop reuses ten sam system instruction i escaped bounded data context bez zmian.
+23. Backend tests
+.venv\Scripts\python.exe -m pytest backend/tests -q
+409 PASS, 83 skipped, 1 existing Starlette/anyio deprecation warning; 9.41s, exit=0.
+Default skips dotyczą opt-in integrations. Te integrations uruchomiono następnie w root full z flags=1.
+Pokrycie Desktop/RAG, retrieval, automatic indexing, lifecycle, ingestion, deletion/tombstones, backup/restore, websocket, boundaries i provider failures.
 
-24. DB checkout-during-Qwen proof
-desktop.real.checkout_during_llm=[0, 0]
-Owned fake Qwen obserwował [0,0,0], cancelled request także assert checkedout()==0.
-Query embedding również wykonuje assert checkout==0.
-Existing retrieve_memories otwiera jeden short read-only snapshot dopiero po embeddingu,
-resolves canonical identities/revisions/active state, rollback/close przed generation callback/Qwen.
-Nie trzymamy PostgreSQL transaction podczas model generation.
+24. Root tests / regressions / golden
+.venv\Scripts\python.exe -m pytest -q -s -ra
+KULAI_RUN_POSTGRES_INTEGRATION=1, KULAI_RUN_OLLAMA_INTEGRATION=1, KULAI_RUN_LLM_INTEGRATION=1, KULAI_RUN_WHISPER_INTEGRATION=1.
+Host CUDA DLL directory dodany tylko do PATH procesu testowego; KULAI_WHISPER_AUDIO unset, bez external user audio.
+740 PASS, 2 skipped, 1 existing Starlette/anyio warning; 253.65s, exit=0.
+Skips: optional explicit external speech audio nie podano; Windows symlink niedostępny dla procesu.
+Owned PostgreSQL, real BGE, real Qwen, new real Whisper, old Desktop/UI/RAG, retrieval, auto indexing, lifecycle, ingestion, deletion/tombstones, backup/restore i application boundaries PASS.
+Strict backup/restore 0004 fingerprints match, source unchanged, tombstone replay protection PASS.
+Frozen golden: dataset_sha256=73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7.
+16 documents / 16 queries; Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0, również PL i EN =1.0.
+Golden provider clients=1/requests=32/closed=1/native_1024=32/overrides=0; fingerprints_unchanged=true.
+Dataset/hash/evaluation thresholds bez zmian. Nie dodano runtime score cutoff ani rerankera.
+Android/protocol/mobile/generated files bez zmian; rebuild Android nie był wymagany.
+Expected negative CLI/provider tests emitują safe FAIL messages; nie są failures pytest (root native exit=0).
 
-25. Owned snapshot BEFORE/AFTER
-Controlled synthetic Desktop:
-desktop.owned.snapshot_before={"memories": {"count": 1, "sha256": "e45f4bf36eb4315d2daf9530bd4801653562b2c242978a0cec6ffeca16505d86"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "f1fd815bd432c1e0398131b75ca9cf3ae0097ff41bb547bcb3555ff9973fbd93"}}
-desktop.owned.snapshot_after={"memories": {"count": 1, "sha256": "e45f4bf36eb4315d2daf9530bd4801653562b2c242978a0cec6ffeca16505d86"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "f1fd815bd432c1e0398131b75ca9cf3ae0097ff41bb547bcb3555ff9973fbd93"}}
-Real BGE+Qwen Desktop:
-desktop.real.snapshot_before={"memories": {"count": 1, "sha256": "c430b28c084c2d0b332b943007e730f162326c7152ac50d5a3ca977facb24a1f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "65f5150154479c12f2c20fe7fa9453cd6d891ec1db7524c3c9163fefb3ba45f0"}}
-desktop.real.snapshot_after={"memories": {"count": 1, "sha256": "c430b28c084c2d0b332b943007e730f162326c7152ac50d5a3ca977facb24a1f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "65f5150154479c12f2c20fe7fa9453cd6d891ec1db7524c3c9163fefb3ba45f0"}}
-Każda para IDENTICAL, pełne Memory/vector/tombstone fingerprints i revision.
-Controlled tests sprawdzają equality osobno dla wszystkich czterech outcome paths.
+25. pip check
+.venv\Scripts\python.exe -m pip check -> No broken requirements found.; exit=0.
+Użyto SDK wskazanego przez PyCharm: C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe, Python 3.13.15/pip.
 
-26. Main snapshot BEFORE/AFTER
-BEFORE={"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
-AFTER={"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
-IDENTICAL. Main Memory/vector/tombstone = 8/8/1, schema kulai_memory_0004.
-Zero automated main Memory-to-LLM calls. Manual main Desktop smoke pozostaje po review.
+26. git diff --check
+PASS, brak whitespace errors. Git emituje istniejące informacyjne LF->CRLF notices.
+Final git status zawiera wyłącznie zakres Desktop, nowe testy, README i tracked wynik.txt.
 
-27. Frozen golden retrieval hash/metrics
-golden.evaluation={"dataset_sha256": "73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7", "documents": 16, "en": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "fingerprints_unchanged": true, "mrr_at_5": 1.0, "pl": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "provider": {"clients": 1, "closed": 1, "native_1024": 32, "overrides": 0, "requests": 32}, "queries": 16, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}
-golden.thresholds=Recall@1>=0.60,Recall@3>=0.80,Recall@5>=0.90
-Dataset/hash/thresholds bez zmian. Recall@1/@3/@5, MRR@5 =1.0 overall, PL i EN.
-16 documents /16 queries, native1024, zero dimension overrides, fingerprints unchanged.
-Thresholds są existing reviewed evaluation gates; nie dodano runtime semantic score cutoff.
+27. db_doctor
+Start i final PASS; dodatkowo scripts/db_doctor.py --json exit=0, wszystkie 16 checks ok=true.
+Current/expected head kulai_memory_0004, transaction_read_only=on, PostgreSQL18.6, pgvector0.8.6, vector(1024), schema/constraints/tombstones PASS.
+Brak schema changes i brak nowej migration.
 
-28. Backend tests
-.venv\Scripts\python.exe -m pytest backend/tests -q -rs
-384 passed, 80 skipped, 1 warning in 4.96s
-80 skips przy wyłączonych opt-ins; applicable PG/BGE/Qwen tests uruchomione w root full
-z wszystkimi trzema wymaganymi flags=1. Brak failures.
-Existing retrieval/indexing/lifecycle/ingestion/deletion/tombstone/Desktop/WebSocket/
-application-boundary suites PASS. Jedyny warning: existing Starlette/AnyIO deprecation.
-
-29. Root tests
-KULAI_RUN_POSTGRES_INTEGRATION=1
-KULAI_RUN_OLLAMA_INTEGRATION=1
-KULAI_RUN_LLM_INTEGRATION=1
-.venv\Scripts\python.exe -m pytest -q -rs -s
-708 passed, 6 skipped, 1 warning in 198.24s (0:03:18)
-Native Python exit code=0 zapisany jawnie po zakończeniu procesu.
-Obejmuje backend oraz root CLI/safety/backup/restore/migration/retrieval tests.
-Owned PostgreSQL integrations, real BGE, real Qwen, new Desktop RAG i frozen golden PASS.
-Pozostałe opt-in/OS skips:
-SKIPPED [1] backend\tests\integration\test_desktop_runtime.py:109: set KULAI_RUN_POSTGRES_INTEGRATION=1 and KULAI_RUN_WHISPER_INTEGRATION=1
-SKIPPED [1] backend\tests\integration\test_memory_websocket.py:275: Set KULAI_RUN_WHISPER_INTEGRATION=1 for real Whisper.
-SKIPPED [1] backend\tests\integration\test_whisper.py:152: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
-SKIPPED [1] backend\tests\integration\test_whisper.py:189: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
-SKIPPED [1] backend\tests\integration\test_whisper.py:230: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
-SKIPPED [1] tests\test_pre_migration_backup.py:233: Symlinks are unavailable to this process
-Real Whisper inference nie było uruchamiane; existing voice unit/synthetic PG tests PASS.
-Żaden test nie wykonywał LLM na main danych.
-
-30. Android status
-Mobile/protocol/shared generated files bez zmian; Android rebuild nie wymagany.
-WebSocket protocol bez zmian, jego regression tests PASS.
-
-31. Pip check
-.venv\Scripts\python.exe -m pip check
-PASS: No broken requirements found.
-Brak nowych dependencies/API keys/remote providers.
-
-32. Git diff --check
-PASS, zero whitespace errors. Git pokazuje wyłącznie existing LF->CRLF conversion warnings.
-Golden, migrations, mobile/shared, vendor diff empty.
-
-33. Db doctor
-Main BEFORE PASS; AFTER PASS. Revision kulai_memory_0004.
-Owned Desktop startup real doctor PASS. Schema nie zmieniono, migration 0005 nie istnieje.
-
-34. Vendor status
+28. Vendor status
 git -C vendor/kulai_modules status --porcelain: empty.
-Submodule/gitlink 720d0f26c75ba4af24d395f98f15a37e4bd5067e bez zmian.
-Nie było vendor root-cause patch ani potrzeby modyfikowania reusable modules.
+Submodule nadal 720d0f26c75ba4af24d395f98f15a37e4bd5067e, bez zmian gitlink i reusable modules.
+HEAD nadal 339cd30, brak nowych commitów i pusha.
 
-35. Exact changed files
+29. Exact changed files
 README.md
-backend/src/kulai_memory/automatic_indexing.py
+backend/README.md
 backend/src/kulai_memory/desktop/__init__.py
 backend/src/kulai_memory/desktop/app.py
 backend/src/kulai_memory/desktop/controller.py
 backend/src/kulai_memory/desktop/models.py
-backend/src/kulai_memory/rag_runtime.py
-backend/tests/desktop_rag_fakes.py
-backend/tests/integration/test_automatic_indexing_postgres.py
-backend/tests/integration/test_desktop_rag_postgres.py
-backend/tests/test_desktop_controller.py
-backend/tests/test_desktop_rag.py
-backend/tests/test_desktop_rag_ui.py
-wynik.txt
-Wynik.txt zastępuje poprzedni raport 6A.1 pełnym raportem 6A.2.
-Logs/snapshots w ignored .venv/task6a2 nie są częścią zmian repo.
+backend/tests/test_desktop_voice_question.py (new)
+backend/tests/test_desktop_voice_question_ui.py (new)
+backend/tests/voice_question_fakes.py (new)
+backend/tests/integration/test_desktop_voice_question_postgres.py (new)
+backend/tests/integration/test_desktop_voice_question_whisper.py (new)
+wynik.txt (ten raport, tracked)
+Nie zmieniono Memory schema, migrations, retrieval, RAG prompt/validation, model settings, vector namespace, Androida ani WebSocket protocol.
 
-36. Known limitations
-Brak reviewed semantic score cutoff/reranker, voice-question, TTS, multi-turn,
-Android RAG UI, WebSocket RAG i conversation history.
-Pierwsze ASK może cold-loadować Qwen; brak percentage/download progress UI.
-Grounding/provenance validation i reviewed injection tests nie stanowią oceny wszystkich
-możliwych przyszłych pytań/model outputs. Existing conservative 12000-char context budget
-pozostaje zamiast token-count budget; generation timeout pozostaje 180s.
-Pending voice save/indexing trzeba zakończyć przed nowym ASK.
-RAG shutdown jest cancellable; existing voice/STT shutdown semantics zachowano.
-Manual main/microphone smoke nie wykonywano w automated task, zgodnie z ustalonym review flow.
+30. Known limitations
+Thread-backed Whisper shutdown czeka na zakończenie inference/audio read; nie deklarujemy natychmiastowego anulowania CUDA inference. Qwen cancellation pozostaje bounded i nie czeka 180s.
+Real microphone/main smoke pozostaje ręczny po review; automated positives używają controlled/generated WAV i owned DB.
+Real Whisper positive fixture generator używa Windows System.Speech, opt-in; na innych OS jawny skip tego fixture generatora.
+Nadal brak TTS feature, Android RAG UI, WebSocket voice RAG, multi-turn conversation oraz reviewed semantic score cutoff/rerankera.
+CLI ask_memory.py pozostaje diagnostic/local tool. Nie zapisano conversation history.
 
-37. Proposed commit message
-feat: add Desktop Memory assistant with shared BGE and cancellable RAG
+31. Proposed commit message
+feat: add Desktop voice questions through existing Memory RAG
 
-38. Decyzja
+32. Decyzja
 OK DO COMMITA
-Quality gate PASS: Ask Memory UI/controller, canonical 6A.1 RAG reuse,
-validated citations, insufficient/no-context, no query-as-Memory, responsive Qt,
-cancellable Qwen shutdown, one shared BGE, reused Qwen, exactly-once close,
-real owned BGE+Qwen Desktop PASS, DB checkout=0, owned/main snapshots unchanged,
-golden unchanged, regression suites PASS, vendor clean.
-Nie commitowano i nie pushowano zmian 6A.2.
-
-Korekta dokumentacji po TASK 6A.2 — 2026-10-09
-
-1. Zakres
-Poprawiono wyłącznie nieaktualny akapit RAG w backend/README.md.
-Ten raport dopisano do wynik.txt, zachowując wcześniejszy pełny raport 6A.2.
-Nie zmieniono kodu, testów ani root README; nie wykonywano operacji na DB/LLM.
-
-2. Aktualne wording
-Text RAG jest dostępny w Desktop przez Ask Memory oraz przez read-only CLI.
-Desktop używa canonical MemoryRagRuntime. Runtime pożycza jeden wspólny BGE
-używany również przez automatic indexing i posiada jeden reusable local Qwen provider.
-W CLI runtime nadal posiada oba providery. Opis jest zgodny z root README.
-Jawnie wymieniono pozostałe ograniczenia: brak reviewed score cutoff/reranker,
-voice-question RAG, TTS, Android RAG UI, WebSocket RAG i multi-turn conversation.
-Usunięto ogólne, nieaktualne stwierdzenie o braku UI RAG integration.
-
-3. Weryfikacja
-git diff --check: PASS, exit=0, bez whitespace errors.
-Git pokazuje jedynie ostrzeżenia o konwersji LF do CRLF.
-git status --short: exit=0; pełny wynik poniżej.
-Porównanie SHA-256 13 istniejących zmienionych plików (z pominięciem
-backend/README.md i wynik.txt) potwierdziło brak dodatkowych zmian.
-Testów nie uruchamiano: korekta dotyczy wyłącznie dokumentacji.
-
-4. Stan working tree
-Zmiany kodu/testów/root README widoczne w statusie pochodzą z wcześniejszego
-TASK 6A.2 i zostały zachowane bez modyfikacji. W tej korekcie edytowano tylko
-backend/README.md oraz dopisano raport do wynik.txt.
- M README.md
- M backend/README.md
- M backend/src/kulai_memory/automatic_indexing.py
- M backend/src/kulai_memory/desktop/__init__.py
- M backend/src/kulai_memory/desktop/app.py
- M backend/src/kulai_memory/desktop/controller.py
- M backend/src/kulai_memory/desktop/models.py
- M backend/src/kulai_memory/rag_runtime.py
- M backend/tests/integration/test_automatic_indexing_postgres.py
- M backend/tests/test_desktop_controller.py
- M wynik.txt
-?? backend/tests/desktop_rag_fakes.py
-?? backend/tests/integration/test_desktop_rag_postgres.py
-?? backend/tests/test_desktop_rag.py
-?? backend/tests/test_desktop_rag_ui.py
-
-5. Wynik
-Korekta dokumentacji zakończona. Nie wykonano commita ani pusha.
+Voice question -> shared Whisper -> existing ask_memory/canonical RAG -> validated answer/citations działa.
+One Whisper/BGE/Qwen/engine/runtime, zero question writes, empty skips RAG, WAV cleanup i shutdown PASS.
+Text ASK i Voice Note bez regresji; real owned BGE+Qwen i real controlled Whisper PASS; main snapshot identical; golden unchanged; full regressions PASS; vendor clean.
+Nie commitowano. Nie pushowano.
