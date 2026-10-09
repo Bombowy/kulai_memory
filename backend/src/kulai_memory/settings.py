@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     kulai_vector_dimension: int | None = Field(default=None, gt=0)
     kulai_embedding_model: str = "bge-m3:567m-fp16"
     kulai_ollama_base_url: str = "http://127.0.0.1:11434"
+    kulai_llm_model: str = "qwen3.5:9b"
     kulai_whisper_model: str = "large-v3"
     kulai_whisper_device: str = "cuda"
     kulai_whisper_compute_type: str = "int8_float16"

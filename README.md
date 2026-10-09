@@ -182,8 +182,9 @@ Manual microphone smoke checklist:
 The alpha records mono PCM16 at 16 kHz, limits one recording to 10 minutes,
 and removes its temporary WAV after transcription. A failed database save can
 be retried in the same process without recording or transcribing again. Pending
-saves do not survive application restart. Streaming partial transcripts,
-mobile clients, embeddings, semantic search, and RAG are outside this alpha.
+saves do not survive application restart. Streaming partial transcripts and
+Desktop/voice RAG responses remain outside this alpha. Memory indexing is
+automatic; semantic search and text RAG are available through local CLIs.
 
 ## Local WebSocket voice-memory adapter
 
@@ -250,7 +251,7 @@ to replay private cached PCM with the same ingestion ID. A live recoverable
 database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
 
 This alpha does not retain retry state across process death. It has no history
-screen, LAN transport, WSS, authentication, embeddings, RAG, partial STT, or
+screen, LAN transport, WSS, authentication, RAG UI, partial STT, or
 public-storage audio. LAN/WSS and authentication/pairing belong to TASK 4D.
 
 ## Local embedding foundation
@@ -282,8 +283,94 @@ Remove-Item Env:KULAI_RUN_OLLAMA_INTEGRATION
 ```
 
 The integration uses two synthetic requests on one provider/client, with no
-PostgreSQL dependency. This foundation does not index Memory, write vectors,
-perform retrieval, or run RAG.
+PostgreSQL dependency. Memory indexing, retrieval and text RAG build on this
+foundation through the separate services described below.
+
+## Local text RAG over canonical Memory
+
+`scripts/ask_memory.py` runs query → native BGE-M3 query embedding → existing
+canonical semantic retrieval → bounded Memory context → local Qwen → grounded
+answer with validated Memory citations. It requires local development settings,
+loopback PostgreSQL/Ollama, `db_doctor` PASS at `kulai_memory_0004`, exact BGE
+`bge-m3:567m-fp16` / native dimension 1024, and an installed LLM model:
+
+```text
+KULAI_LLM_MODEL=qwen3.5:9b
+KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+No model is downloaded by the application. Run locally in PowerShell:
+
+```powershell
+.venv\Scripts\python.exe scripts\ask_memory.py `
+    --query "Gdzie mieszka mój zielony smok?" `
+    --top-k 5
+```
+
+The CLI is read-only and requires no backup. Query must be nonblank and at most
+10,000 characters; top-k defaults to 5 and accepts 1..20. Normal output is
+`query=...`, `answer=...`, `sufficient_context=true|false`, and `citations=...`
+(canonical Memory UUIDs). It shows neither context nor prompts by default.
+`--show-context` explicitly displays Memory content for local debugging.
+
+The application uses the neutral `kulai_llm.generate_structured` contract and
+the reusable `kulai-provider-ollama` adapter. JSON Schema output is parsed and
+strictly validated, with no output repair. A sufficient answer needs at least
+one citation; unknown IDs fail safely. IDs must belong to the actual supplied
+canonical evidence, and duplicates are removed in first-occurrence order.
+The public `MemoryRagResult` contains the query, answer, sufficient-context
+flag, citations with rank/score, and retrieval counts/budget/metric. It contains
+no vectors, arbitrary Memory/vector metadata, context, or raw provider payload.
+
+Memory is user-authored historical **untrusted data**. The stable system
+instruction forbids executing commands inside Memory, disclosing system
+instructions, inventing facts/citations, or filling gaps with general knowledge.
+Evidence is a separately labeled JSON user message; the question is a separate
+JSON user message. Each Memory has `memory_id`, `rank`, and canonical `content`.
+JSON escaping keeps malicious delimiters inside the content value. Prompt
+instructions mitigate injection; they do not formally prove model compliance.
+
+Context includes whole Memories in retrieval order up to a global **12,000
+character** limit, including JSON wrappers, IDs, ranks, and escaping. The
+builder stops before the first block that does not fit and never joins partial
+Memories. The reviewed `kulai-rag` API has no public standalone context builder
+or token counter; its answer helper also performs a different chunk-metadata
+retrieval. Therefore canonical Memory retrieval stays unchanged and the host
+uses an explicit conservative character budget. Characters are not tokens;
+this is not a tokenizer-based guarantee of context-window occupancy.
+
+Zero hits (or no whole Memory fitting the budget) return
+`Nie mam wystarczających informacji w pamięci.` with `sufficient_context=false`,
+zero citations, and **zero LLM calls**. For unrelated evidence, Qwen must return
+the insufficient-context flag; the application normalizes that answer to the
+same canonical message. No reviewed semantic score cutoff or reranker exists
+yet; both remain outside TASK 6A.1. Citation validation proves provenance, not
+semantic entailment of every generated sentence.
+
+One `MemoryRagRuntime` scope owns and reuses one BGE provider/client and one
+Qwen provider/client, closing both on success, errors and cancellation. Query
+embedding runs without a DB checkout. Existing retrieval uses one short
+REPEATABLE READ, READ ONLY snapshot to resolve active canonical identities and
+exact revisions, then rolls back and closes its session **before Qwen**.
+The LLM has an explicit 180-second generation/HTTP timeout and the CLI a
+300-second overall deadline. Qwen uses non-streaming schema output with
+thinking disabled; no Whisper is loaded. Desktop, microphone, WebSocket and
+Android RAG UX are not integrated.
+
+The real RAG integration uses **only owned temporary databases and synthetic
+Memories**, never real main content:
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION = "1"
+$env:KULAI_RUN_OLLAMA_INTEGRATION = "1"
+$env:KULAI_RUN_LLM_INTEGRATION = "1"
+.venv\Scripts\python.exe -m pytest backend\tests\integration\test_memory_rag_postgres.py -q -s
+```
+
+It checks Polish grounding, unsupported questions, prompt injection, exact
+citations, complete snapshot equality, client reuse/closure, and zero DB
+checkout during Qwen. Synthetic PostgreSQL tests additionally check latest
+edits, archive exclusion, and stale-vector rejection before generation.
 
 ## Memory vector indexing
 
@@ -397,11 +484,11 @@ Deletion currently has no UI, CLI or transport endpoint. Real deletion and
 concurrency tests use owned temporary databases under
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; automatic validation never deletes main DB
 Memory. Host revision `kulai_memory_0003` adds the technical tombstone table;
-the reviewed vendor pin is unchanged. Main DB retains schema `kulai_memory_0003`;
-the new local head `kulai_memory_0004` requires a separately reviewed manual upgrade.
-Until then, full doctor reports the expected revision/lifecycle-schema mismatch,
-and Desktop/server startup remains blocked by strict schema validation. No main
-migration, automatic upgrade, stamp or diagnostic bypass is performed by this task.
+the reviewed vendor pin is unchanged. Runtime requires the current schema head
+`kulai_memory_0004`. A database still on 0003 needs an explicitly reviewed manual
+upgrade after pre-migration backup and restore verification. Strict doctor and
+startup validation reject outdated schemas; runtime never upgrades or stamps
+the database automatically.
 
 ## Memory edit, archive and restore
 

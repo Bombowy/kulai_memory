@@ -14,6 +14,7 @@ FORBIDDEN_IMPORT_ROOTS = {
     "httpx",
     "kulai_db",
     "kulai_provider_ollama_embeddings",
+    "kulai_provider_ollama",
     "kulai_provider_whisper",
     "kulai_vector_store_pgvector",
     "faster_whisper",

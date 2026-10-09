@@ -59,6 +59,7 @@ from .retrieval import (
     MemoryRetrievalResult,
     MemoryRetrievalService,
 )
+from .rag import MemoryCitation, MemoryRagError, MemoryRagResult
 from .transcription import TranscriptionService
 from .voice_session import (
     VoiceSession,
@@ -111,6 +112,9 @@ __all__ = [
     "MemoryRetrievalHit",
     "MemoryRetrievalResult",
     "MemoryRetrievalService",
+    "MemoryCitation",
+    "MemoryRagError",
+    "MemoryRagResult",
     "MemoryService",
     "MemorySourceKind",
     "RagContextEvent",

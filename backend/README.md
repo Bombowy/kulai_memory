@@ -98,6 +98,16 @@ The core FastAPI runtime provides `/health` plus the local-only
 
 ASGI entry point: `kulai_memory.main:app`. Copy `backend/.env.example` to `backend/.env` before local runtime. After Studio bootstrap, run the root `scripts/dev.py` with the project `.venv` Python.
 
+Local text RAG is a separate read-only `scripts/ask_memory.py` CLI, documented in
+the root README. `application.rag` uses only neutral retrieval and LLM contracts;
+`rag_runtime.MemoryRagRuntime` owns one reusable BGE and one local Qwen provider.
+`KULAI_LLM_MODEL=qwen3.5:9b` shares the loopback `KULAI_OLLAMA_BASE_URL` setting.
+Canonical retrieval closes its short read-only snapshot before structured Qwen
+generation. Bounded untrusted JSON evidence contains only IDs, ranks and content;
+answers require validated citations or return canonical insufficient context.
+Zero evidence skips the LLM. There is no score cutoff/reranker or voice/UI RAG
+integration yet. Tests use only owned DBs with synthetic evidence.
+
 Local PostgreSQL is started only through `scripts/postgres.py`, which passes
 `backend/.env` explicitly to Compose. `scripts/db_doctor.py` performs read-only
 schema and revision checks. `scripts/db_backup.py` creates a full PostgreSQL

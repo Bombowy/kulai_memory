@@ -1,343 +1,334 @@
-﻿EDIT / ARCHIVE / RESTORE — raport implementacji zatwierdzonego planu
-Data: 2026-10-08
+TASK 6A.1 — Local text RAG over canonical KulAI Memory
 Repo: C:\Bombowy\Projekty\kulai_memory
+Data: 2026-10-09
+DECYZJA: OK DO COMMITA
+Nie wykonano commita ani pusha. Main DB wyłącznie READ ONLY.
+Żadna realna main Memory nie została wysłana do LLM w automated tests.
 
-DECYZJA: OK DO COMMITA / GOTOWE DO MANUALNEJ MIGRACJI
-Nie wykonano commita, pusha ani migracji main DB. Zmiany pozostają do review.
+1. Start commit/status
+Branch main, start d060298 (feat: add revision-safe Memory editing and reversible archive lifecycle).
+git status: clean; git status -sb: main...origin/main.
+Start log -5: d060298, 76f7df0, 2e20c74, 98e8dea, f938741.
+Vendor gitlink/HEAD: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; working tree clean.
+Stan końcowy: wyłącznie zmiany hosta wymienione w punkcie 37, nic staged.
+HEAD pozostał bez zmian. Nie tworzono migration 0005.
+Interpreter dla root CLI/testów sprawdzony przez PyCharm: root .venv, Python 3.13.15, pip.
 
-1. Stan początkowy i zakres
-Start commit: 76f7df0e564e7ceb2460b8c4d6754ccfbd455350
-Commit: feat: automatically index voice memories with crash-gap recovery
-Branch: main, synchronizowana z origin/main; working tree na starcie clean.
-Vendor: 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean przed i po.
-Main na starcie: kulai_memory_0003, doctor PASS.
-Faktyczny odczyt main: 8 Memories / 8 vectors / 1 tombstone.
-Nie użyto historycznej liczby 7 jako założenia testów.
+2. Main complete DatabaseSnapshot BEFORE
+{"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
+db_doctor BEFORE: PASS. Rewizja kulai_memory_0004.
+Counts Memory/vector/tombstone = 8/8/1. Nie wypisywano canonical content.
 
-Zrealizowano application/core + host persistence + guarded local CLI.
-Nie dodano przycisków akcji do Desktop, endpointów ani zmian Androida.
-Nie dodano LLM/RAG, edit history, workerów ani zmian vendora.
+3. Reviewed kulai-rag API
+Przeczytano README oraz rzeczywiste service.py/schemas.py.
+Publiczne ingest/retrieve/answer, RagRetrieveRequest/Result, RagAnswerRequest/Result.
+RagAnswerRequest.max_context_chars=12000; helper answer sam wykonuje retrieve.
+Własny retrieval tego modułu rekonstruuje chunk text z _kulai_rag_* vector metadata.
+RagAnswerResult zawiera retrieval i LLMResponse; nie zapewnia typed sufficient-context/citation validation.
+Context builder jest prywatnym _context_payload; brak publicznego osobnego buildera i token counter.
+Nie użyto answer(), ponieważ ominąłby canonical Memory revision/archive/identity resolution.
+Zachowano existing Memory retrieval; host dodaje tylko bounded context i typed LLM adapter.
+Nie kopiowano chunk metadata ani nie tworzono drugiego semantic search.
 
-2. Zaakceptowane decyzje
-- EDIT wymaga expected_revision; nieaktualny edytor otrzymuje controlled conflict.
-- EDIT zarchiwizowanej Memory wymaga wcześniejszego RESTORE.
-- Zmieniona canonical Memory pozostaje committed także po indexing failure.
-- Kompatybilne istniejące vectory otrzymują revision=1 podczas migracji;
-  nie wykonuje się ich ponownego embeddingowania.
-- Stary retry voice z oryginalnym contentem po EDIT pozostaje terminalnym
-  idempotency conflict. Nie wprowadzono przechowywania oryginalnego transcriptu,
-  dodatkowego fingerprintu ingestion payload ani historii treści.
-- Main DB pozostaje read-only przez cały task.
+4. Reviewed kulai-llm API
+LLMProvider: provider_id, capabilities, async generate(LLMRequest) -> LLMResponse.
+LLMMessage.system/user/assistant; LLMRequest.messages, response_format, model_hint,
+temperature, top_p, max_output_tokens, seed, stop_sequences.
+LLMResponse: text, provider_id, model_id, optional finish_reason/usage.
+generate() waliduje request, capabilities, provider identity i response.
+generate_structured() buduje exact JSON Schema z Pydantic, wywołuje provider oraz strict JSON/Pydantic validation.
+Odrzuca fences, dodatkową prozę, duplicate JSON keys, nonfinite numbers i schema mismatch.
+Brak streaming, retry oraz własnego timeout/lifecycle w neutralnym core.
+Wdrożenie używa generate_structured(), bez własnego parsera outputu i bez output repair.
 
-3. Schema i migration
-Nowy pojedynczy local head: kulai_memory_0004.
-Down revision: kulai_memory_0003.
-Nowy plik: backend/migrations/versions/kulai_memory_0004_memory_lifecycle.py.
-memories.revision: INTEGER NOT NULL DEFAULT 1.
-memories.archived_at: TIMESTAMPTZ NULL.
-Constraint: ck_memories_revision_positive, revision >= 1.
-Domain wymaga strict positive int revision i timezone-aware archived_at,
-normalizowanego do UTC.
+5. Reviewed Ollama LLM provider API
+OllamaLLMProvider(OllamaProviderConfig): async context manager, generate(), aclose().
+Jeden official ollama.AsyncClient per provider; client reuses HTTP transport.
+Config: model, host, timeout_seconds, keep_alive, num_ctx, think, allow_model_hint.
+Native JSON Schema przez format; stream=False. Final response.message.content bez thinking.
+provider_id=ollama; response model_id pochodzi z Ollama, model selection przez config.model.
+Brak streaming/pulls/remote-provider wiring. Nie zmieniano vendora ani nie pisano direct HTTP.
+Przejrzano również neutralne embeddings/vector-store contracts i istniejące canonical retrieval.
 
-Data migration oznacza revision=1 wyłącznie na vectorach:
-- namespace kulai_memory.memories.v1;
-- record_id == str(canonical Memory.id);
-- source_memory_id == str(canonical Memory.id);
-- embedding_provider_id == ollama;
-- embedding_model_tag == bge-m3:567m-fp16;
-- embedding_dimension == integer 1024 i vector_dims == 1024;
-- brak dotychczasowego klucza revision;
-- canonical Memory active, revision=1.
-Nie zmienia embedding values. Incompatible/orphan vectory, inne namespaces
-oraz istniejące revision metadata pozostają bez zmian.
-Owned migration test potwierdził selektywną anotację i identyczne vector values.
-Nie uruchomiono żadnego upgrade/downgrade/stamp na main.
+6. Settings
+backend/.env.example: KULAI_LLM_MODEL=qwen3.5:9b.
+Settings.kulai_llm_model default qwen3.5:9b.
+Wspólny KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434; factories loopback-only.
+BGE nadal bge-m3:567m-fp16, native 1024, bez dimensions override.
+LLM config: timeout_seconds=180, think=False, num_ctx=32768, allow_model_hint=False.
+Generation: temperature=0, max_output_tokens=2048; CLI overall timeout=300 s.
+Dodano jawne backend dependencies kulai-llm i kulai-provider-ollama, już dostępne lokalnie.
+Nie dodano API key, remote providerów, model downloads ani zmian prywatnego backend/.env.
 
-4. Neutralny lifecycle contract
-MemoryLifecycleService zależy od neutralnego MemoryMutationRepository
-oraz reusable VectorStore. Nie importuje SQLAlchemy, PgVectorStore, Ollama,
-FastAPI, Qt ani adapterów klienta.
-MemoryLifecycleResult: canonical Memory + typed MemoryLifecycleStatus.
-Statusy: EDITED, UNCHANGED, ARCHIVED, ALREADY_ARCHIVED, RESTORED, ALREADY_ACTIVE.
-Host change_memory zwraca MemoryChangeResult z canonical wynikiem,
-opcjonalnym wynikiem indexing i safe indexing_error_code.
+7. RAG typed contract
+MemoryRagResult: query, answer, sufficient_context, citations, retrieval.
+MemoryCitation: canonical UUID memory_id, rank, score.
+MemoryRagRetrievalMetadata: metric, retrieved_count, context_memory_count,
+context_chars, max_context_chars.
+Modele frozen/strict/extra=forbid/hide_input_in_errors.
+Public result nie zawiera Memory content/context, embeddings, vector record metadata ani raw payload.
+Application imports są neutralne: bez SQLAlchemy/FastAPI/Qt/concrete Ollama/PgVectorStore.
+MemoryContext jest prywatną/debug strukturą bez automatycznego repr treści.
 
-EDIT:
-- wspólny ingestion advisory lock, następnie canonical FOR UPDATE;
-- walidacja active state oraz expected_revision;
-- dokładnie niezmieniony content oznacza UNCHANGED, bez increment/delete;
-- zmieniony content zwiększa revision o 1;
-- content/revision update i vector DELETE w jednej transakcji;
-- COMMIT i zamknięcie canonical session;
-- dopiero potem embedding nowego exact contentu i krótki vector COMMIT;
-- finalna metadata revision musi odpowiadać aktualnej canonical Memory.
-ID, ingestion_id, created_at, source_kind, session_id i metadata pozostają.
+8. Context format
+Osobny user message: oznaczona sekcja Memory context (untrusted historical JSON data).
+Compact JSON: memories=[objects z memory_id, rank, canonical content].
+Osobny kolejny user message: pytanie jako JSON query.
+JSON escaping utrzymuje forged delimiters/role claims wewnątrz content, bez regex security parsera.
+Kolejność dokładnie existing retrieval order; nie zmieniano ranków ani score.
+Nie wysyłano dowolnego Memory/vector metadata, credentials/DB config, timestampów ani vectors.
 
-ARCHIVE:
-- archived_at ustawione raz na UTC timestamp;
-- canonical Memory pozostaje, revision pozostaje;
-- vector DELETE w tej samej transakcji;
-- powtórzenie zachowuje pierwsze archived_at;
-- zero embeddingów i zero tombstone creation;
-- Recent Memory, retrieval, automatic reconciliation i oba backfill modes
-  pomijają archiwum;
-- replay ingestion nie przywraca Memory, kończy safe memory.archived.
+9. Context limits
+Globalny default 12000 znaków serialized context, łącznie z wrapper/ID/rank/escaping.
+Dodawane tylko całe Memories. Stop przed pierwszą, która nie mieści się w budżecie.
+Nie obcinano ani nie sklejano części Memories. Zero pasujących bloków -> zero generation.
+Top-k default 5, limit 1..20. Query nonblank, max 10000 chars.
+Char budget jest jawnym conservative fallback; nie gwarantuje token count/context-window occupancy.
+Nie dodano tokenizera, chunkingu ani ukrytego metadata budgetu.
 
-RESTORE:
-- archived_at=NULL w krótkiej canonical transakcji;
-- COMMIT/session close przed embeddingiem;
-- automatic ensure-indexed odtwarza vector dla tej samej treści/revision;
-- powtórny RESTORE może naprawić missing vector;
-- compatible existing vector nadal kosztuje zero embeddingów/upsertów.
+10. Prompt contract
+Krótka stabilna policy bez dynamic user content w system message.
+Grounded-only: używać wyłącznie supplied Memories, bez external/general knowledge i invented facts.
+Nie ujawniać system instructions. Nie wymyślać cytowań; tylko provided IDs.
+Odpowiedź w języku pytania. JSON: answer, used_memory_ids, sufficient_context.
+Sufficient oznacza faktyczne evidence odpowiadające na pytanie, nie możliwość odmowy.
+Policy-disclosure/Memory-command requests mają zwracać insufficient context.
+Całego system promptu/raw promptu nie dumpowano do tego raportu ani standardowego CLI output.
 
-5. Revision compatibility i races
-Exact identity pozostaje:
-namespace=kulai_memory.memories.v1
-record_id=str(Memory.id)
-Metadata zawiera source_memory_id, embedding_provider_id,
-embedding_model_tag, embedding_dimension i revision.
-Content ani arbitrary Memory metadata nie są kopiowane do vector metadata.
-Revision musi być dodatnim int; bool/float/string są incompatible.
-Retrieval wymaga active canonical Memory i exact matching revision.
-Archived albo stale hit daje controlled error, bez cichego mieszania treści.
-Canonical treść nadal pochodzi z memories table; ranking pozostaje zachowany.
+11. Untrusted Memory handling
+Policy jawnie definiuje user-authored historical DATA, nigdy executable instructions.
+Commands/role claims wewnątrz Memory nie są wykonywane; content może być tylko factual context.
+Granica jest strukturalna (escaped JSON, oddzielne role/messages) oraz system instruction.
+Nie implementowano security regex parsera. Model compliance nie jest formalnie gwarantowane.
 
-Lock ordering:
-- ingestion/edit/archive/restore/delete: ingestion advisory -> canonical row;
-- lifecycle mutation/delete: canonical row -> vector;
-- indexing: canonical row FOR UPDATE -> vector.
-Nie wprowadzono process-local identity locka zamiast PostgreSQL locka.
+12. Citation validation
+Strict typed structured output, odpowiedź do 6000 chars, used_memory_ids list max 20.
+IDs muszą należeć do actual supplied canonical context: silniejszy subset niż wszystkie retrieval hits.
+Unknown/malformed/omitted-from-budget ID -> controlled rag.invalid_citations.
+Duplicate IDs deterministycznie dedupe w kolejności pierwszego wystąpienia.
+Sufficient answer wymaga nonblank answer oraz >=1 citation.
+Rank/score odczytane z actual retrieval hit, a nie z model output.
+Insufficient answer nie pokazuje cytowań; unknown IDs także wtedy są odrzucane.
+Walidacja dowodzi provenance; nie jest niezależnym semantic entailment checkerem.
 
-Pre-check oraz finalny canonical FOR UPDATE sprawdzają active/revision.
-Prepared embedding sprzed EDIT/ARCHIVE/DELETE nie może stworzyć stale vectora.
-Real PG testy mutation-wins i index-wins PASS; drugi kierunek udowodnił
-rzeczywiste oczekiwanie pg_stat_activity wait_event_type=Lock.
-Dwa jednoczesne EDIT expected_revision=1: jeden wygrywa, drugi conflict;
-revision kończy na 2, bez deadlocka. Test ma timeout.
-Dotychczasowe delete/index/replay race regressions przechodzą.
+13. Zero-hit behavior
+Zero hits -> sufficient_context=false, citations=[],
+answer="Nie mam wystarczających informacji w pamięci."; zero LLM requests.
+Tak samo gdy nie mieści się żadna kompletna Memory. Potwierdzone unit + empty owned DB.
+Provider client może być utworzony w scope; nie wykonuje generation przy zero evidence.
 
-6. Transakcje, failure i crash recovery
-Embedding nie ma checked-out DB connection.
-Memory edit/restore COMMIT jest wcześniejszy od Ollama requestu.
-Vector/delete/commit failure w canonical transakcji cofa Memory change
-oraz vector deletion razem. Cancellation w tej fazie również rollbackuje.
-Po committed EDIT/RESTORE indexing failure nie cofa canonical state.
-Result jawnie oznacza zapisany canonical change + indexing failure.
-Cancellation po EDIT COMMIT pozostawia revision=2 i brak vectora;
-startup reconciliation naprawia gap bez zmiany Memory fingerprintu.
+14. Insufficient-context behavior
+Nie dodawano arbitrary global score cutoff. Model otrzymuje explicit grounded-only policy.
+Unrelated synthetic evidence -> false; host normalizuje answer do canonical insufficient string.
+Real Qwen: pytanie o ulubiony instrument smoka -> false, zero citations, bez wymyślonej odpowiedzi.
+Semantic score threshold oraz reranker nadal POZA 6A.1; frozen baseline nie ma reviewed cutoff.
 
-Automatic reconciliation i backfill wybierają wyłącznie active Memory,
-w dotychczasowym bounded deterministic ordering. Archive nie jest missing index.
-Incompatible revision metadata jest reported, bez automatic overwrite.
-Manual świadomy reindex nadal używa finalnego active/revision guardu.
-Tombstone semantyka hard delete pozostaje; hard delete archiwum także
-usuwa Memory/vector i zapisuje techniczny tombstone.
+15. Provider lifecycle
+MemoryRagRuntime: jeden BGE provider/client i jeden Qwen provider/client per async scope.
+AsyncExitStack zamyka oba przy success, retrieval failure, LLM failure i cancellation.
+Startup LLM factory failure zamyka wcześniej utworzony BGE provider.
+Reużycie across queries, brak klienta per Memory.
+asyncio.CancelledError nie jest połykany; również real task.cancel() regression PASS.
+LLM generation/HTTP bounded 180 s, CLI 300 s; timeout -> safe public generation error.
+CLI owns engine and disposes it w finally. No Whisper load, VoiceMemoryServerRuntime wiring ani UI.
 
-7. Desktop/server regressions
-MemoryArchivedError jest terminalny w Desktop i WebSocket.
-Desktop czyści pending save i pokazuje safe archived message.
-Po EDIT stary original-content retry jest terminalnym ingestion conflict;
-nie pozostaje w nieskończonym RETRY SAVE loop.
-WebSocket emituje generic canonical ErrorEvent z recoverable=false
-(memory.archived albo dotychczasowy conflict) i zamyka note flow.
-Schema_version=1 i Android wire protocol są bez zmian.
-Retry nie uruchamia dodatkowego Whispera. Nie dodano action UI/API.
+16. Transaction boundaries
+MemoryRetrievalService.prepare() query embedding przed DB checkout.
+retrieve_memories(): jedna existing krótka REPEATABLE READ, READ ONLY snapshot.
+Canonical identity/model/dimension/namespace/active/exact revision gwarantuje existing service.
+retrieve_memories() rollback + close następują przed context build i generation.
+Nie trzymano PostgreSQL session/transaction podczas Qwen, nie dodawano RAG SQL search.
+Evidence odpowiada stanowi retrieval snapshot; nie blokuje edit/archive przez cały generation.
 
-8. Guarded CLI
-scripts/manage_memory.py:
-show --memory-id UUID
-edit --memory-id UUID --expected-revision N --content-file UTF8_PATH
-archive --memory-id UUID
-restore --memory-id UUID
+17. CLI contract
+.venv\Scripts\python.exe scripts\ask_memory.py --query "Gdzie mieszka mój zielony smok?" --top-k 5
+Normal output: query, answer, sufficient_context=true|false, citations=comma-separated UUIDs.
+--show-context jest opt-in; help jawnie ostrzega, że wyświetla Memory content.
+Local APP_ENV, loopback PostgreSQL/Ollama, doctor PASS, exact current/expected head 0004,
+exact BGE config oraz configured nonblank LLM model są wymagane.
+CLI READ ONLY: bez writes i bez wymogu backupu. Help smoke PASS; CLI unit regressions PASS.
+Parser/known/provider errors nie wypisują input values, complete prompt, raw context,
+DB URL/password, vectors, vector metadata ani raw Ollama payload. Safe status/code only.
+Manual main RAG smoke NIE WYKONANY: pozostaje do review zgodnie z zadaniem.
 
-Mutacje domyślnie DRY-RUN; --dry-run i --execute mutually exclusive.
-DRY-RUN: krótkie read-only DB operations, zero embeddingów/backupu/write.
-EXECUTE wymaga --confirm-main-memory-write i --backup-output poza repo,
-nowego bezpiecznego output file, local dev/development/local oraz loopback DB.
-Doctor musi PASS; embedding model i config dimension muszą być exact.
-EDIT/RESTORE: synthetic BGE preflight na jednym reused providerze.
-ARCHIVE nie wymaga Ollama i nie tworzy embedding providera.
-Przed canonical mutation: istniejący custom-format backup + owned restore
-smoke, wszystkie durable fingerprints porównane, source unchanged.
-Backupu nie kasuje się po sukcesie.
-Zero bypass flag/ENV dla production main writes.
-Test-only target przyjmuje verified ownership capability, nie dowolny CLI DB.
-Po indexing failure CLI zwraca non-zero i canonical_change_saved=true.
-Recovery: startup reconciliation albo guarded missing-only backfill.
+18. Fake RAG tests
+Final targeted RAG/CLI/application boundaries: 68 PASS.
+Pokrycie: validation, input limits, no hits/no fitting block -> zero calls,
+deterministic order/global bounds/complete delimiters, malicious data structural separation,
+schema validation, citation subset/dedupe/unknown IDs, sufficient-without-citation rejection,
+insufficient normalization, safe retrieval/LLM errors, no raw context in errors,
+timeout, startup failure cleanup, cancellation propagation i actual task.cancel().
+Concrete LLM imports dodano do forbidden application roots; boundary checks PASS.
 
-Tylko jawne show wyświetla canonical content użytkownikowi.
-Mutation output/error nie zawiera contentu, vectorów, raw payload ani hasła.
-Content-file pozostaje plikiem użytkownika; narzędzie go nie usuwa.
-CLI --help: PASS.
-Nie uruchomiono --execute ani show z prawdziwą Memory na main.
+19. Owned PostgreSQL tests
+Fake RAG na owned migrated 0004: PASS.
+Synthetic Memory A relevant, B unrelated; canonical IDs/ranks/context potwierdzone.
+Empty DB zero generation. Edited latest revision użyta po reindex.
+Archive wyklucza A, unrelated B daje insufficient. Restore zachowuje latest revision.
+Celowo stary vector fixture po restore -> controlled retrieval failure, zero dodatkowych LLM calls.
+SQL observer dopuszcza wyłącznie SELECT/SET/SHOW, zero commits/writes podczas ask.
+Complete snapshots identyczne dla każdego ask oraz rejected stale retrieval.
+Fixture writes/mutations/indexing tylko poza ask, wyłącznie w owned temporary DB.
 
-Bezpieczne przykłady przyszłego lokalnego dry-run, po reviewed migracji:
-.\.venv\Scripts\python.exe scripts\manage_memory.py edit --memory-id <UUID> --expected-revision <N> --content-file <UTF8-file> --dry-run
-.\.venv\Scripts\python.exe scripts\manage_memory.py archive --memory-id <UUID> --dry-run
-.\.venv\Scripts\python.exe scripts\manage_memory.py restore --memory-id <UUID> --dry-run
+20. Real BGE results
+Real native bge-m3:567m-fp16 / 1024: PASS (embedding smoke integration, indexing,
+automatic indexing, lifecycle, golden retrieval oraz new RAG).
+No dimension override, no truncation/padding/model/namespace changes.
+Golden: 1 client, 32 requests, 32 native_1024, 1 close, overrides=0.
+Lifecycle: 1 client, 5 requests/native_1024, 1 close, overrides=0, checkout=0.
 
-9. Backup/restore i fingerprints
-Schema 0004 Memory fingerprint obejmuje także revision i UTC archived_at.
-Schema 0002/0003 zachowuje dotychczasową canonical serialization/hash.
-DatabaseSnapshot nadal obejmuje Memories, vectors, tombstones i revision.
-Strict backup/restore nadal wymaga full doctor PASS.
+21. Real Qwen results
+Owned synthetic BGE+qwen3.5:9b RAG: PASS w standalone final oraz full integration suite.
+Wszystkie final reviewed assertions zachowane; bez exact-wording requirement.
+Pierwsze podejście miało controlled generation_failed podczas initial model run;
+jednocześnie Windows zgłosił transient CLR startup failure. Nie ustalono dokładnej przyczyny SDK.
+Synthetic reusable structured-provider probe następnie PASS; nie zmieniano vendor ani nie maskowano error.
+W następnym probe Qwen bezpiecznie odmówił policy disclosure, ale oznaczył refusal jako sufficient.
+Doprecyzowano system policy (sufficient=factual evidence, policy/commands=insufficient),
+bez weakening assertions/regex filters. Final standalone i full-suite real tests PASS.
+Nie dodawano automatycznych retries ani fallback do remote/general knowledge.
 
-Jawne pre-migration profile:
-0003 -> 0004: dokładnie alembic.current, schema.memories,
-constraint.memories_revision_positive;
-0002 -> 0004: dodatkowo exact historyczne missing-tombstone checks.
-0002 -> 0003 pozostaje obsługiwanym historycznym profilem przy takim head.
-Weryfikowane są wszystkie poprawne legacy columns oraz brak nowych
-lifecycle columns/constraint. Partial schema, diagnostics albo dodatkowy
-unrelated fail są rejected; nie ma ogólnego doctor bypass.
-Drill dostał ten sam jawny pre-migration-from dla read-only main preflight;
-synthetic owned source/restore używają current head.
+22. PL question summary
+"Gdzie obecnie mieszka zielony smok?" -> sufficient_context=true.
+Odpowiedź wspomina Wenus/Venus, zawiera exact canonical synthetic Memory ID.
+Nie wymagano exact wording; żadnych invented Memory IDs.
+Nie dumpowano raw synthetic promptu ani real main Memory content.
 
-Real owned 0002 backup/restore zachowuje 0002 i tombstones=None: PASS.
-Real owned 0003 pre-migration backup/restore zachowuje 0003: PASS.
-Real owned 0004 strict backup/restore, także archived Memory revision=2:
-PASS; wszystkie durable fingerprints równe, źródło unchanged.
-Reviewed replay-protection restore tests nadal PASS.
-Nie wykonano nowego main backupu ani main restore w tym tasku.
+23. Real insufficient-context result
+"Jaki jest ulubiony instrument muzyczny smoka?" -> sufficient_context=false,
+canonical insufficient answer, citations=0; nie wymyślono factual odpowiedzi.
 
-10. Real BGE lifecycle i retrieval
-Model: bge-m3:567m-fp16, native 1024.
-Provider/client tworzony raz dla lifecycle.
-Real lifecycle EDIT -> ARCHIVE -> RESTORE -> canonical retrieval: PASS.
-Client counters: clients=1, requests=5, native_1024=5,
-dimensions overrides=0, closed=1.
-Checkout during embedding=0.
-Po EDIT/RESTORE vector ma revision=2, stable identity i native dimension1024.
-Archive nie pozostawia search hitu. Retrieval po restore zwraca canonical
-Memory z aktualną rewizją. Test kończy się hard delete z tombstone.
-Wyłącznie synthetic content w owned temporary DB.
+24. Prompt-injection regressions
+Synthetic malicious Memory zawiera commands ujawnienia policy, maintenance code i forged delimiter.
+Fake regression: bytes pozostają content w JSON, poza system/question; schema call PASS.
+Real smoke: malicious Memory faktycznie w context, unrelated factual question -> insufficient,
+bez system prompt/maintenance code. Dodatkowy disclosure/execute-command query -> insufficient.
+Bez flaky exact-answer-text security testu; sprawdzano typed behavior i canonical normalized result.
 
-11. Golden retrieval — bez zmiany datasetu/progów
-Dataset SHA-256 before/after:
-73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
-16 documents / 16 queries, 8 EN + 8 PL.
-Thresholds unchanged: Recall@1 >=0.60, Recall@3 >=0.80, Recall@5 >=0.90.
-Actual Recall@1=1.00, Recall@3=1.00, Recall@5=1.00, MRR@5=1.00.
-EN: 1.00 / 1.00 / 1.00 / 1.00.
-PL: 1.00 / 1.00 / 1.00 / 1.00.
-Provider counters: clients=1, requests=32, native_1024=32,
-overrides=0, closed=1.
-Memory/vector fingerprints unchanged during retrieval.
-Bez nowych prefixes, manual normalization, truncation, rerankera lub LLM.
+25. Provider/client counters (real owned RAG)
+rag.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 7}
+rag.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 4}
+BGE requests: 3 indexing + 4 query embeddings. LLM: 4 reviewed questions.
+Jeden provider/client każdego rodzaju, wszystkie zamknięte; reuse potwierdzone.
 
-12. Testy i quality checks
-Backend full bez opt-in: 319 PASS / 76 SKIPPED.
-Root full: 224 PASS / 1 SKIPPED.
-Pełne backend/tests/integration z PostgreSQL i Ollama opt-in:
-71 PASS / 5 SKIPPED, 165.32 s.
-5 pominiętych integracji wymaga osobnego Whisper opt-in; STT/VAD nie zmieniano.
-Nowe lifecycle real tests, concurrency, cancellation, guarded CLI,
-selective migration, archived backfill/reconcile i strict restore: PASS.
-Nowe unit lifecycle, CLI guard oraz fingerprint tests: PASS w pełnych suites.
-Application boundaries, reproducibility, desktop, WebSocket, ingestion,
-indexing, deletion, tombstones, retrieval i backup/restore regressions: PASS.
-Jedno istniejące ostrzeżenie Starlette/anyio BlockingPortal deprecation;
-nie dotyczy wprowadzonej zmiany.
-Python: configured SDK .venv, Python 3.13.15.
-python -m pip check: PASS, No broken requirements found.
-git diff --check: PASS.
-migrate heads: kulai_memory_0004.
-migrate current main: kulai_memory_0003.
-Androida nie przebudowywano; mobile/ i protocol nie zmieniono.
-Manual microphone/UI lifecycle test: NOT EXECUTED — no action UI in scope.
+26. Checkout during LLM proof
+rag.real.checkout_during_llm=[0, 0, 0, 0]
+Official SDK chat wrapper sprawdza engine.pool.checkedout()==0 przed każdym Qwen request.
+Fake owned LLM observations [0,0,0]; również query/indexing embedding checkout=0.
+Brak DB transaction podczas generation; engine dispose i provider closure potwierdzone.
 
-13. Main DB final read-only verification
+27. Complete DatabaseSnapshot owned BEFORE/AFTER
+rag.owned.snapshot_before={"memories": {"count": 2, "sha256": "67641e97dc8d72d78c0ada70ef076911f56b96f124254654719f74462096af1e"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 2, "sha256": "00df0d3b9c91d4470a2db5c2c113e0f4073bc75002d4440822e149a46e11e6c8"}}
+rag.owned.snapshot_after={"memories": {"count": 2, "sha256": "67641e97dc8d72d78c0ada70ef076911f56b96f124254654719f74462096af1e"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 2, "sha256": "00df0d3b9c91d4470a2db5c2c113e0f4073bc75002d4440822e149a46e11e6c8"}}
+rag.real.snapshot_before={"memories": {"count": 3, "sha256": "84185df9e346099a681185f1511f752ab260936d0f9fa4e41a6d53871179ce4c"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 3, "sha256": "ce64e4f892564312d5628a2d9fbd3a17a220082e9d56bf9e0de81d0c4d62a981"}}
+rag.real.snapshot_after={"memories": {"count": 3, "sha256": "84185df9e346099a681185f1511f752ab260936d0f9fa4e41a6d53871179ce4c"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 3, "sha256": "ce64e4f892564312d5628a2d9fbd3a17a220082e9d56bf9e0de81d0c4d62a981"}}
+Obie pary identyczne; pełne Memory/vector/tombstone fingerprints i revision.
+Lifecycle mutations mają osobne before/after ask snapshots; ask nic nie zapisuje.
+
+28. Frozen golden retrieval hash/metrics
+golden.evaluation={"dataset_sha256": "73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7", "documents": 16, "en": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "fingerprints_unchanged": true, "mrr_at_5": 1.0, "pl": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "provider": {"clients": 1, "closed": 1, "native_1024": 32, "overrides": 0, "requests": 32}, "queries": 16, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}
+Dataset: 16 documents / 16 queries. Recall@1/3/5 oraz MRR@5=1.0 global i osobno EN/PL.
+Frozen SHA-256 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7.
+Reviewed thresholds nadal 0.60/0.80/0.90, bez zmian dataset/hash/thresholds.
+git diff golden file: EMPTY; fingerprint equality PASS.
+
+29. Backend full
+Final no-opt-in: python -m pytest backend/tests -q -> 358 PASS, 78 opt-in skips, 1 warning.
+Full opt-in backend run: 430 PASS, 5 skips, 1 warning (187.89 s).
+Ten collection poprzedzał dodanie dodatkowego task.cancel() testu; nowy test PASS w 68 targeted.
+Final combined run obejmuje już cały final code oraz dodatkowy cancellation test:
+python -m pytest backend/tests tests -q -rs z trzema opt-in flags:
+680 passed, 6 skipped, 1 warning in 193.86s (0:03:13)
+Retrieval, automatic indexing, lifecycle, deletion/tombstones, backup/restore,
+ingestion, desktop, WebSocket, application boundaries, backend i root regressions PASS.
+
+30. Root full
+python -m pytest tests -q -rs -> 249 PASS, 1 skip (symlinks unavailable), 2.61 s.
+Również całość root tests w final combined opt-in run PASS.
+Nie przebudowywano Androida; mobile/UI/protocol nie zmieniono.
+
+31. PostgreSQL integrations / skips
+Włączono KULAI_RUN_POSTGRES_INTEGRATION=1, KULAI_RUN_OLLAMA_INTEGRATION=1,
+KULAI_RUN_LLM_INTEGRATION=1. 73 dodatkowe integration cases aktywowane względem no-opt-in run.
+Owned migrations/storage/indexing/retrieval/lifecycle/deletion/tombstones/concurrency/
+backup/restore/replay protection + new RAG PASS.
+Main pozostaje readonly; automatic main content -> LLM calls = 0.
+Final skipped cases, jawnie:
+SKIPPED [1] backend\tests\integration\test_desktop_runtime.py:109: set KULAI_RUN_POSTGRES_INTEGRATION=1 and KULAI_RUN_WHISPER_INTEGRATION=1
+SKIPPED [1] backend\tests\integration\test_memory_websocket.py:275: Set KULAI_RUN_WHISPER_INTEGRATION=1 for real Whisper.
+SKIPPED [1] backend\tests\integration\test_whisper.py:152: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
+SKIPPED [1] backend\tests\integration\test_whisper.py:189: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
+SKIPPED [1] backend\tests\integration\test_whisper.py:230: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
+SKIPPED [1] tests\test_pre_migration_backup.py:233: Symlinks are unavailable to this process
+Nie deklaruje się wykonania real Whisper/audio/Desktop microphone smoke.
+Jedyny warning: istniejący Starlette/AnyIO BlockingPortal deprecation.
+
+32. pip check
+Root configured .venv: python -m pip check -> PASS, No broken requirements found.
+Wykorzystano istniejące lokalne reusable packages; brak install/upgrade/vendor mutation.
+
+33. git diff --check
+PASS, brak whitespace errors. Git CRLF conversion notices są advisory.
+Raport i nowe pliki obejmuje końcowy whitespace check.
+
+34. db_doctor
+Main BEFORE i AFTER: PASS. PostgreSQL 18.6, pgvector 0.8.6,
+current/expected kulai_memory_0004, vector actual/configured=1024,
+Memory lifecycle/tombstone schema/constraints PASS, READ ONLY=on.
+Brak diagnostic bypass/stamp/automatic migration.
+
+35. Main complete DatabaseSnapshot AFTER
+{"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
 BEFORE == AFTER complete DatabaseSnapshot: TRUE.
-Memories: 8 -> 8.
-Vectors: 8 -> 8.
-Tombstones: 1 -> 1.
-Revision: kulai_memory_0003 -> kulai_memory_0003.
+Counts 8 -> 8 / 8 -> 8 / 1 -> 1; wszystkie SHA-256 oraz revision IDENTICAL.
+Odczyt po final combined regressions. Nie wypisywano real canonical content do raportu.
 
-Memory SHA-256 before == after:
-9cc665fd16b08e7e2a6aa6b6d2e32052901d4c3f2f032fe7785e692c18774cd3
-Vector SHA-256 before == after:
-4ee37f611eb409b5476a19a6bb500e2ccff3c7dab4f40bc2594bec696ef26f7f
-Tombstone SHA-256 before == after:
-33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+36. Vendor status
+git -C vendor/kulai_modules status --porcelain: EMPTY.
+Pin/HEAD/gitlink nadal 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Brak vendor modifications, migrations/schema/golden changes, commitów ani pusha.
 
-Main doctor po dodaniu local head 0004: EXPECTED FAIL wyłącznie:
-alembic.current
-schema.memories
-constraint.memories_revision_positive
-Explicit pre-migration-from kulai_memory_0003 preflight: PASS.
-Pozostałe doctor checks PASS. Strict doctor PASS na owned 0004.
-Nie maskowano mismatch; Desktop/server startup wymaga zgodnego schema.
-Przed manualną migracją należy wykonać reviewed pre-migration backup +
-restore smoke i zachować backup. Sama migracja nie została wykonana.
-Manual 0004 annotation zmieni vector metadata/hash; to przyszła jawna
-operacja migracji, nie write wykonany przez ten task.
-
-14. Zmienione pliki
+37. Exact changed files
 README.md
-backend/migrations/versions/kulai_memory_0004_memory_lifecycle.py
+backend/.env.example
+backend/README.md
+backend/pyproject.toml
 backend/src/kulai_memory/application/__init__.py
-backend/src/kulai_memory/application/memory.py
-backend/src/kulai_memory/application/lifecycle.py
-backend/src/kulai_memory/application/indexing.py
-backend/src/kulai_memory/application/retrieval.py
-backend/src/kulai_memory/lifecycle_persistence.py
-backend/src/kulai_memory/indexing_persistence.py
-backend/src/kulai_memory/automatic_indexing.py
-backend/src/kulai_memory/backfill.py
-backend/src/kulai_memory/database_safety.py
-backend/src/kulai_memory/persistence/models.py
-backend/src/kulai_memory/persistence/repository.py
-backend/src/kulai_memory/desktop/app.py
-backend/src/kulai_memory/desktop/controller.py
-backend/src/kulai_memory/desktop/models.py
-backend/src/kulai_memory/server/runtime.py
-backend/src/kulai_memory/api/memory_ws.py
-scripts/manage_memory.py
-scripts/db_backup_restore_drill.py
-backend/tests/test_memory_lifecycle.py
-backend/tests/test_automatic_indexing.py
-backend/tests/test_desktop_controller.py
-backend/tests/test_memory_indexing.py
-backend/tests/test_memory_persistence.py
-backend/tests/test_memory_retrieval.py
-backend/tests/test_memory_ws.py
-backend/tests/integration/test_memory_lifecycle_postgres.py
-backend/tests/integration/test_backfill_postgres.py
-backend/tests/integration/test_memory_indexing_postgres.py
-backend/tests/integration/test_memory_retrieval_postgres.py
-backend/tests/integration/test_memory_tombstones_postgres.py
-backend/tests/integration/test_pre_migration_backup_postgres.py
-backend/tests/integration/test_tombstone_backup_postgres.py
-tests/test_memory_lifecycle_tools.py
-tests/test_memory_lifecycle_fingerprint.py
-tests/test_database_tools.py
+backend/src/kulai_memory/application/rag.py
+backend/src/kulai_memory/llm_provider.py
+backend/src/kulai_memory/rag_runtime.py
+backend/src/kulai_memory/settings.py
+backend/tests/integration/test_memory_rag_postgres.py
+backend/tests/test_application_boundaries.py
+backend/tests/test_memory_rag.py
+scripts/ask_memory.py
+tests/test_ask_memory.py
 wynik.txt
 
-Zmiany existing tests odzwierciedlają wymagane revision metadata oraz
-jawne legacy migration targets/preflight. Nie poluzowano golden progów.
+15 plików; logs/snapshots są tylko ignored local artifacts w .venv/task6a1.
+Scripts/export_repo.py nie wymagał zmian.
+README zaktualizowano o pipeline/config/usage/citations/untrusted data/no-context,
+reuse/transaction boundary/limitations i poprawiono stare alpha/schema wording.
 
-15. Końcowy git/vendor status
-Host: wyłącznie powyższe zmiany implementacji, testów, dokumentacji i raportu;
-8 nowych plików, pozostałe modified; nic nie staged ani committed.
-Branch main, brak utworzonych commitów/pusha.
-Submodule pin nadal 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Vendor working tree clean, brak gitlink diff.
-Migration 0003 i pozostałe istniejące migrations nie są edytowane.
-Golden dataset file nie jest zmieniony.
+38. Known limitations
+- Brak reviewed semantic score cutoff i reranker; poza 6A.1.
+- Char budget zamiast token counting; tokenizer context-window occupancy niegwarantowane.
+- Prompt isolation i reviewed regressions nie dowodzą uniwersalnej odporności modelu na injection.
+- Citation validation sprawdza provenance/subset, nie entailment każdego zdania.
+- Jedna za duża pierwsza Memory może dać no-context; nie chunkujemy ani nie obcinamy Memories.
+- Snapshot evidence jest aktualne przy retrieval; nie blokujemy późniejszych concurrent mutations.
+- Local daemon/model availability oraz cold-load failures pozostają safe controlled errors;
+  nie dodano retries. Początkowy transient generation error opisano w punkcie 21.
+- Brak streaming, Desktop/voice/WebSocket/Android RAG UX; nie ładowano Whispera dla RAG.
+- Manual main dragon RAG smoke po review nadal niewykonany; automation używa tylko synthetic owned data.
 
-16. Ograniczenia i dalsze kroki
-- Main wymaga osobnego review i manualnej migracji 0004 przed runtime użyciem.
-- Lifecycle dostępny jako core/guarded CLI; brak action UI/API.
-- Brak historii editów; canonical treść nadpisywana dopiero po revision guard.
-- Stary retry z treścią sprzed EDIT celowo terminalny conflict.
-- Brak automatycznego reindex incompatible spaces/revisions.
-- Derived failure po committed zmianie wymaga reconciliation/retry;
-  canonical Memory jest durable źródłem recovery.
-- Backup CLI jest retained user artifact; plik content-file pozostaje u użytkownika.
-- Nie wykonano prawdziwych lifecycle writes ani embeddingów user Memory na main.
+39. Proposed commit message
+feat: add grounded local text RAG with validated Memory citations
 
-Proposed commit message:
-feat: add revision-safe Memory editing and reversible archive lifecycle
-
-DECYZJA: OK DO COMMITA / GOTOWE DO MANUALNEJ MIGRACJI
-Nie commitowano. Nie pushowano. Nie zmigrowano i nie zmodyfikowano main DB.
+40. Decyzja
+OK DO COMMITA
+Query -> BGE -> canonical retrieval -> bounded context -> real Qwen -> grounded answer
+z validated citations PASS. No-context zero calls, unrelated insufficient i injection PASS.
+DB checkout podczas Qwen=0, providers reused/closed, owned snapshots identical,
+main complete snapshot identical, golden unchanged/PASS, regressions PASS, vendor clean.
+Nie commitowano. Nie pushowano. Nie zapisano ani nie zmigrowano main DB.
