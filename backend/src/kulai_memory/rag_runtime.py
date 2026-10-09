@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 
+from kulai_embeddings import EmbeddingProvider
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .application.rag import (
@@ -20,13 +22,19 @@ from .settings import Settings
 class MemoryRagRuntime:
     """One BGE and one Qwen client per scope, reusable across questions.
 
-    The caller owns the engine. No Whisper or voice runtime is constructed.
+    The caller owns the engine. A supplied embedding provider is borrowed,
+    never closed here. Otherwise this runtime owns its BGE as in the CLI.
+    Qwen is always owned by this runtime. No Whisper is constructed.
     Context is returned only through the explicit local debugging method.
     """
 
-    def __init__(self, *, settings: Settings, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, *, settings: Settings, session_factory: async_sessionmaker[AsyncSession],
+        embedding_provider: EmbeddingProvider | None = None,
+    ) -> None:
         self._settings = settings
         self._factory = session_factory
+        self._embedding_provider = embedding_provider
         self._stack: AsyncExitStack | None = None
 
     async def __aenter__(self) -> MemoryRagRuntime:
@@ -34,7 +42,9 @@ class MemoryRagRuntime:
             raise MemoryRagError()
         stack = AsyncExitStack()
         try:
-            bge = await stack.enter_async_context(create_embedding_provider(settings=self._settings))
+            bge = self._embedding_provider
+            if bge is None:
+                bge = await stack.enter_async_context(create_embedding_provider(settings=self._settings))
             self._llm = await stack.enter_async_context(create_llm_provider(settings=self._settings))
             self._retrieval = MemoryRetrievalService(
                 provider=bge, expected_dimension=VECTOR_DIMENSION,
@@ -49,16 +59,23 @@ class MemoryRagRuntime:
         return self
 
     async def __aexit__(self, *args) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close owned providers once; never close the borrowed BGE."""
+
         stack, self._stack = self._stack, None
         if stack is not None:
             await stack.aclose()
 
-    async def ask(self, *, query: str, top_k: int = 5) -> MemoryRagResult:
-        result, _ = await self.ask_with_context(query=query, top_k=top_k)
+    async def ask(
+        self, *, query: str, top_k: int = 5, on_generating: Callable[[], None] | None = None,
+    ) -> MemoryRagResult:
+        result, _ = await self.ask_with_context(query=query, top_k=top_k, on_generating=on_generating)
         return result
 
     async def ask_with_context(
-        self, *, query: str, top_k: int = 5,
+        self, *, query: str, top_k: int = 5, on_generating: Callable[[], None] | None = None,
     ) -> tuple[MemoryRagResult, MemoryContext]:
         MemoryRetrievalService.validate_input(query=query, top_k=top_k)
         if self._stack is None:
@@ -71,6 +88,8 @@ class MemoryRagRuntime:
             raise MemoryRagError("rag.retrieval_failed") from None
         # retrieve_memories has rolled back and closed its snapshot/session here.
         context = build_memory_context(retrieval)
+        if context.hits and on_generating is not None:
+            on_generating()
         result = await answer_memory(
             query=query, retrieval=retrieval, llm_provider=self._llm,
         )

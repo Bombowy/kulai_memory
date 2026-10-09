@@ -34,6 +34,7 @@ from kulai_memory.desktop.models import (
 )
 from kulai_memory.settings import Settings
 from backend.tests.indexing_fakes import FakeRuntimeIndexer
+from backend.tests.desktop_rag_fakes import FakeDesktopRag, FakeOwnedBGE
 
 
 class FakeProvider:
@@ -197,6 +198,18 @@ class Harness:
         self.cuda_directory = cuda_directory
         self.provider_error = provider_error
         self.indexer = FakeRuntimeIndexer()
+        self.embedding = FakeOwnedBGE()
+        self.rag = FakeDesktopRag()
+        self.embedding_factory_calls = self.rag_factory_calls = 0
+
+    def embedding_factory(self, **kwargs):
+        self.embedding_factory_calls += 1
+        return self.embedding
+
+    def rag_factory(self, **kwargs):
+        self.rag_factory_calls += 1
+        self.rag.provider = kwargs["embedding_provider"]
+        return self.rag
 
     def provider_factory(self, settings: Settings) -> FakeProvider:
         assert settings.kulai_whisper_model == "large-v3"
@@ -230,6 +243,8 @@ class Harness:
             repository_factory=lambda ignored: self.repository,
             progress_callback=self.progress.append,
             indexer_factory=lambda **kwargs: self.indexer,
+            embedding_provider_factory=self.embedding_factory,
+            rag_runtime_factory=self.rag_factory,
         )
 
 

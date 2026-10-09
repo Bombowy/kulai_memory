@@ -182,9 +182,36 @@ Manual microphone smoke checklist:
 The alpha records mono PCM16 at 16 kHz, limits one recording to 10 minutes,
 and removes its temporary WAV after transcription. A failed database save can
 be retried in the same process without recording or transcribing again. Pending
-saves do not survive application restart. Streaming partial transcripts and
-Desktop/voice RAG responses remain outside this alpha. Memory indexing is
-automatic; semantic search and text RAG are available through local CLIs.
+saves do not survive application restart. Memory indexing is automatic.
+
+The **Ask Memory** panel accepts text questions directly in Desktop. Start
+loopback Ollama with `bge-m3:567m-fp16` and `qwen3.5:9b` available; configure
+`KULAI_LLM_MODEL=qwen3.5:9b` and the shared
+`KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434`. Enter a question and click **ASK**.
+The panel shows **Searching memory...**, then **Generating answer...**, the
+grounded answer, and validated sources (rank, Memory UUID and score). It does
+not show source content, vector metadata or prompts. Qwen can answer only from
+the supplied canonical Memories; Memory instructions are untrusted historical
+data. Unsupported questions show **Not enough information** and
+`Nie mam wystarczających informacji w pamięci.` with no sources. Empty retrieval
+never calls Qwen. Questions perform no database writes, are not saved as Memory,
+and do not refresh Recent Memory.
+
+One Desktop controller owns one shared BGE client for automatic indexing and
+question embeddings. Its long-lived RAG runtime borrows BGE and owns one reused
+Qwen client; startup creates no Qwen generation request, so the first ASK can
+cold-load the model. All model and database operations run on the existing
+worker asyncio loop, outside the Qt UI thread. Recording, processing, pending
+save/indexing and ASK are serialized; the controls prevent conflicting starts.
+The retrieval session closes before Qwen generation. Closing the window cancels
+an active question before closing Qwen, the shared BGE, recorder and engine;
+it does not wait for the 180-second generation timeout. Whisper remains one
+reused lazy provider for voice notes.
+
+The local `scripts/ask_memory.py` CLI remains available for diagnostics. There
+is no reviewed semantic score cutoff or reranker yet. Desktop has no
+voice-question input, TTS, conversational multi-turn or partial STT; Android has
+no RAG UI. The existing voice-note save/index/Recent Memory flow is unchanged.
 
 ## Local WebSocket voice-memory adapter
 
@@ -354,8 +381,9 @@ REPEATABLE READ, READ ONLY snapshot to resolve active canonical identities and
 exact revisions, then rolls back and closes its session **before Qwen**.
 The LLM has an explicit 180-second generation/HTTP timeout and the CLI a
 300-second overall deadline. Qwen uses non-streaming schema output with
-thinking disabled; no Whisper is loaded. Desktop, microphone, WebSocket and
-Android RAG UX are not integrated.
+thinking disabled; no Whisper is loaded by the CLI. Desktop uses this same
+canonical RAG through its Ask Memory panel and borrows its shared BGE provider.
+Microphone questions, WebSocket and Android RAG UX are not integrated.
 
 The real RAG integration uses **only owned temporary databases and synthetic
 Memories**, never real main content:

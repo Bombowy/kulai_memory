@@ -1,334 +1,374 @@
-TASK 6A.1 — Local text RAG over canonical KulAI Memory
+TASK 6A.2 — Desktop RAG UI over existing canonical Memory RAG
 Repo: C:\Bombowy\Projekty\kulai_memory
 Data: 2026-10-09
 DECYZJA: OK DO COMMITA
-Nie wykonano commita ani pusha. Main DB wyłącznie READ ONLY.
-Żadna realna main Memory nie została wysłana do LLM w automated tests.
+Nie wykonano commita ani pusha dla 6A.2. Main DB pozostaje READ ONLY.
+Automated LLM tests używały wyłącznie synthetic Memories w owned temporary DB.
+Raport zawiera counts/fingerprints, bez realnego main Memory content, promptów i credentials.
 
 1. Start commit/status
-Branch main, start d060298 (feat: add revision-safe Memory editing and reversible archive lifecycle).
-git status: clean; git status -sb: main...origin/main.
-Start log -5: d060298, 76f7df0, 2e20c74, 98e8dea, f938741.
-Vendor gitlink/HEAD: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; working tree clean.
-Stan końcowy: wyłącznie zmiany hosta wymienione w punkcie 37, nic staged.
-HEAD pozostał bez zmian. Nie tworzono migration 0005.
-Interpreter dla root CLI/testów sprawdzony przez PyCharm: root .venv, Python 3.13.15, pip.
+Branch main; HEAD 3c0a27bda38013ca3b112869da3c906623676299.
+6A.1 został wcześniej committed/pushed na osobne polecenie użytkownika:
+feat: add grounded local text RAG with validated Memory citations.
+Przed 6A.2: git status clean; git status -sb: main...origin/main.
+Start log -5: 3c0a27b, d060298, 76f7df0, 2e20c74, 98e8dea.
+Vendor gitlink/HEAD: 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
+HEAD/branch bez zmian po 6A.2; wszystkie nowe zmiany unstaged.
+Python CLI/tests: PyCharm root SDK .venv, Python 3.13.15, pip, sprawdzany przed komendami.
 
 2. Main complete DatabaseSnapshot BEFORE
 {"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
-db_doctor BEFORE: PASS. Rewizja kulai_memory_0004.
-Counts Memory/vector/tombstone = 8/8/1. Nie wypisywano canonical content.
+Memory/vector/tombstone = 8/8/1; revision kulai_memory_0004.
+db_doctor BEFORE PASS. Nie odczytywano main context do testów LLM.
 
-3. Reviewed kulai-rag API
-Przeczytano README oraz rzeczywiste service.py/schemas.py.
-Publiczne ingest/retrieve/answer, RagRetrieveRequest/Result, RagAnswerRequest/Result.
-RagAnswerRequest.max_context_chars=12000; helper answer sam wykonuje retrieve.
-Własny retrieval tego modułu rekonstruuje chunk text z _kulai_rag_* vector metadata.
-RagAnswerResult zawiera retrieval i LLMResponse; nie zapewnia typed sufficient-context/citation validation.
-Context builder jest prywatnym _context_payload; brak publicznego osobnego buildera i token counter.
-Nie użyto answer(), ponieważ ominąłby canonical Memory revision/archive/identity resolution.
-Zachowano existing Memory retrieval; host dodaje tylko bounded context i typed LLM adapter.
-Nie kopiowano chunk metadata ani nie tworzono drugiego semantic search.
+3. Audited Desktop architecture
+Przeczytano rzeczywiste desktop/app.py, controller.py, models.py,
+rag_runtime.py, application/rag.py, automatic_indexing.py, embedding_provider.py,
+llm_provider.py oraz reusable Whisper/provider lifecycle.
+Desktop pracuje in-process na jednym AsyncDesktopThread/QThread i jednym asyncio loop.
+Qt widgets wysyłają korutyny przez run_coroutine_threadsafe/_submit; brak localhost HTTP.
+Existing voice flow: recorder -> Whisper -> canonical ingestion -> commit -> indexing -> Recent.
+Whisper transcribe offloaduje inference przez asyncio.to_thread; model jest lazy i reused.
 
-4. Reviewed kulai-llm API
-LLMProvider: provider_id, capabilities, async generate(LLMRequest) -> LLMResponse.
-LLMMessage.system/user/assistant; LLMRequest.messages, response_format, model_hint,
-temperature, top_p, max_output_tokens, seed, stop_sequences.
-LLMResponse: text, provider_id, model_id, optional finish_reason/usage.
-generate() waliduje request, capabilities, provider identity i response.
-generate_structured() buduje exact JSON Schema z Pydantic, wywołuje provider oraz strict JSON/Pydantic validation.
-Odrzuca fences, dodatkową prozę, duplicate JSON keys, nonfinite numbers i schema mismatch.
-Brak streaming, retry oraz własnego timeout/lifecycle w neutralnym core.
-Wdrożenie używa generate_structured(), bez własnego parsera outputu i bez output repair.
+4. Audited provider ownership
+Przed zmianą AutomaticMemoryIndexer tworzył/posiadał własne BGE,
+a MemoryRagRuntime tworzył/posiadał BGE oraz Qwen przez AsyncExitStack.
+Embedding neutral port nie wymaga close; host OwnedEmbeddingProvider ma async aclose.
+Ollama BGE oraz LLM mają jeden AsyncClient i async close/context-manager lifecycle.
+Reusable Whisper provider nie ma aclose; existing lifecycle usuwa odniesienia po voice cleanup.
+Nie dodawano wymyślonego Whisper close ani concrete provider coupling do application core.
 
-5. Reviewed Ollama LLM provider API
-OllamaLLMProvider(OllamaProviderConfig): async context manager, generate(), aclose().
-Jeden official ollama.AsyncClient per provider; client reuses HTTP transport.
-Config: model, host, timeout_seconds, keep_alive, num_ctx, think, allow_model_hint.
-Native JSON Schema przez format; stream=False. Final response.message.content bez thinking.
-provider_id=ollama; response model_id pochodzi z Ollama, model selection przez config.model.
-Brak streaming/pulls/remote-provider wiring. Nie zmieniano vendora ani nie pisano direct HTTP.
-Przejrzano również neutralne embeddings/vector-store contracts i istniejące canonical retrieval.
+5. Chosen shared-BGE ownership model
+DesktopController tworzy i posiada jeden shared BGE.
+AutomaticMemoryIndexer(provider=...) i MemoryRagRuntime(embedding_provider=...)
+pożyczają dokładnie ten sam obiekt i nigdy go nie zamykają.
+Brak injected provider zachowuje dotychczasowy factory-owned lifecycle servera/CLI.
+RAG zawsze posiada jeden Qwen. Controller zamyka Qwen/RAG, indexer, następnie shared BGE.
+Indexer's aclose nadal czeka na swój lock, lecz borrowed provider nie jest double-closed.
+Bez modyfikacji vendor i bez drugiego embedding clienta w Desktop.
 
-6. Settings
-backend/.env.example: KULAI_LLM_MODEL=qwen3.5:9b.
-Settings.kulai_llm_model default qwen3.5:9b.
-Wspólny KULAI_OLLAMA_BASE_URL=http://127.0.0.1:11434; factories loopback-only.
-BGE nadal bge-m3:567m-fp16, native 1024, bez dimensions override.
-LLM config: timeout_seconds=180, think=False, num_ctx=32768, allow_model_hint=False.
-Generation: temperature=0, max_output_tokens=2048; CLI overall timeout=300 s.
-Dodano jawne backend dependencies kulai-llm i kulai-provider-ollama, już dostępne lokalnie.
-Nie dodano API key, remote providerów, model downloads ani zmian prywatnego backend/.env.
+6. Desktop RAG models
+Frozen dataclasses bez Qt/SQLAlchemy:
+DesktopRagStatus: ANSWERED, INSUFFICIENT_CONTEXT, FAILED.
+DesktopRagProgressState: RETRIEVING, GENERATING; DesktopRagProgress(state).
+DesktopRagCitation(memory_id: UUID, rank: int, score: float).
+DesktopRagResult(status, answer, citations, optional safe error_message).
+Brak contextu, source content, vectors, raw provider payload i system promptu w result.
 
-7. RAG typed contract
-MemoryRagResult: query, answer, sufficient_context, citations, retrieval.
-MemoryCitation: canonical UUID memory_id, rank, score.
-MemoryRagRetrievalMetadata: metric, retrieved_count, context_memory_count,
-context_chars, max_context_chars.
-Modele frozen/strict/extra=forbid/hide_input_in_errors.
-Public result nie zawiera Memory content/context, embeddings, vector record metadata ani raw payload.
-Application imports są neutralne: bez SQLAlchemy/FastAPI/Qt/concrete Ollama/PgVectorStore.
-MemoryContext jest prywatną/debug strukturą bez automatycznego repr treści.
+7. DesktopController ask flow
+async ask_memory(*, query: str, top_k: int = 5) -> DesktopRagResult.
+Canonical validation: nonblank query <=10000 chars; integer top_k 1..20, bool rejected.
+Validation przed provider/DB; operation lock + recording/pending-save guard.
+RETRIEVING -> existing runtime retrieval/context -> GENERATING callback -> grounded Qwen
+-> validated application result -> neutral Desktop result.
+Brak duplikacji retrieval, promptu, SQL albo citation validation w Desktop.
+Callback GENERATING występuje dopiero po zamknięciu retrieval session i przy niepustym context.
 
-8. Context format
-Osobny user message: oznaczona sekcja Memory context (untrusted historical JSON data).
-Compact JSON: memories=[objects z memory_id, rank, canonical content].
-Osobny kolejny user message: pytanie jako JSON query.
-JSON escaping utrzymuje forged delimiters/role claims wewnątrz content, bez regex security parsera.
-Kolejność dokładnie existing retrieval order; nie zmieniano ranków ani score.
-Nie wysyłano dowolnego Memory/vector metadata, credentials/DB config, timestampów ani vectors.
+8. RAG runtime reuse
+Runtime tworzony i __aenter__ wykonywany raz na startup; reused przez kolejne ASK.
+Startup: doctor -> CUDA scope/engine/session factory -> lazy Whisper/shared BGE
+-> indexer/borrowed-BGE RAG/Qwen -> existing reconciliation -> Recent -> Ready.
+Startup nie wykonuje Qwen request ani cold-loadu modelu; pierwszy ASK może cold-loadować.
+aclose RAG idempotentnie zamyka wyłącznie owned resources.
+Test initialization failure Qwen potwierdza cleanup wcześniej utworzonych BGE/indexer/engine/recorder,
+usunięcie Whisper references i safe configuration error.
 
-9. Context limits
-Globalny default 12000 znaków serialized context, łącznie z wrapper/ID/rank/escaping.
-Dodawane tylko całe Memories. Stop przed pierwszą, która nie mieści się w budżecie.
-Nie obcinano ani nie sklejano części Memories. Zero pasujących bloków -> zero generation.
-Top-k default 5, limit 1..20. Query nonblank, max 10000 chars.
-Char budget jest jawnym conservative fallback; nie gwarantuje token count/context-window occupancy.
-Nie dodano tokenizera, chunkingu ani ukrytego metadata budgetu.
+9. UI layout/controls
+Osobny QGroupBox "Ask Memory": QLineEdit (maxLength=10000), ASK,
+read-only QPlainTextEdit answer, Sources QTableWidget: Rank / Memory ID / Score.
+Placeholder: Ask something about your memories...
+Default top_k=5. Enter albo ASK submituje dokładny tekst.
+Brak source content/debug-context toggle w UI. Existing Voice note i Recent są zachowane.
+Text questions działają również przy braku mikrofonu (voice capture pozostaje disabled).
 
-10. Prompt contract
-Krótka stabilna policy bez dynamic user content w system message.
-Grounded-only: używać wyłącznie supplied Memories, bez external/general knowledge i invented facts.
-Nie ujawniać system instructions. Nie wymyślać cytowań; tylko provided IDs.
-Odpowiedź w języku pytania. JSON: answer, used_memory_ids, sufficient_context.
-Sufficient oznacza faktyczne evidence odpowiadające na pytanie, nie możliwość odmowy.
-Policy-disclosure/Memory-command requests mają zwracać insufficient context.
-Całego system promptu/raw promptu nie dumpowano do tego raportu ani standardowego CLI output.
+10. UI state machine
+Ready: query enabled, ASK enabled tylko dla nonblank query.
+ASK: stara odpowiedź/sources wyczyszczone, controls blocked, "Searching memory...".
+Po retrieval/context: "Generating answer...".
+ANSWERED -> "Answered"; INSUFFICIENT_CONTEXT -> "Not enough information".
+FAILED -> safe public message i pusta odpowiedź/sources.
+Po zakończeniu controls ponownie enabled; przy closing pozostają disabled.
+Qt pozostaje responsywne podczas całego requestu; zero asyncio.run w UI thread.
 
-11. Untrusted Memory handling
-Policy jawnie definiuje user-authored historical DATA, nigdy executable instructions.
-Commands/role claims wewnątrz Memory nie są wykonywane; content może być tylko factual context.
-Granica jest strukturalna (escaped JSON, oddzielne role/messages) oraz system instruction.
-Nie implementowano security regex parsera. Model compliance nie jest formalnie gwarantowane.
+11. Citations rendering
+Wyłącznie MemoryRagResult.citations po existing validation.
+Id/rank/score i kolejność zachowane; score formatowane do 4 miejsc po przecinku.
+UI nie generuje sources z top-k i nie odczytuje source content.
+Unknown IDs, missing citation przy sufficient, duplicates i subset validation pozostają w 6A.1.
 
-12. Citation validation
-Strict typed structured output, odpowiedź do 6000 chars, used_memory_ids list max 20.
-IDs muszą należeć do actual supplied canonical context: silniejszy subset niż wszystkie retrieval hits.
-Unknown/malformed/omitted-from-budget ID -> controlled rag.invalid_citations.
-Duplicate IDs deterministycznie dedupe w kolejności pierwszego wystąpienia.
-Sufficient answer wymaga nonblank answer oraz >=1 citation.
-Rank/score odczytane z actual retrieval hit, a nie z model output.
-Insufficient answer nie pokazuje cytowań; unknown IDs także wtedy są odrzucane.
-Walidacja dowodzi provenance; nie jest niezależnym semantic entailment checkerem.
+12. Insufficient-context rendering
+Canonical answer: Nie mam wystarczających informacji w pamięci.
+Status INSUFFICIENT_CONTEXT, sources empty.
+Zero hits -> zero Qwen calls i brak GENERATING progress.
+Real unsupported question -> insufficient, bez wymyślonych faktów i cytowań.
+Nie dodano arbitrary score cutoff ani rerankera.
 
-13. Zero-hit behavior
-Zero hits -> sufficient_context=false, citations=[],
-answer="Nie mam wystarczających informacji w pamięci."; zero LLM requests.
-Tak samo gdy nie mieści się żadna kompletna Memory. Potwierdzone unit + empty owned DB.
-Provider client może być utworzony w scope; nie wykonuje generation przy zero evidence.
+13. Error mapping/privacy
+rag.retrieval_failed -> Memory search could not be completed.
+rag.invalid_configuration -> Memory assistant configuration is invalid.
+Pozostałe generation/internal exceptions -> An answer could not be generated.
+Invalid input -> safe fixed DesktopRagInputError; no private query/context in result/error text.
+FAILED answer/sources zawsze puste. Nie pokazuje się raw exceptions/prompts/payload/DB URL/password.
+CancelledError propaguje i nie jest przekształcany w FAILED.
+Application core/rag.py nie został zmieniony; brak Qt/SQLAlchemy/Ollama imports w application.
 
-14. Insufficient-context behavior
-Nie dodawano arbitrary global score cutoff. Model otrzymuje explicit grounded-only policy.
-Unrelated synthetic evidence -> false; host normalizuje answer do canonical insufficient string.
-Real Qwen: pytanie o ulubiony instrument smoka -> false, zero citations, bez wymyślonej odpowiedzi.
-Semantic score threshold oraz reranker nadal POZA 6A.1; frozen baseline nie ma reviewed cutoff.
+14. Operation serialization
+Jeden existing asyncio operation lock.
+Recording/processing/save/indexing/pending-save i ASK nie startują równolegle.
+Conflicting starts są odrzucane, zamiast kolejkować nagranie po zakończeniu ASK.
+UI blokuje ASK podczas recording/transcription/save/indexing/retry i voice start podczas ASK.
+Kontrolowane tests sprawdzają busy ASK, active recording, transcription i pending save.
+Recent refresh nie jest wywoływany przez ASK; existing voice refresh semantics bez zmian.
 
-15. Provider lifecycle
-MemoryRagRuntime: jeden BGE provider/client i jeden Qwen provider/client per async scope.
-AsyncExitStack zamyka oba przy success, retrieval failure, LLM failure i cancellation.
-Startup LLM factory failure zamyka wcześniej utworzony BGE provider.
-Reużycie across queries, brak klienta per Memory.
-asyncio.CancelledError nie jest połykany; również real task.cancel() regression PASS.
-LLM generation/HTTP bounded 180 s, CLI 300 s; timeout -> safe public generation error.
-CLI owns engine and disposes it w finally. No Whisper load, VoiceMemoryServerRuntime wiring ani UI.
+15. Shutdown cancellation behavior
+Controller trackuje bieżący RAG task; worker przechowuje submitted future.
+shutdown ustawia closing, anuluje/gatheruje RAG przed wejściem do operation lock.
+Jeden shielded shutdown task zapewnia cleanup także przy cancellation caller.
+Zamyka Qwen raz, indexer bez close borrowed BGE, shared BGE raz, recorder,
+engine, Whisper references i CUDA process scope.
+Worker tłumi progress/success/error signals po shutdown request; UI także ignoruje late signals.
+shutdown_finished następuje po drain/cancel pending tasks i zamknięciu event loop;
+window czeka na zakończenie QThread. Brak stale success i unhandled pending tasks w testach.
+Controller cancellation test: sleep(180) przerwany i cleanup w wait_for(1s).
+Owned DB cancellation: shutdown w wait_for(2s); UI worker test kończy w <=2s wait.
+Manual CANCEL nie dodano; zamknięcie okna anuluje aktywne pytanie.
 
-16. Transaction boundaries
-MemoryRetrievalService.prepare() query embedding przed DB checkout.
-retrieve_memories(): jedna existing krótka REPEATABLE READ, READ ONLY snapshot.
-Canonical identity/model/dimension/namespace/active/exact revision gwarantuje existing service.
-retrieve_memories() rollback + close następują przed context build i generation.
-Nie trzymano PostgreSQL session/transaction podczas Qwen, nie dodawano RAG SQL search.
-Evidence odpowiada stanowi retrieval snapshot; nie blokuje edit/archive przez cały generation.
+16. Proof query is never Memory
+ASK nie tworzy ingestion_id/VoiceSession, nie uruchamia recorder/Whisper,
+nie wywołuje ingestion/repository write/indexer.ensure ani refresh Recent.
+Unit spies: zero STT/voice writes/index writes/additional recent sessions.
+Owned complete DatabaseSnapshot BEFORE == AFTER dla sufficient, insufficient,
+generation failure i cancellation. SQL observer dopuszcza SELECT/SET/SHOW, zero commit/write.
+Nie dodano conversation history/table, schema change albo migration.
 
-17. CLI contract
-.venv\Scripts\python.exe scripts\ask_memory.py --query "Gdzie mieszka mój zielony smok?" --top-k 5
-Normal output: query, answer, sufficient_context=true|false, citations=comma-separated UUIDs.
---show-context jest opt-in; help jawnie ostrzega, że wyświetla Memory content.
-Local APP_ENV, loopback PostgreSQL/Ollama, doctor PASS, exact current/expected head 0004,
-exact BGE config oraz configured nonblank LLM model są wymagane.
-CLI READ ONLY: bez writes i bez wymogu backupu. Help smoke PASS; CLI unit regressions PASS.
-Parser/known/provider errors nie wypisują input values, complete prompt, raw context,
-DB URL/password, vectors, vector metadata ani raw Ollama payload. Safe status/code only.
-Manual main RAG smoke NIE WYKONANY: pozostaje do review zgodnie z zadaniem.
+17. Shared provider counters
+Real Desktop integration:
+desktop.real.whisper={"creations": 1, "inference": 0}
+desktop.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 3}
+desktop.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 2}
+Ten sam BGE wykonał 1 fixture index + 2 query embeddings; native1024, brak dimensions override.
+Whisper created=1, inference=0: text RAG nie wymaga microphone/inference.
+Controlled owned Desktop: BGE clients=1, requests=5, closed=1;
+Qwen clients=1, generate attempts=3 + 1 cancelled generation, closed=1.
+Standalone default CLI/server ownership regressions PASS.
 
-18. Fake RAG tests
-Final targeted RAG/CLI/application boundaries: 68 PASS.
-Pokrycie: validation, input limits, no hits/no fitting block -> zero calls,
-deterministic order/global bounds/complete delimiters, malicious data structural separation,
-schema validation, citation subset/dedupe/unknown IDs, sufficient-without-citation rejection,
-insufficient normalization, safe retrieval/LLM errors, no raw context in errors,
-timeout, startup failure cleanup, cancellation propagation i actual task.cancel().
-Concrete LLM imports dodano do forbidden application roots; boundary checks PASS.
+18. Controller unit tests
+backend/tests/test_desktop_rag.py: 20 przypadków PASS w full backend/root.
+Sufficient/citations, insufficient, invalid query/top-k before I/O,
+safe errors/private sentinels, zero voice/save/index/recent side effects,
+multiple ASK runtime/Qwen reuse, actual runtime/indexer borrowed BGE reuse,
+exactly-once closes, configuration cleanup, serialization, external cancellation,
+shutdown cancellation i zero-hit/zero-Qwen/no-generating.
+Existing backend/tests/test_desktop_controller.py voice assertions bez zmian;
+tylko Harness uzyskał isolated provider/runtime factories.
 
-19. Owned PostgreSQL tests
-Fake RAG na owned migrated 0004: PASS.
-Synthetic Memory A relevant, B unrelated; canonical IDs/ranks/context potwierdzone.
-Empty DB zero generation. Edited latest revision użyta po reindex.
-Archive wyklucza A, unrelated B daje insufficient. Restore zachowuje latest revision.
-Celowo stary vector fixture po restore -> controlled retrieval failure, zero dodatkowych LLM calls.
-SQL observer dopuszcza wyłącznie SELECT/SET/SHOW, zero commits/writes podczas ask.
-Complete snapshots identyczne dla każdego ask oraz rejected stale retrieval.
-Fixture writes/mutations/indexing tylko poza ask, wyłącznie w owned temporary DB.
+19. UI unit tests
+backend/tests/test_desktop_rag_ui.py: 6 przypadków PASS w full backend/root.
+Widgets/initial states, blank input, exact submit/top-k, searching/generating,
+read-only answer/citation formatting, insufficient/failure rendering, controls reenabled,
+no Recent refresh, voice controls i real dedicated QThread with cancellable ask.
+QTimer nadal tickuje podczas generation; request thread różni się od UI thread.
+Close: zero stale result/error, providers closed, loop/thread drained, brak pending-task errors.
+Existing test_desktop_ui.py oraz recorder/configuration tests PASS; bez pixel tests.
 
-20. Real BGE results
-Real native bge-m3:567m-fp16 / 1024: PASS (embedding smoke integration, indexing,
-automatic indexing, lifecycle, golden retrieval oraz new RAG).
-No dimension override, no truncation/padding/model/namespace changes.
-Golden: 1 client, 32 requests, 32 native_1024, 1 close, overrides=0.
-Lifecycle: 1 client, 5 requests/native_1024, 1 close, overrides=0, checkout=0.
+20. Owned PostgreSQL Desktop RAG results
+backend/tests/integration/test_desktop_rag_postgres.py: dwa testy PASS.
+Dedicated run: 2 passed in 20.94s; ponownie PASS w root full.
+Owned fixture: The green dragon currently lives on Venus.
+Actual DesktopController + AutomaticMemoryIndexer + MemoryRagRuntime + canonical retrieval.
+Doctor sprawdza owned schema, startup reconciliation indeksuje fixture jednym shared BGE.
+Fake Qwen potwierdza exact canonical content/UUID; sufficient -> ANSWERED i exact citation.
+Snapshots/read-only observer obejmują success, insufficient, failure oraz cancellation.
+Wszystkie temporary databases są usuwane przez ownership helper, bez main writes.
 
-21. Real Qwen results
-Owned synthetic BGE+qwen3.5:9b RAG: PASS w standalone final oraz full integration suite.
-Wszystkie final reviewed assertions zachowane; bez exact-wording requirement.
-Pierwsze podejście miało controlled generation_failed podczas initial model run;
-jednocześnie Windows zgłosił transient CLR startup failure. Nie ustalono dokładnej przyczyny SDK.
-Synthetic reusable structured-provider probe następnie PASS; nie zmieniano vendor ani nie maskowano error.
-W następnym probe Qwen bezpiecznie odmówił policy disclosure, ale oznaczył refusal jako sufficient.
-Doprecyzowano system policy (sufficient=factual evidence, policy/commands=insufficient),
-bez weakening assertions/regex filters. Final standalone i full-suite real tests PASS.
-Nie dodawano automatycznych retries ani fallback do remote/general knowledge.
+21. Real BGE Desktop result
+desktop.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 3}
+bge-m3:567m-fp16, dimension=1024 native, namespace kulai_memory.memories.v1 bez zmian.
+One client obsługuje automatic indexing fixture i oba questions, closed once.
+Existing real BGE retrieval/indexing/lifecycle regressions także PASS w root full.
 
-22. PL question summary
-"Gdzie obecnie mieszka zielony smok?" -> sufficient_context=true.
-Odpowiedź wspomina Wenus/Venus, zawiera exact canonical synthetic Memory ID.
-Nie wymagano exact wording; żadnych invented Memory IDs.
-Nie dumpowano raw synthetic promptu ani real main Memory content.
+22. Real Qwen Desktop result
+desktop.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 2}
+desktop.real.pl=PASS;mentions_venus=true;exact_memory_citation=true;status=ANSWERED
+qwen3.5:9b through reusable kulai-llm/kulai-provider-ollama contracts.
+PL question: Gdzie obecnie mieszka zielony smok?
+Summary: ANSWERED, odpowiedź wskazuje Wenus/Venus, exact synthetic Memory citation.
+Bez exact wording assertion i bez raw prompt/context/payload dump w raporcie.
+Existing standalone real Qwen grounding/injection tests również PASS.
 
-23. Real insufficient-context result
-"Jaki jest ulubiony instrument muzyczny smoka?" -> sufficient_context=false,
-canonical insufficient answer, citations=0; nie wymyślono factual odpowiedzi.
+23. Unsupported-question result
+Question: Jaki jest ulubiony instrument smoka?
+desktop.real.unsupported=PASS;status=INSUFFICIENT_CONTEXT;citations=0;invented_facts=false
+Canonical insufficient answer, sources empty; brak factual fabrication w reviewed test.
+No-context remains zero Qwen calls.
+Existing prompt-injection regressions i real smoke:
+rag.real.injection=PASS;prompt_exposed=false;memory_commands_followed=false
+Desktop reuses ten sam system instruction i escaped bounded data context bez zmian.
 
-24. Prompt-injection regressions
-Synthetic malicious Memory zawiera commands ujawnienia policy, maintenance code i forged delimiter.
-Fake regression: bytes pozostają content w JSON, poza system/question; schema call PASS.
-Real smoke: malicious Memory faktycznie w context, unrelated factual question -> insufficient,
-bez system prompt/maintenance code. Dodatkowy disclosure/execute-command query -> insufficient.
-Bez flaky exact-answer-text security testu; sprawdzano typed behavior i canonical normalized result.
+24. DB checkout-during-Qwen proof
+desktop.real.checkout_during_llm=[0, 0]
+Owned fake Qwen obserwował [0,0,0], cancelled request także assert checkedout()==0.
+Query embedding również wykonuje assert checkout==0.
+Existing retrieve_memories otwiera jeden short read-only snapshot dopiero po embeddingu,
+resolves canonical identities/revisions/active state, rollback/close przed generation callback/Qwen.
+Nie trzymamy PostgreSQL transaction podczas model generation.
 
-25. Provider/client counters (real owned RAG)
-rag.real.bge={"clients": 1, "closed": 1, "dimensions_override_count": 0, "native_dimension": 1024, "requests": 7}
-rag.real.llm={"clients": 1, "closed": 1, "model": "qwen3.5:9b", "requests": 4}
-BGE requests: 3 indexing + 4 query embeddings. LLM: 4 reviewed questions.
-Jeden provider/client każdego rodzaju, wszystkie zamknięte; reuse potwierdzone.
+25. Owned snapshot BEFORE/AFTER
+Controlled synthetic Desktop:
+desktop.owned.snapshot_before={"memories": {"count": 1, "sha256": "e45f4bf36eb4315d2daf9530bd4801653562b2c242978a0cec6ffeca16505d86"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "f1fd815bd432c1e0398131b75ca9cf3ae0097ff41bb547bcb3555ff9973fbd93"}}
+desktop.owned.snapshot_after={"memories": {"count": 1, "sha256": "e45f4bf36eb4315d2daf9530bd4801653562b2c242978a0cec6ffeca16505d86"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "f1fd815bd432c1e0398131b75ca9cf3ae0097ff41bb547bcb3555ff9973fbd93"}}
+Real BGE+Qwen Desktop:
+desktop.real.snapshot_before={"memories": {"count": 1, "sha256": "c430b28c084c2d0b332b943007e730f162326c7152ac50d5a3ca977facb24a1f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "65f5150154479c12f2c20fe7fa9453cd6d891ec1db7524c3c9163fefb3ba45f0"}}
+desktop.real.snapshot_after={"memories": {"count": 1, "sha256": "c430b28c084c2d0b332b943007e730f162326c7152ac50d5a3ca977facb24a1f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 1, "sha256": "65f5150154479c12f2c20fe7fa9453cd6d891ec1db7524c3c9163fefb3ba45f0"}}
+Każda para IDENTICAL, pełne Memory/vector/tombstone fingerprints i revision.
+Controlled tests sprawdzają equality osobno dla wszystkich czterech outcome paths.
 
-26. Checkout during LLM proof
-rag.real.checkout_during_llm=[0, 0, 0, 0]
-Official SDK chat wrapper sprawdza engine.pool.checkedout()==0 przed każdym Qwen request.
-Fake owned LLM observations [0,0,0]; również query/indexing embedding checkout=0.
-Brak DB transaction podczas generation; engine dispose i provider closure potwierdzone.
+26. Main snapshot BEFORE/AFTER
+BEFORE={"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
+AFTER={"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
+IDENTICAL. Main Memory/vector/tombstone = 8/8/1, schema kulai_memory_0004.
+Zero automated main Memory-to-LLM calls. Manual main Desktop smoke pozostaje po review.
 
-27. Complete DatabaseSnapshot owned BEFORE/AFTER
-rag.owned.snapshot_before={"memories": {"count": 2, "sha256": "67641e97dc8d72d78c0ada70ef076911f56b96f124254654719f74462096af1e"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 2, "sha256": "00df0d3b9c91d4470a2db5c2c113e0f4073bc75002d4440822e149a46e11e6c8"}}
-rag.owned.snapshot_after={"memories": {"count": 2, "sha256": "67641e97dc8d72d78c0ada70ef076911f56b96f124254654719f74462096af1e"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 2, "sha256": "00df0d3b9c91d4470a2db5c2c113e0f4073bc75002d4440822e149a46e11e6c8"}}
-rag.real.snapshot_before={"memories": {"count": 3, "sha256": "84185df9e346099a681185f1511f752ab260936d0f9fa4e41a6d53871179ce4c"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 3, "sha256": "ce64e4f892564312d5628a2d9fbd3a17a220082e9d56bf9e0de81d0c4d62a981"}}
-rag.real.snapshot_after={"memories": {"count": 3, "sha256": "84185df9e346099a681185f1511f752ab260936d0f9fa4e41a6d53871179ce4c"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, "vectors": {"count": 3, "sha256": "ce64e4f892564312d5628a2d9fbd3a17a220082e9d56bf9e0de81d0c4d62a981"}}
-Obie pary identyczne; pełne Memory/vector/tombstone fingerprints i revision.
-Lifecycle mutations mają osobne before/after ask snapshots; ask nic nie zapisuje.
-
-28. Frozen golden retrieval hash/metrics
+27. Frozen golden retrieval hash/metrics
 golden.evaluation={"dataset_sha256": "73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7", "documents": 16, "en": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "fingerprints_unchanged": true, "mrr_at_5": 1.0, "pl": {"mrr_at_5": 1.0, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}, "provider": {"clients": 1, "closed": 1, "native_1024": 32, "overrides": 0, "requests": 32}, "queries": 16, "recall_at_1": 1.0, "recall_at_3": 1.0, "recall_at_5": 1.0}
-Dataset: 16 documents / 16 queries. Recall@1/3/5 oraz MRR@5=1.0 global i osobno EN/PL.
-Frozen SHA-256 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7.
-Reviewed thresholds nadal 0.60/0.80/0.90, bez zmian dataset/hash/thresholds.
-git diff golden file: EMPTY; fingerprint equality PASS.
+golden.thresholds=Recall@1>=0.60,Recall@3>=0.80,Recall@5>=0.90
+Dataset/hash/thresholds bez zmian. Recall@1/@3/@5, MRR@5 =1.0 overall, PL i EN.
+16 documents /16 queries, native1024, zero dimension overrides, fingerprints unchanged.
+Thresholds są existing reviewed evaluation gates; nie dodano runtime semantic score cutoff.
 
-29. Backend full
-Final no-opt-in: python -m pytest backend/tests -q -> 358 PASS, 78 opt-in skips, 1 warning.
-Full opt-in backend run: 430 PASS, 5 skips, 1 warning (187.89 s).
-Ten collection poprzedzał dodanie dodatkowego task.cancel() testu; nowy test PASS w 68 targeted.
-Final combined run obejmuje już cały final code oraz dodatkowy cancellation test:
-python -m pytest backend/tests tests -q -rs z trzema opt-in flags:
-680 passed, 6 skipped, 1 warning in 193.86s (0:03:13)
-Retrieval, automatic indexing, lifecycle, deletion/tombstones, backup/restore,
-ingestion, desktop, WebSocket, application boundaries, backend i root regressions PASS.
+28. Backend tests
+.venv\Scripts\python.exe -m pytest backend/tests -q -rs
+384 passed, 80 skipped, 1 warning in 4.96s
+80 skips przy wyłączonych opt-ins; applicable PG/BGE/Qwen tests uruchomione w root full
+z wszystkimi trzema wymaganymi flags=1. Brak failures.
+Existing retrieval/indexing/lifecycle/ingestion/deletion/tombstone/Desktop/WebSocket/
+application-boundary suites PASS. Jedyny warning: existing Starlette/AnyIO deprecation.
 
-30. Root full
-python -m pytest tests -q -rs -> 249 PASS, 1 skip (symlinks unavailable), 2.61 s.
-Również całość root tests w final combined opt-in run PASS.
-Nie przebudowywano Androida; mobile/UI/protocol nie zmieniono.
-
-31. PostgreSQL integrations / skips
-Włączono KULAI_RUN_POSTGRES_INTEGRATION=1, KULAI_RUN_OLLAMA_INTEGRATION=1,
-KULAI_RUN_LLM_INTEGRATION=1. 73 dodatkowe integration cases aktywowane względem no-opt-in run.
-Owned migrations/storage/indexing/retrieval/lifecycle/deletion/tombstones/concurrency/
-backup/restore/replay protection + new RAG PASS.
-Main pozostaje readonly; automatic main content -> LLM calls = 0.
-Final skipped cases, jawnie:
+29. Root tests
+KULAI_RUN_POSTGRES_INTEGRATION=1
+KULAI_RUN_OLLAMA_INTEGRATION=1
+KULAI_RUN_LLM_INTEGRATION=1
+.venv\Scripts\python.exe -m pytest -q -rs -s
+708 passed, 6 skipped, 1 warning in 198.24s (0:03:18)
+Native Python exit code=0 zapisany jawnie po zakończeniu procesu.
+Obejmuje backend oraz root CLI/safety/backup/restore/migration/retrieval tests.
+Owned PostgreSQL integrations, real BGE, real Qwen, new Desktop RAG i frozen golden PASS.
+Pozostałe opt-in/OS skips:
 SKIPPED [1] backend\tests\integration\test_desktop_runtime.py:109: set KULAI_RUN_POSTGRES_INTEGRATION=1 and KULAI_RUN_WHISPER_INTEGRATION=1
 SKIPPED [1] backend\tests\integration\test_memory_websocket.py:275: Set KULAI_RUN_WHISPER_INTEGRATION=1 for real Whisper.
 SKIPPED [1] backend\tests\integration\test_whisper.py:152: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
 SKIPPED [1] backend\tests\integration\test_whisper.py:189: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
 SKIPPED [1] backend\tests\integration\test_whisper.py:230: set KULAI_RUN_WHISPER_INTEGRATION=1 to run real Whisper inference
 SKIPPED [1] tests\test_pre_migration_backup.py:233: Symlinks are unavailable to this process
-Nie deklaruje się wykonania real Whisper/audio/Desktop microphone smoke.
-Jedyny warning: istniejący Starlette/AnyIO BlockingPortal deprecation.
+Real Whisper inference nie było uruchamiane; existing voice unit/synthetic PG tests PASS.
+Żaden test nie wykonywał LLM na main danych.
 
-32. pip check
-Root configured .venv: python -m pip check -> PASS, No broken requirements found.
-Wykorzystano istniejące lokalne reusable packages; brak install/upgrade/vendor mutation.
+30. Android status
+Mobile/protocol/shared generated files bez zmian; Android rebuild nie wymagany.
+WebSocket protocol bez zmian, jego regression tests PASS.
 
-33. git diff --check
-PASS, brak whitespace errors. Git CRLF conversion notices są advisory.
-Raport i nowe pliki obejmuje końcowy whitespace check.
+31. Pip check
+.venv\Scripts\python.exe -m pip check
+PASS: No broken requirements found.
+Brak nowych dependencies/API keys/remote providers.
 
-34. db_doctor
-Main BEFORE i AFTER: PASS. PostgreSQL 18.6, pgvector 0.8.6,
-current/expected kulai_memory_0004, vector actual/configured=1024,
-Memory lifecycle/tombstone schema/constraints PASS, READ ONLY=on.
-Brak diagnostic bypass/stamp/automatic migration.
+32. Git diff --check
+PASS, zero whitespace errors. Git pokazuje wyłącznie existing LF->CRLF conversion warnings.
+Golden, migrations, mobile/shared, vendor diff empty.
 
-35. Main complete DatabaseSnapshot AFTER
-{"memories": {"count": 8, "sha256": "45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f"}, "revision": ["kulai_memory_0004"], "tombstones": {"count": 1, "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"}, "vectors": {"count": 8, "sha256": "21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11"}}
-BEFORE == AFTER complete DatabaseSnapshot: TRUE.
-Counts 8 -> 8 / 8 -> 8 / 1 -> 1; wszystkie SHA-256 oraz revision IDENTICAL.
-Odczyt po final combined regressions. Nie wypisywano real canonical content do raportu.
+33. Db doctor
+Main BEFORE PASS; AFTER PASS. Revision kulai_memory_0004.
+Owned Desktop startup real doctor PASS. Schema nie zmieniono, migration 0005 nie istnieje.
 
-36. Vendor status
-git -C vendor/kulai_modules status --porcelain: EMPTY.
-Pin/HEAD/gitlink nadal 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Brak vendor modifications, migrations/schema/golden changes, commitów ani pusha.
+34. Vendor status
+git -C vendor/kulai_modules status --porcelain: empty.
+Submodule/gitlink 720d0f26c75ba4af24d395f98f15a37e4bd5067e bez zmian.
+Nie było vendor root-cause patch ani potrzeby modyfikowania reusable modules.
 
-37. Exact changed files
+35. Exact changed files
 README.md
-backend/.env.example
-backend/README.md
-backend/pyproject.toml
-backend/src/kulai_memory/application/__init__.py
-backend/src/kulai_memory/application/rag.py
-backend/src/kulai_memory/llm_provider.py
+backend/src/kulai_memory/automatic_indexing.py
+backend/src/kulai_memory/desktop/__init__.py
+backend/src/kulai_memory/desktop/app.py
+backend/src/kulai_memory/desktop/controller.py
+backend/src/kulai_memory/desktop/models.py
 backend/src/kulai_memory/rag_runtime.py
-backend/src/kulai_memory/settings.py
-backend/tests/integration/test_memory_rag_postgres.py
-backend/tests/test_application_boundaries.py
-backend/tests/test_memory_rag.py
-scripts/ask_memory.py
-tests/test_ask_memory.py
+backend/tests/desktop_rag_fakes.py
+backend/tests/integration/test_automatic_indexing_postgres.py
+backend/tests/integration/test_desktop_rag_postgres.py
+backend/tests/test_desktop_controller.py
+backend/tests/test_desktop_rag.py
+backend/tests/test_desktop_rag_ui.py
 wynik.txt
+Wynik.txt zastępuje poprzedni raport 6A.1 pełnym raportem 6A.2.
+Logs/snapshots w ignored .venv/task6a2 nie są częścią zmian repo.
 
-15 plików; logs/snapshots są tylko ignored local artifacts w .venv/task6a1.
-Scripts/export_repo.py nie wymagał zmian.
-README zaktualizowano o pipeline/config/usage/citations/untrusted data/no-context,
-reuse/transaction boundary/limitations i poprawiono stare alpha/schema wording.
+36. Known limitations
+Brak reviewed semantic score cutoff/reranker, voice-question, TTS, multi-turn,
+Android RAG UI, WebSocket RAG i conversation history.
+Pierwsze ASK może cold-loadować Qwen; brak percentage/download progress UI.
+Grounding/provenance validation i reviewed injection tests nie stanowią oceny wszystkich
+możliwych przyszłych pytań/model outputs. Existing conservative 12000-char context budget
+pozostaje zamiast token-count budget; generation timeout pozostaje 180s.
+Pending voice save/indexing trzeba zakończyć przed nowym ASK.
+RAG shutdown jest cancellable; existing voice/STT shutdown semantics zachowano.
+Manual main/microphone smoke nie wykonywano w automated task, zgodnie z ustalonym review flow.
 
-38. Known limitations
-- Brak reviewed semantic score cutoff i reranker; poza 6A.1.
-- Char budget zamiast token counting; tokenizer context-window occupancy niegwarantowane.
-- Prompt isolation i reviewed regressions nie dowodzą uniwersalnej odporności modelu na injection.
-- Citation validation sprawdza provenance/subset, nie entailment każdego zdania.
-- Jedna za duża pierwsza Memory może dać no-context; nie chunkujemy ani nie obcinamy Memories.
-- Snapshot evidence jest aktualne przy retrieval; nie blokujemy późniejszych concurrent mutations.
-- Local daemon/model availability oraz cold-load failures pozostają safe controlled errors;
-  nie dodano retries. Początkowy transient generation error opisano w punkcie 21.
-- Brak streaming, Desktop/voice/WebSocket/Android RAG UX; nie ładowano Whispera dla RAG.
-- Manual main dragon RAG smoke po review nadal niewykonany; automation używa tylko synthetic owned data.
+37. Proposed commit message
+feat: add Desktop Memory assistant with shared BGE and cancellable RAG
 
-39. Proposed commit message
-feat: add grounded local text RAG with validated Memory citations
-
-40. Decyzja
+38. Decyzja
 OK DO COMMITA
-Query -> BGE -> canonical retrieval -> bounded context -> real Qwen -> grounded answer
-z validated citations PASS. No-context zero calls, unrelated insufficient i injection PASS.
-DB checkout podczas Qwen=0, providers reused/closed, owned snapshots identical,
-main complete snapshot identical, golden unchanged/PASS, regressions PASS, vendor clean.
-Nie commitowano. Nie pushowano. Nie zapisano ani nie zmigrowano main DB.
+Quality gate PASS: Ask Memory UI/controller, canonical 6A.1 RAG reuse,
+validated citations, insufficient/no-context, no query-as-Memory, responsive Qt,
+cancellable Qwen shutdown, one shared BGE, reused Qwen, exactly-once close,
+real owned BGE+Qwen Desktop PASS, DB checkout=0, owned/main snapshots unchanged,
+golden unchanged, regression suites PASS, vendor clean.
+Nie commitowano i nie pushowano zmian 6A.2.
+
+Korekta dokumentacji po TASK 6A.2 — 2026-10-09
+
+1. Zakres
+Poprawiono wyłącznie nieaktualny akapit RAG w backend/README.md.
+Ten raport dopisano do wynik.txt, zachowując wcześniejszy pełny raport 6A.2.
+Nie zmieniono kodu, testów ani root README; nie wykonywano operacji na DB/LLM.
+
+2. Aktualne wording
+Text RAG jest dostępny w Desktop przez Ask Memory oraz przez read-only CLI.
+Desktop używa canonical MemoryRagRuntime. Runtime pożycza jeden wspólny BGE
+używany również przez automatic indexing i posiada jeden reusable local Qwen provider.
+W CLI runtime nadal posiada oba providery. Opis jest zgodny z root README.
+Jawnie wymieniono pozostałe ograniczenia: brak reviewed score cutoff/reranker,
+voice-question RAG, TTS, Android RAG UI, WebSocket RAG i multi-turn conversation.
+Usunięto ogólne, nieaktualne stwierdzenie o braku UI RAG integration.
+
+3. Weryfikacja
+git diff --check: PASS, exit=0, bez whitespace errors.
+Git pokazuje jedynie ostrzeżenia o konwersji LF do CRLF.
+git status --short: exit=0; pełny wynik poniżej.
+Porównanie SHA-256 13 istniejących zmienionych plików (z pominięciem
+backend/README.md i wynik.txt) potwierdziło brak dodatkowych zmian.
+Testów nie uruchamiano: korekta dotyczy wyłącznie dokumentacji.
+
+4. Stan working tree
+Zmiany kodu/testów/root README widoczne w statusie pochodzą z wcześniejszego
+TASK 6A.2 i zostały zachowane bez modyfikacji. W tej korekcie edytowano tylko
+backend/README.md oraz dopisano raport do wynik.txt.
+ M README.md
+ M backend/README.md
+ M backend/src/kulai_memory/automatic_indexing.py
+ M backend/src/kulai_memory/desktop/__init__.py
+ M backend/src/kulai_memory/desktop/app.py
+ M backend/src/kulai_memory/desktop/controller.py
+ M backend/src/kulai_memory/desktop/models.py
+ M backend/src/kulai_memory/rag_runtime.py
+ M backend/tests/integration/test_automatic_indexing_postgres.py
+ M backend/tests/test_desktop_controller.py
+ M wynik.txt
+?? backend/tests/desktop_rag_fakes.py
+?? backend/tests/integration/test_desktop_rag_postgres.py
+?? backend/tests/test_desktop_rag.py
+?? backend/tests/test_desktop_rag_ui.py
+
+5. Wynik
+Korekta dokumentacji zakończona. Nie wykonano commita ani pusha.

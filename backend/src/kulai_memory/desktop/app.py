@@ -6,6 +6,7 @@ import asyncio
 import sys
 import threading
 from collections.abc import Callable, Coroutine
+from concurrent.futures import Future
 from typing import Any
 
 from PySide6.QtCore import QElapsedTimer, QThread, QTimer, Signal, Slot
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -35,6 +37,7 @@ from .models import (
     DesktopResultStatus,
     DesktopStartupResult,
     MemorySummary,
+    DesktopRagProgress, DesktopRagProgressState, DesktopRagResult, DesktopRagStatus,
 )
 from .recorder import DEFAULT_MAX_DURATION_SECONDS
 
@@ -50,6 +53,7 @@ class AsyncDesktopThread(QThread):
     recording_started = Signal(object)
     progress = Signal(object)
     processing_finished = Signal(object)
+    rag_finished = Signal(object)
     recent_loaded = Signal(object)
     operation_failed = Signal(str, str)
     shutdown_finished = Signal()
@@ -66,6 +70,11 @@ class AsyncDesktopThread(QThread):
         self._controller: DesktopController | None = None
         self._runtime_ready = False
         self._shutdown_requested = threading.Event()
+        self._rag_future: Future[Any] | None = None
+
+    def _emit_progress(self, progress: object) -> None:
+        if not self._shutdown_requested.is_set():
+            self.progress.emit(progress)
 
     def run(self) -> None:
         loop = asyncio.new_event_loop()
@@ -75,7 +84,7 @@ class AsyncDesktopThread(QThread):
         try:
             try:
                 controller = self._controller_factory(
-                    progress_callback=self.progress.emit
+                    progress_callback=self._emit_progress
                 )
                 self._controller = controller
                 startup = loop.run_until_complete(controller.startup())
@@ -83,12 +92,9 @@ class AsyncDesktopThread(QThread):
                 self.startup_failed.emit(_public_message(exc))
                 if controller is not None:
                     loop.run_until_complete(controller.shutdown())
-                if self._shutdown_requested.is_set():
-                    self.shutdown_finished.emit()
                 return
             if self._shutdown_requested.is_set():
                 loop.run_until_complete(controller.shutdown())
-                self.shutdown_finished.emit()
                 return
             self._runtime_ready = True
             self.startup_ready.emit(startup)
@@ -111,6 +117,8 @@ class AsyncDesktopThread(QThread):
                 self._loop = None
                 loop.close()
                 asyncio.set_event_loop(None)
+                if self._shutdown_requested.is_set():
+                    self.shutdown_finished.emit()
 
     def request_start_recording(self, device_id: int) -> None:
         self._submit(
@@ -140,6 +148,12 @@ class AsyncDesktopThread(QThread):
             self.recent_loaded.emit,
         )
 
+    def request_ask_memory(self, query: str, top_k: int = 5) -> None:
+        self._rag_future = self._submit(
+            "ask", lambda controller: controller.ask_memory(query=query, top_k=top_k),
+            self.rag_finished.emit,
+        )
+
     def request_shutdown(self) -> None:
         if self._shutdown_requested.is_set():
             return
@@ -159,7 +173,6 @@ class AsyncDesktopThread(QThread):
         try:
             await controller.shutdown()
         finally:
-            self.shutdown_finished.emit()
             loop = asyncio.get_running_loop()
             loop.call_soon(loop.stop)
 
@@ -168,13 +181,15 @@ class AsyncDesktopThread(QThread):
         operation: str,
         create: Callable[[DesktopController], Coroutine[Any, Any, Any]],
         success: Callable[[object], None],
-    ) -> None:
+    ) -> Future[Any] | None:
         loop = self._loop
         controller = self._controller
-        if loop is None or controller is None or loop.is_closed():
+        if self._shutdown_requested.is_set():
+            return
+        if loop is None or controller is None or loop.is_closed() or not self._runtime_ready:
             self.operation_failed.emit(operation, "Desktop runtime is not ready.")
             return
-        asyncio.run_coroutine_threadsafe(
+        return asyncio.run_coroutine_threadsafe(
             self._execute(operation, create(controller), success),
             loop,
         )
@@ -185,14 +200,19 @@ class AsyncDesktopThread(QThread):
         coroutine: Coroutine[Any, Any, Any],
         success: Callable[[object], None],
     ) -> None:
+        if self._shutdown_requested.is_set():
+            coroutine.close()
+            return
         try:
             result = await coroutine
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.operation_failed.emit(operation, _public_message(exc))
+            if not self._shutdown_requested.is_set():
+                self.operation_failed.emit(operation, _public_message(exc))
         else:
-            success(result)
+            if not self._shutdown_requested.is_set():
+                success(result)
 
 
 def _public_message(exc: Exception) -> str:
@@ -202,7 +222,7 @@ def _public_message(exc: Exception) -> str:
 
 
 class MainWindow(QMainWindow):
-    """Minimal usable voice-memory desktop window."""
+    """Voice notes and read-only text questions on the existing worker loop."""
 
     def __init__(
         self,
@@ -212,10 +232,14 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("KulAI Memory")
-        self.resize(820, 650)
+        self.resize(920, 880)
         self._worker = worker or AsyncDesktopThread(parent=self)
         self._recording = False
         self._ready = False
+        self._rag_ready = False
+        self._busy = False
+        self._rag_active = False
+        self._save_pending = False
         self._closing = False
         self._shutdown_done = False
         self._elapsed = QElapsedTimer()
@@ -264,6 +288,31 @@ class MainWindow(QMainWindow):
         save_row.addWidget(self.retry_button)
         layout.addLayout(save_row)
 
+        self.ask_group = QGroupBox("Ask Memory", root)
+        ask_layout = QVBoxLayout(self.ask_group)
+        question_row = QHBoxLayout()
+        self.query_input = QLineEdit(self.ask_group)
+        self.query_input.setPlaceholderText("Ask something about your memories...")
+        self.query_input.setMaxLength(10000)
+        self.ask_button = QPushButton("ASK", self.ask_group)
+        question_row.addWidget(self.query_input, 1)
+        question_row.addWidget(self.ask_button)
+        ask_layout.addLayout(question_row)
+        self.rag_status = QLabel("Starting...", self.ask_group)
+        ask_layout.addWidget(self.rag_status)
+        self.answer = QPlainTextEdit(self.ask_group)
+        self.answer.setReadOnly(True)
+        self.answer.setPlaceholderText("An answer grounded in your memories will appear here.")
+        ask_layout.addWidget(self.answer)
+        ask_layout.addWidget(QLabel("Sources", self.ask_group))
+        self.sources_table = QTableWidget(0, 3, self.ask_group)
+        self.sources_table.setHorizontalHeaderLabels(["Rank", "Memory ID", "Score"])
+        self.sources_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.sources_table.horizontalHeader().setStretchLastSection(True)
+        self.sources_table.setMaximumHeight(140)
+        ask_layout.addWidget(self.sources_table)
+        layout.addWidget(self.ask_group)
+
         recent_header = QHBoxLayout()
         recent_header.addWidget(QLabel("Recent Memory"))
         recent_header.addStretch(1)
@@ -288,6 +337,10 @@ class MainWindow(QMainWindow):
         self.stop_button.clicked.connect(self._stop_recording)
         self.retry_button.clicked.connect(self._retry_save)
         self.refresh_button.clicked.connect(self._worker.request_recent)
+        self.query_input.textChanged.connect(self._update_controls)
+        self.query_input.returnPressed.connect(self._ask_memory)
+        self.ask_button.clicked.connect(self._ask_memory)
+        self._update_controls()
 
     def _connect_worker(self) -> None:
         self._worker.startup_ready.connect(self._on_startup_ready)
@@ -295,12 +348,58 @@ class MainWindow(QMainWindow):
         self._worker.recording_started.connect(self._on_recording_started)
         self._worker.progress.connect(self._on_progress)
         self._worker.processing_finished.connect(self._on_processing_finished)
+        self._worker.rag_finished.connect(self._on_rag_finished)
         self._worker.recent_loaded.connect(self._set_recent)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._worker.shutdown_finished.connect(self._on_shutdown_finished)
+        self._worker.finished.connect(self._on_shutdown_finished)
+
+    @Slot()
+    def _update_controls(self) -> None:
+        blocked = self._busy or self._recording or self._save_pending or self._closing
+        self.record_button.setEnabled(self._ready and not blocked)
+        self.query_input.setEnabled(self._rag_ready and not blocked)
+        self.ask_button.setEnabled(self._rag_ready and not blocked and bool(self.query_input.text().strip()))
+        self.refresh_button.setEnabled(self._rag_ready and not self._busy and not self._recording and not self._closing)
+        self.device_selector.setEnabled(not blocked)
+
+    @Slot()
+    def _ask_memory(self) -> None:
+        if not self.ask_button.isEnabled():
+            return
+        self._busy = self._rag_active = True
+        self.answer.clear()
+        self.sources_table.setRowCount(0)
+        self.rag_status.setText("Searching memory...")
+        self._update_controls()
+        self._worker.request_ask_memory(self.query_input.text(), top_k=5)
+
+    @Slot(object)
+    def _on_rag_finished(self, result: DesktopRagResult) -> None:
+        if self._closing or not self._rag_active:
+            return
+        self._busy = self._rag_active = False
+        self.answer.setPlainText(result.answer)
+        self.sources_table.setRowCount(0)
+        if result.status is DesktopRagStatus.ANSWERED:
+            self.rag_status.setText("Answered")
+            self.sources_table.setRowCount(len(result.citations))
+            for row, citation in enumerate(result.citations):
+                for column, value in enumerate((str(citation.rank), str(citation.memory_id), f"{citation.score:.4f}")):
+                    self.sources_table.setItem(row, column, QTableWidgetItem(value))
+            self.sources_table.resizeColumnToContents(0)
+            self.sources_table.resizeColumnToContents(1)
+        elif result.status is DesktopRagStatus.INSUFFICIENT_CONTEXT:
+            self.rag_status.setText("Not enough information")
+        else:
+            self.answer.clear()
+            self.rag_status.setText(result.error_message or "An answer could not be generated.")
+        self._update_controls()
 
     @Slot(object)
     def _on_startup_ready(self, result: DesktopStartupResult) -> None:
+        if self._closing:
+            return
         self.device_selector.clear()
         default_index = 0
         for index, device in enumerate(result.devices):
@@ -311,24 +410,36 @@ class MainWindow(QMainWindow):
             self.device_selector.setCurrentIndex(default_index)
         self._set_recent(result.memories)
         self._ready = bool(result.devices)
+        self._rag_ready = True
+        self.rag_status.setText("Ready")
         self.status_label.setText("Ready" if result.devices else "No input device found")
         if result.indexing.degraded:
             self.save_status.setText("Semantic indexing is degraded; missing indexes can be retried.")
         self.record_button.setEnabled(self._ready)
         self.refresh_button.setEnabled(True)
+        self._update_controls()
 
     @Slot(str)
     def _on_startup_failed(self, message: str) -> None:
+        if self._closing:
+            return
         self.status_label.setText(message)
         self.save_status.setText("Startup failed")
         self._ready = False
+        self._rag_ready = False
+        self.rag_status.setText(message)
         self.record_button.setEnabled(False)
+        self._update_controls()
 
     @Slot()
     def _start_recording(self) -> None:
+        if self._busy or self._recording or self._save_pending or self._closing:
+            return
         device_id = self.device_selector.currentData()
         if device_id is None:
             return
+        self._busy = True
+        self._update_controls()
         self.record_button.setEnabled(False)
         self.device_selector.setEnabled(False)
         self.retry_button.setVisible(False)
@@ -339,8 +450,12 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_recording_started(self, ingestion_id: object) -> None:
+        if self._closing:
+            return
         del ingestion_id
         self._recording = True
+        self._busy = False
+        self._update_controls()
         self._elapsed.start()
         self._elapsed_timer.start()
         self.elapsed_label.setText("00:00")
@@ -349,16 +464,25 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _stop_recording(self) -> None:
-        if not self._recording:
+        if not self._recording or self._closing:
             return
         self._recording = False
+        self._busy = True
+        self._update_controls()
         self._elapsed_timer.stop()
         self.stop_button.setEnabled(False)
         self.status_label.setText("Transcribing...")
         self._worker.request_stop_and_process()
 
     @Slot(object)
-    def _on_progress(self, progress: DesktopProgress) -> None:
+    def _on_progress(self, progress: DesktopProgress | DesktopRagProgress) -> None:
+        if self._closing:
+            return
+        if isinstance(progress, DesktopRagProgress):
+            if self._rag_active:
+                self.rag_status.setText("Searching memory..." if progress.state is DesktopRagProgressState.RETRIEVING
+                                        else "Generating answer...")
+            return
         if progress.state is DesktopProgressState.TRANSCRIBING:
             self.status_label.setText("Transcribing...")
         elif progress.state is DesktopProgressState.TRANSCRIPT_READY:
@@ -370,6 +494,10 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_processing_finished(self, result: DesktopProcessingResult) -> None:
+        if self._closing:
+            return
+        self._busy = False
+        self._save_pending = result.save_pending
         self.transcript.setPlainText(result.transcript)
         self.retry_button.setVisible(result.save_pending)
         self.retry_button.setEnabled(result.save_pending)
@@ -407,15 +535,22 @@ class MainWindow(QMainWindow):
             self.save_status.setText("SAVE_FAILED")
 
         self.record_button.setEnabled(self._ready and not result.save_pending)
+        self._update_controls()
 
     @Slot()
     def _retry_save(self) -> None:
+        if self._busy or self._closing:
+            return
+        self._busy = True
+        self._update_controls()
         self.retry_button.setEnabled(False)
         self.status_label.setText("Saving...")
         self._worker.request_retry_save()
 
     @Slot(object)
     def _set_recent(self, memories: tuple[MemorySummary, ...]) -> None:
+        if self._closing:
+            return
         self.recent_table.setRowCount(len(memories))
         for row, memory in enumerate(memories):
             created = memory.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -428,6 +563,16 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str)
     def _on_operation_failed(self, operation: str, message: str) -> None:
+        if self._closing:
+            return
+        self._busy = False
+        if operation == "ask":
+            self._rag_active = False
+            self.answer.clear()
+            self.sources_table.setRowCount(0)
+            self.rag_status.setText(message)
+            self._update_controls()
+            return
         if operation == "record":
             self.status_label.setText("Microphone unavailable")
             self.device_selector.setEnabled(True)
@@ -444,9 +589,12 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText(message)
         self.save_status.setText(message)
+        self._update_controls()
 
     @Slot()
     def _update_elapsed(self) -> None:
+        if self._closing:
+            return
         elapsed_ms = self._elapsed.elapsed()
         seconds = max(0, elapsed_ms // 1000)
         self.elapsed_label.setText(f"{seconds // 60:02d}:{seconds % 60:02d}")
@@ -460,16 +608,21 @@ class MainWindow(QMainWindow):
         event.ignore()
         if not self._closing:
             self._closing = True
+            self._elapsed_timer.stop()
             self.status_label.setText("Closing...")
             self.record_button.setEnabled(False)
             self.stop_button.setEnabled(False)
             self.retry_button.setEnabled(False)
+            self._update_controls()
             self._worker.request_shutdown()
 
     @Slot()
     def _on_shutdown_finished(self) -> None:
+        if not self._closing:
+            return
         self._shutdown_done = True
-        self.close()
+        if not self._worker.isRunning():
+            self.close()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from kulai_embeddings import EmbeddingProvider
@@ -49,11 +49,17 @@ RuntimeIndexerFactory = Callable[..., RuntimeMemoryIndexer]
 
 
 class AutomaticMemoryIndexer:
-    """Own client lifecycle; canonical Memory itself is the durable outbox."""
+    """Canonical Memory is the durable outbox; injected providers are borrowed.
+
+    With no provider injection the indexer creates and closes its own client,
+    preserving the standalone/server contract. A supplied provider is never
+    closed here: its caller owns lifetime and operation serialization.
+    """
 
     def __init__(
         self, *, settings: Settings, session_factory: async_sessionmaker[AsyncSession],
         provider_factory: EmbeddingProviderFactory = create_embedding_provider,
+        provider: EmbeddingProvider | None = None,
         embedding_timeout_seconds: float = 120.0,
     ) -> None:
         if (
@@ -66,13 +72,14 @@ class AutomaticMemoryIndexer:
         self._lock = asyncio.Lock()
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
-        self._provider = provider_factory(settings=settings)
+        self._owns_provider = provider is None
+        self._provider = provider if provider is not None else provider_factory(settings=settings)
         self._service = MemoryIndexingService(
             provider=self._provider, expected_dimension=AUTOMATIC_EMBEDDING_DIMENSION,
         )
 
     @property
-    def provider(self) -> OwnedEmbeddingProvider:
+    def provider(self) -> EmbeddingProvider:
         return self._provider
 
     def _require_open(self) -> None:
@@ -172,7 +179,8 @@ class AutomaticMemoryIndexer:
 
     async def _close_provider(self) -> None:
         async with self._lock:
-            await self._provider.aclose()
+            if self._owns_provider:
+                await cast(OwnedEmbeddingProvider, self._provider).aclose()
 
     async def aclose(self) -> None:
         self._closed = True

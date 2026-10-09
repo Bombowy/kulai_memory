@@ -44,9 +44,14 @@ from kulai_memory.database_safety import (
     run_database_doctor,
 )
 from kulai_memory.application.indexing import IndexReconciliationReport
+from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER, MemoryRagError, MemoryRagResult
+from kulai_memory.application.retrieval import MemoryRetrievalError, MemoryRetrievalService
 from kulai_memory.automatic_indexing import (
     AutomaticMemoryIndexer, RuntimeMemoryIndexer, RuntimeIndexerFactory,
+    EmbeddingProviderFactory, OwnedEmbeddingProvider,
 )
+from kulai_memory.embedding_provider import create_embedding_provider
+from kulai_memory.rag_runtime import MemoryRagRuntime
 from kulai_memory.persistence import PostgresMemoryRepository
 from kulai_memory.runtime import CudaRuntimeConfigurationError, ProcessCudaDllScope
 from kulai_memory.settings import Settings, get_settings
@@ -62,6 +67,13 @@ from .models import (
     DesktopStartupResult,
     DesktopStateError,
     DesktopTranscriptionError,
+    DesktopRagCitation,
+    DesktopRagConfigurationError,
+    DesktopRagInputError,
+    DesktopRagProgress,
+    DesktopRagProgressState,
+    DesktopRagResult,
+    DesktopRagStatus,
     MemorySummary,
 )
 from .recorder import MicrophoneRecorder
@@ -91,7 +103,17 @@ Doctor = Callable[[str], Awaitable[DoctorReport]]
 EngineFactory = Callable[[DbConfig], _Engine]
 SessionFactoryBuilder = Callable[[_Engine], _SessionFactory]
 RepositoryFactory = Callable[[AsyncSession], MemoryRepository]
-ProgressCallback = Callable[[DesktopProgress], None]
+ProgressCallback = Callable[[DesktopProgress | DesktopRagProgress], None]
+
+
+class DesktopMemoryRag(Protocol):
+    async def __aenter__(self) -> DesktopMemoryRag: ...
+    async def ask(self, *, query: str, top_k: int = 5,
+                  on_generating: Callable[[], None] | None = None) -> MemoryRagResult: ...
+    async def aclose(self) -> None: ...
+
+
+RagRuntimeFactory = Callable[..., DesktopMemoryRag]
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +165,7 @@ def _repository_factory(session: AsyncSession) -> MemoryRepository:
     return PostgresMemoryRepository(db=session)
 
 
-def _noop_progress(progress: DesktopProgress) -> None:
+def _noop_progress(progress: DesktopProgress | DesktopRagProgress) -> None:
     del progress
 
 
@@ -163,6 +185,8 @@ class DesktopController:
         repository_factory: RepositoryFactory = _repository_factory,
         progress_callback: ProgressCallback = _noop_progress,
         indexer_factory: RuntimeIndexerFactory = AutomaticMemoryIndexer,
+        embedding_provider_factory: EmbeddingProviderFactory = create_embedding_provider,
+        rag_runtime_factory: RagRuntimeFactory = MemoryRagRuntime,
     ) -> None:
         self._settings = settings or get_settings()
         self._recorder = recorder or MicrophoneRecorder()
@@ -174,6 +198,13 @@ class DesktopController:
         self._repository_factory = repository_factory
         self._progress_callback = progress_callback
         self._indexer_factory = indexer_factory
+        self._embedding_provider_factory = embedding_provider_factory
+        self._rag_runtime_factory = rag_runtime_factory
+        self._embedding_provider: OwnedEmbeddingProvider | None = None
+        self._rag: DesktopMemoryRag | None = None
+        self._rag_task: asyncio.Task[Any] | None = None
+        self._shutdown_task: asyncio.Task[None] | None = None
+        self._closing = False
         self._indexer: RuntimeMemoryIndexer | None = None
         self._indexing_report = IndexReconciliationReport()
         self._operation_lock = asyncio.Lock()
@@ -235,11 +266,20 @@ class DesktopController:
                 self._session_factory = session_factory
                 unexpected_error = DesktopPublicError
                 provider = self._provider_factory(self._settings)
+                self._provider = provider
+                unexpected_error = DesktopRagConfigurationError
+                self._embedding_provider = self._embedding_provider_factory(settings=self._settings)
                 self._indexer = self._indexer_factory(
                     settings=self._settings, session_factory=session_factory,
+                    provider=self._embedding_provider,
                 )
+                self._rag = self._rag_runtime_factory(
+                    settings=self._settings, session_factory=session_factory,
+                    embedding_provider=self._embedding_provider,
+                )
+                await self._rag.__aenter__()
+                unexpected_error = DesktopPublicError
                 devices = await asyncio.to_thread(self._recorder.list_devices)
-                self._provider = provider
                 self._transcription_service = TranscriptionService(provider=provider)
                 self._indexing_report = await self._indexer.reconcile()
                 self._started = True
@@ -256,6 +296,8 @@ class DesktopController:
                 raise unexpected_error() from exc
 
     async def start_recording(self, *, device_id: int) -> UUID:
+        if self._operation_lock.locked():
+            raise DesktopStateError
         async with self._operation_lock:
             self._require_started()
             if self._pending is not None or self._active_ingestion_id is not None:
@@ -301,6 +343,8 @@ class DesktopController:
             return await self._save_pending_unlocked()
 
     async def retry_save(self) -> DesktopProcessingResult:
+        if self._operation_lock.locked():
+            raise DesktopStateError
         async with self._operation_lock:
             self._require_started()
             if self._pending is None:
@@ -315,6 +359,22 @@ class DesktopController:
             return await self._list_recent_unlocked(limit)
 
     async def shutdown(self) -> None:
+        """Cancel generation before taking the lock; never wait for its 180s timeout."""
+
+        self._closing = True
+        if self._shutdown_task is None:
+            self._shutdown_task = asyncio.create_task(self._shutdown())
+        try:
+            await asyncio.shield(self._shutdown_task)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._shutdown_task)
+            raise
+
+    async def _shutdown(self) -> None:
+        task = self._rag_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         async with self._operation_lock:
             if self._closed:
                 return
@@ -322,6 +382,40 @@ class DesktopController:
             self._active_ingestion_id = None
             self._pending = None
             await self._shutdown_resources_unlocked()
+
+    async def ask_memory(self, *, query: str, top_k: int = 5) -> DesktopRagResult:
+        """Read-only text question; no recorder/STT/ingestion/indexing/recent writes."""
+
+        try:
+            MemoryRetrievalService.validate_input(query=query, top_k=top_k)
+        except MemoryRetrievalError:
+            raise DesktopRagInputError from None
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        async with self._operation_lock:
+            self._require_started()
+            if self._active_ingestion_id is not None or self._pending is not None or self._rag is None:
+                raise DesktopStateError
+            self._rag_task = asyncio.current_task()
+            try:
+                self._progress_callback(DesktopRagProgress(DesktopRagProgressState.RETRIEVING))
+                def generating() -> None:
+                    self._progress_callback(DesktopRagProgress(DesktopRagProgressState.GENERATING))
+                result = await self._rag.ask(query=query, top_k=top_k, on_generating=generating)
+                return DesktopRagResult(
+                    status=(DesktopRagStatus.ANSWERED if result.sufficient_context
+                            else DesktopRagStatus.INSUFFICIENT_CONTEXT),
+                    answer=result.answer if result.sufficient_context else INSUFFICIENT_CONTEXT_ANSWER,
+                    citations=tuple(DesktopRagCitation(c.memory_id, c.rank, c.score)
+                                    for c in result.citations) if result.sufficient_context else (),
+                )
+            except MemoryRagError as exc:
+                return DesktopRagResult(DesktopRagStatus.FAILED, "", error_message=_rag_error_message(exc.code))
+            except Exception:
+                return DesktopRagResult(DesktopRagStatus.FAILED, "",
+                                        error_message="An answer could not be generated.")
+            finally:
+                self._rag_task = None
 
     async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
         async with self._operation_lock:
@@ -343,7 +437,7 @@ class DesktopController:
             raise DesktopConfigurationError
 
     def _require_started(self) -> None:
-        if not self._started or self._closed:
+        if not self._started or self._closed or self._closing:
             raise DesktopStateError
 
     async def _transcribe_unlocked(
@@ -465,12 +559,28 @@ class DesktopController:
         )
 
     async def _shutdown_resources_unlocked(self) -> None:
+        cancellation = None
+        rag, self._rag = self._rag, None
+        if rag is not None:
+            try:
+                await rag.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+            except Exception:
+                pass
         indexer = self._indexer
         self._indexer = None
-        cancellation = None
         if indexer is not None:
             try:
                 await indexer.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+            except Exception:
+                pass
+        embedding, self._embedding_provider = self._embedding_provider, None
+        if embedding is not None:
+            try:
+                await embedding.aclose()
             except asyncio.CancelledError as exc:
                 cancellation = exc
             except Exception:
@@ -493,3 +603,11 @@ class DesktopController:
         self._cuda_scope.close()
         if cancellation is not None:
             raise cancellation
+
+
+def _rag_error_message(code: str) -> str:
+    if code == "rag.retrieval_failed":
+        return "Memory search could not be completed."
+    if code == "rag.invalid_configuration":
+        return "Memory assistant configuration is invalid."
+    return "An answer could not be generated."

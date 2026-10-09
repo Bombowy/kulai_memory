@@ -29,6 +29,37 @@ class DesktopProgressState(str, Enum):
     INDEXING = "indexing"
 
 
+class DesktopRagStatus(str, Enum):
+    ANSWERED = "answered"
+    INSUFFICIENT_CONTEXT = "insufficient_context"
+    FAILED = "failed"
+
+
+class DesktopRagProgressState(str, Enum):
+    RETRIEVING = "retrieving"
+    GENERATING = "generating"
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopRagProgress:
+    state: DesktopRagProgressState
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopRagCitation:
+    memory_id: UUID
+    rank: int
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopRagResult:
+    status: DesktopRagStatus
+    answer: str
+    citations: tuple[DesktopRagCitation, ...] = ()
+    error_message: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class MicrophoneDevice:
     device_id: int
@@ -108,3 +139,11 @@ class DesktopStateError(DesktopPublicError):
 
 class DesktopTranscriptionError(DesktopPublicError):
     safe_message = "Transcription failed."
+
+
+class DesktopRagInputError(DesktopPublicError):
+    safe_message = "Enter a nonblank question of at most 10000 characters and top-k between 1 and 20."
+
+
+class DesktopRagConfigurationError(DesktopPublicError):
+    safe_message = "Memory assistant configuration is invalid."

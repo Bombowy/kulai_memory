@@ -9,6 +9,8 @@ from .models import (
     DesktopStartupResult,
     MemorySummary,
     MicrophoneDevice,
+    DesktopRagStatus, DesktopRagProgressState, DesktopRagProgress,
+    DesktopRagResult, DesktopRagCitation,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "DesktopStartupResult",
     "MemorySummary",
     "MicrophoneDevice",
+    "DesktopRagStatus", "DesktopRagProgressState", "DesktopRagProgress",
+    "DesktopRagResult", "DesktopRagCitation",
 ]

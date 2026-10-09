@@ -345,6 +345,10 @@ def test_desktop_real_commit_then_index_failure_retry_and_reuse(tmp_path):
             stt = SttProvider(("synthetic desktop note", "second synthetic desktop note"))
             arguments = runtime_arguments(factory, provider)
             arguments["provider_factory"] = lambda ignored: stt
+            from backend.tests.desktop_rag_fakes import FakeDesktopRag
+            arguments["embedding_provider_factory"] = lambda **kwargs: provider
+            arguments["indexer_factory"] = lambda **kwargs: AutomaticMemoryIndexer(**kwargs)
+            arguments["rag_runtime_factory"] = lambda **kwargs: FakeDesktopRag()
             controller = DesktopController(**arguments, recorder=FakeRecorder(tmp_path))
             try:
                 await controller.startup()
