@@ -17,6 +17,7 @@ from .application.indexing import (
     IndexReconciliationReport,
     MemoryIndexingError,
     MemoryIndexingMissingError,
+    MemoryIndexingArchivedError,
     MemoryIndexingService,
     MemoryIndexingState,
 )
@@ -103,14 +104,16 @@ class AutomaticMemoryIndexer:
                                 'source_memory_id', CAST(m.id AS text),
                                 'embedding_provider_id', 'ollama',
                                 'embedding_model_tag', CAST(:model AS text),
-                                'embedding_dimension', 1024)
-                            AND v.metadata_json->>'embedding_dimension' = '1024') AS compatible,
+                                'embedding_dimension', 1024, 'revision', m.revision)
+                            AND v.metadata_json->>'embedding_dimension' = '1024'
+                            AND v.metadata_json->>'revision' = CAST(m.revision AS text)) AS compatible,
                         count(*) FILTER (WHERE v.pk IS NOT NULL) AS existing
                     FROM memories m LEFT JOIN kulai_vector_records v
                       ON v.namespace_key = :namespace AND v.record_id = CAST(m.id AS text)
+                    WHERE m.archived_at IS NULL
                 """), {"namespace": MEMORY_VECTOR_NAMESPACE, "model": AUTOMATIC_EMBEDDING_MODEL})).mappings().one()
                 ids = tuple((await session.execute(text("""
-                    SELECT m.id FROM memories m WHERE NOT EXISTS (
+                    SELECT m.id FROM memories m WHERE m.archived_at IS NULL AND NOT EXISTS (
                         SELECT 1 FROM kulai_vector_records v
                         WHERE v.namespace_key = :namespace AND v.record_id = CAST(m.id AS text)
                     ) ORDER BY m.created_at ASC, m.id ASC LIMIT :limit
@@ -132,7 +135,7 @@ class AutomaticMemoryIndexer:
             raise MemoryIndexingError()
         async with self._lock:
             self._require_open()
-            selected = indexed = already = deleted = failed = compatible = incompatible = remaining = 0
+            selected = indexed = already = deleted = archived = failed = compatible = incompatible = remaining = 0
             error_code = None
             try:
                 ids, compatible, incompatible, remaining = await self._selection(limit)
@@ -150,6 +153,8 @@ class AutomaticMemoryIndexer:
                             already += 1
                     except MemoryIndexingMissingError:
                         deleted += 1
+                    except MemoryIndexingArchivedError:
+                        archived += 1
                     except MemoryIndexingError as exc:
                         failed += 1
                         error_code = exc.code
@@ -161,6 +166,7 @@ class AutomaticMemoryIndexer:
             return IndexReconciliationReport(
                 selected=selected, indexed=indexed, already_indexed=already,
                 compatible_existing=compatible, deleted_skipped=deleted, failed=failed,
+                archived_skipped=archived,
                 incompatible_existing=incompatible, remaining_missing=remaining, error_code=error_code,
             )
 

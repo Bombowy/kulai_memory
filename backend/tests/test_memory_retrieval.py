@@ -47,7 +47,7 @@ class Provider:
 
 def metadata(memory):
     return {"source_memory_id": str(memory.id), "embedding_provider_id": "ollama",
-            "embedding_model_tag": MODEL, "embedding_dimension": 1024,
+            "embedding_model_tag": MODEL, "embedding_dimension": 1024, "revision": memory.revision,
             "content": "PRIVATE_VECTOR_METADATA_SENTINEL"}
 
 
@@ -207,6 +207,31 @@ def test_missing_source_memory_id_is_incompatible(setup):
     with pytest.raises(MemoryRetrievalError) as caught:
         asyncio.run(retrieve(setup))
     assert caught.value.code == "retrieval.incompatible_metadata"
+
+
+@pytest.mark.parametrize("revision", [None, True, 1.0, 2, 0])
+def test_missing_invalid_or_stale_revision_is_incompatible(setup, revision):
+    original = match(setup[4][0], 0.9)
+    data = dict(original.record.metadata)
+    if revision is None:
+        data.pop("revision")
+    else:
+        data["revision"] = revision
+    setup[2].rows[MEMORY_VECTOR_NAMESPACE] = (
+        original.model_copy(update={"record": original.record.model_copy(update={"metadata": data})}),
+    )
+    with pytest.raises(MemoryRetrievalError) as caught:
+        asyncio.run(retrieve(setup))
+    assert caught.value.code == "retrieval.incompatible_metadata"
+
+
+def test_archived_canonical_cannot_be_exposed_even_with_a_vector(setup):
+    from datetime import UTC, datetime
+    memory = setup[4][0]
+    setup[3].rows[memory.id] = memory.model_copy(update={"archived_at": datetime.now(UTC)})
+    with pytest.raises(MemoryRetrievalError) as caught:
+        asyncio.run(retrieve(setup))
+    assert caught.value.code == "retrieval.memory_archived"
 
 
 @pytest.mark.parametrize("field,value", [

@@ -23,7 +23,7 @@ PRIVATE = "PRIVATE_MEMORY_VECTOR_PASSWORD_SENTINEL"
 
 def metadata(memory):
     return dict(source_memory_id=str(memory.id), embedding_provider_id="ollama",
-                embedding_model_tag=MODEL, embedding_dimension=1024)
+                embedding_model_tag=MODEL, embedding_dimension=1024, revision=memory.revision)
 
 
 class Provider:
@@ -69,7 +69,7 @@ class Sessions:
         pass
 
     async def scalar(self, statement):
-        return self.memory.id if self.memory else None
+        return self.memory
 
     async def rollback(self):
         pass
@@ -123,7 +123,7 @@ def check_no_session(sessions):
 
 
 @pytest.mark.parametrize("when", ["first", "second"])
-@pytest.mark.parametrize("field", ["source_memory_id", "embedding_provider_id", "embedding_model_tag", "embedding_dimension"])
+@pytest.mark.parametrize("field", ["source_memory_id", "embedding_provider_id", "embedding_model_tag", "embedding_dimension", "revision"])
 def test_incompatible_never_overwrites(monkeypatch, when, field):
     async def scenario():
         memory = Memory(content=PRIVATE)

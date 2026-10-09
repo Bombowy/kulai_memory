@@ -392,6 +392,12 @@ class MainWindow(QMainWindow):
         elif result.status is DesktopResultStatus.INGESTION_RETIRED:
             self.status_label.setText("This note was deleted and cannot be saved again.")
             self.save_status.setText("INGESTION_RETIRED")
+        elif result.status is DesktopResultStatus.INGESTION_ARCHIVED:
+            self.status_label.setText("This memory is archived; retry cannot restore it.")
+            self.save_status.setText("INGESTION_ARCHIVED")
+        elif result.status is DesktopResultStatus.INGESTION_CONFLICT:
+            self.status_label.setText("This note conflicts with the current memory content.")
+            self.save_status.setText("INGESTION_CONFLICT")
         elif result.status is DesktopResultStatus.INDEXING_FAILED:
             self.status_label.setText("Memory saved; semantic indexing failed - retry available")
             self.save_status.setText("INDEXING_FAILED")

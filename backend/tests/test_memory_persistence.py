@@ -58,7 +58,7 @@ def _row(memory: Memory) -> MemoryDb:
         source_kind=memory.source_kind.value,
         session_id=memory.session_id,
         metadata_json=dict(memory.metadata),
-        created_at=memory.created_at,
+        created_at=memory.created_at, revision=memory.revision, archived_at=memory.archived_at,
     )
 
 
@@ -216,6 +216,8 @@ def test_memory_orm_schema_and_host_registration(monkeypatch: pytest.MonkeyPatch
         "id",
         "ingestion_id",
         "content",
+        "revision",
+        "archived_at",
         "source_kind",
         "session_id",
         "metadata_json",
@@ -238,7 +240,7 @@ def test_alembic_graph_has_one_host_head() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["kulai_memory_0003"]
+    assert scripts.get_heads() == ["kulai_memory_0004"]
     tombstone_revision = scripts.get_revision("kulai_memory_0003")
     assert tombstone_revision is not None
     assert tombstone_revision.down_revision == "kulai_memory_0002"

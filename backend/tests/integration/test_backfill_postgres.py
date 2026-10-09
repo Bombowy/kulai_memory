@@ -74,7 +74,7 @@ def _verify_rows(rows, memories, *, provider_id):
         assert row["dimension"] == 1024
         assert row["metadata_json"] == {
             "source_memory_id": row["record_id"], "embedding_provider_id": provider_id,
-            "embedding_model_tag": EMBEDDING_MODEL, "embedding_dimension": 1024,
+            "embedding_model_tag": EMBEDDING_MODEL, "embedding_dimension": 1024, "revision": 1,
         }
 
 

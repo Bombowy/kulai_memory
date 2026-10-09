@@ -503,3 +503,20 @@ def test_retired_ingestion_is_terminal_and_never_retranscribes(after_save_failur
     assert runtime.memories == {}
     assert "PRIVATE_RETIRE_TRANSCRIPT_SENTINEL" not in json.dumps(error) + caplog.text
     assert paths and all(not path.exists() for path in paths)
+
+
+def test_archived_ingestion_is_terminal_generic_error_without_protocol_change():
+    from kulai_memory.application import MemoryArchivedError
+    class ArchivedRuntime(FakeRuntime):
+        async def ingest(self, **kwargs): raise MemoryArchivedError()
+    runtime = ArchivedRuntime(text="synthetic archived note")
+    with TestClient(create_app(voice_runtime_factory=lambda: runtime)) as client:
+        with client.websocket_connect("/ws/memory") as websocket:
+            websocket.send_json(_start_message(uuid4()))
+            assert websocket.receive_json()["type"] == "session.ready"
+            websocket.send_bytes(b"\x00\x00")
+            websocket.send_json(_stop_message())
+            events = [websocket.receive_json() for _ in range(3)]
+            assert events[-1]["payload"] == dict(code="memory.archived", message=MemoryArchivedError.safe_message, recoverable=False)
+            _assert_clean_close(websocket, 1008)
+    assert runtime.transcribe_count == 1

@@ -64,21 +64,22 @@ async def _migration_preserves_existing_records():
             before = await BackfillReader(factory).fingerprints()
         finally:
             await engine.dispose()
-        await asyncio.to_thread(_upgrade_database, url, "head")
+        await asyncio.to_thread(_upgrade_database, url, "kulai_memory_0003")
         engine = create_async_engine(url)
         try:
             factory = async_sessionmaker(engine)
             assert await BackfillReader(factory).fingerprints() == before
             assert await _tombstone_state(factory) == ()
             doctor = await run_database_doctor(async_url=url)
-            assert doctor.ok
+            from kulai_memory.database_safety import validate_backup_doctor
+            validate_backup_doctor(doctor, pre_migration_from="kulai_memory_0003")
             checks = {check.name: check for check in doctor.checks}
             assert checks["alembic.current"].value == ["kulai_memory_0003"]
             assert checks["schema.memory_ingestion_tombstones"].value == {
                 "columns": ["deleted_at", "ingestion_id", "memory_id"],
             }
             assert checks["constraint.memory_ingestion_tombstones"].ok
-            print("tombstone.migration=PASS;head=kulai_memory_0003;existing_fingerprints_unchanged=true;doctor=PASS")
+            print("tombstone.migration=PASS;revision=kulai_memory_0003;existing_fingerprints_unchanged=true;pre_migration_doctor=PASS")
         finally:
             await engine.dispose()
     finally:

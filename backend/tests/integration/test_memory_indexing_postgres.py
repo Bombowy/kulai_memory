@@ -99,6 +99,7 @@ def _assert_vector(rows, memory, *, provider, model):
         "embedding_provider_id": provider,
         "embedding_model_tag": model,
         "embedding_dimension": 1024,
+        "revision": memory.revision,
     }
     return row
 

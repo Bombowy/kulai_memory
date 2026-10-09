@@ -56,6 +56,8 @@ class Memory(BaseModel):
     session_id: UUID | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    revision: int = Field(default=1, ge=1, strict=True)
+    archived_at: datetime | None = None
 
     @field_validator("content")
     @classmethod
@@ -79,6 +81,15 @@ class Memory(BaseModel):
     def validate_created_at(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Memory created_at must be timezone-aware.")
+        return value.astimezone(UTC)
+
+    @field_validator("archived_at")
+    @classmethod
+    def validate_archived_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Memory archived_at must be timezone-aware.")
         return value.astimezone(UTC)
 
 
@@ -105,6 +116,14 @@ class MemoryIngestionRetiredError(RuntimeError):
 
     code = "memory.ingestion_retired"
     safe_message = "This note was deleted and cannot be saved again."
+
+    def __init__(self) -> None:
+        super().__init__(self.safe_message)
+
+
+class MemoryArchivedError(RuntimeError):
+    code = "memory.archived"
+    safe_message = "This memory is archived. Restore it before making changes."
 
     def __init__(self) -> None:
         super().__init__(self.safe_message)
@@ -168,6 +187,8 @@ class MemoryService:
         )
         write = await self._repository.create_or_get_by_ingestion_id(candidate)
         existing = write.memory
+        if existing.archived_at is not None:
+            raise MemoryArchivedError()
         if not write.created and (
             existing.content != candidate.content
             or existing.source_kind != candidate.source_kind

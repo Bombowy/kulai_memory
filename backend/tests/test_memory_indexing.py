@@ -122,6 +122,7 @@ def test_index_exact_content_identity_vector_and_allowlisted_metadata():
         "embedding_provider_id": "fake-embeddings",
         "embedding_model_tag": "fake-model:exact-tag",
         "embedding_dimension": 1024,
+        "revision": memory.revision,
     }
     assert CONTENT_SENTINEL not in str(record.metadata)
     assert memory.model_dump() == snapshot
@@ -330,7 +331,7 @@ def test_host_opens_session_after_embedding_and_handles_commit_safely(
             assert "FOR UPDATE" in str(compiled)
             assert memory.id in compiled.params.values()
             operations.append("lock")
-            return memory.id
+            return memory
 
         @asynccontextmanager
         async def begin(self):

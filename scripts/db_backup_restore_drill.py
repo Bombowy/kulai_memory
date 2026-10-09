@@ -44,6 +44,7 @@ from kulai_memory.database_safety import (
     require_owned_database,
     restore_archive_to_owned_database,
     run_database_doctor,
+    validate_backup_doctor,
     safe_error_message,
     validate_restore_source,
 )
@@ -74,11 +75,13 @@ class DrillResult:
 
 
 def parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--pre-migration-from", metavar="REVISION")
+    return result
 
 
-async def database_snapshot(url: str) -> DatabaseSnapshot:
-    return await database_snapshot_url(url)
+async def database_snapshot(url: str, *, pre_migration_from: str | None = None) -> DatabaseSnapshot:
+    return await database_snapshot_url(url, pre_migration_from=pre_migration_from)
 
 
 async def migrate_owned_database(
@@ -282,7 +285,7 @@ async def verify_fixtures(
         await engine.dispose()
 
 
-async def run_drill() -> DrillResult:
+async def run_drill(*, pre_migration_from: str | None = None) -> DrillResult:
     settings = get_settings()
     dimension = settings.kulai_vector_dimension
     if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
@@ -290,9 +293,10 @@ async def run_drill() -> DrillResult:
     config = database_config()
     source_connection = validate_restore_source(config, app_env=settings.app_env)
     main_doctor_before = await run_database_doctor()
-    if not main_doctor_before.ok:
-        raise RuntimeError("Main database invariants failed before the drill.")
-    main_before = await database_snapshot(config.async_url)
+    validate_backup_doctor(main_doctor_before, pre_migration_from=pre_migration_from)
+    main_before = await database_snapshot(config.async_url, **(
+        {"pre_migration_from": pre_migration_from} if pre_migration_from is not None else {}
+    ))
 
     source: OwnedTemporaryDatabase | None = None
     restored: OwnedTemporaryDatabase | None = None
@@ -375,17 +379,20 @@ async def run_drill() -> DrillResult:
         raise RuntimeError("Temporary source database remains after cleanup.")
     if await database_exists(result.restore_database, config=config):
         raise RuntimeError("Temporary restore database remains after cleanup.")
-    main_after = await database_snapshot(config.async_url)
+    main_after = await database_snapshot(config.async_url, **(
+        {"pre_migration_from": pre_migration_from} if pre_migration_from is not None else {}
+    ))
     main_doctor_after = await run_database_doctor()
-    if not main_doctor_after.ok or main_after != main_before:
+    validate_backup_doctor(main_doctor_after, pre_migration_from=pre_migration_from)
+    if main_after != main_before:
         raise RuntimeError("Main database changed during the drill.")
     if postgres_connection(config).database != source_connection.database:
         raise RuntimeError("Configured main database changed during the drill.")
     return result
 
 
-async def run() -> int:
-    result = await run_drill()
+async def run(*, pre_migration_from: str | None = None) -> int:
+    result = await run_drill(pre_migration_from=pre_migration_from)
     print(f"Temporary source database: {result.source_database}")
     print(f"Temporary restore database: {result.restore_database}")
     print(f"Memory rows: {result.source_snapshot.memories.count}")
@@ -408,9 +415,9 @@ async def run() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser().parse_args(argv)
+    args = parser().parse_args(argv)
     try:
-        return asyncio.run(run())
+        return asyncio.run(run(pre_migration_from=args.pre_migration_from))
     except Exception as exc:
         message = safe_error_message(exc, operation="Backup/restore drill")
         print(f"Backup/restore drill failed safely: {message}", file=sys.stderr)

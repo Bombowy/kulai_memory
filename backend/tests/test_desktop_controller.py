@@ -416,6 +416,28 @@ def test_retired_ingestion_finishes_pending_flow_without_retry_loop(tmp_path, af
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("error,status", [
+    ("archived", DesktopResultStatus.INGESTION_ARCHIVED),
+    ("conflict", DesktopResultStatus.INGESTION_CONFLICT),
+])
+def test_archived_or_edited_ingestion_is_terminal_without_retranscription(tmp_path, error, status):
+    from kulai_memory.application import MemoryArchivedError, MemoryIdempotencyConflictError
+    async def scenario():
+        harness = Harness(tmp_path, texts=("synthetic note",))
+        controller = harness.controller()
+        await controller.startup()
+        await controller.start_recording(device_id=3)
+        async def reject(memory):
+            raise MemoryArchivedError() if error == "archived" else MemoryIdempotencyConflictError()
+        harness.repository.create_or_get_by_ingestion_id = reject
+        result = await controller.stop_and_process()
+        assert result.status is status and not result.save_pending and not controller.has_pending_save
+        assert len(harness.provider.requests) == 1
+        with pytest.raises(DesktopStateError): await controller.retry_save()
+        await controller.shutdown()
+    asyncio.run(scenario())
+
+
 def test_database_doctor_failure_blocks_runtime(tmp_path: Path) -> None:
     async def scenario() -> None:
         harness = Harness(tmp_path, doctor_ok=False)

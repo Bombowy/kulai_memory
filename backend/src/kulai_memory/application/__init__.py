@@ -32,6 +32,11 @@ from .ingestion import (
     transcription_is_empty,
 )
 from .deletion import MemoryDeletionError, MemoryDeletionResult, MemoryDeletionService
+from .lifecycle import (
+    MemoryLifecycleError, MemoryLifecycleResult, MemoryLifecycleService,
+    MemoryLifecycleStatus, MemoryMutationRepository, MemoryNotFoundError,
+    MemoryRevisionConflictError,
+)
 from .indexing import (
     MEMORY_VECTOR_NAMESPACE, EnsureMemoryIndexedResult, IndexReconciliationReport,
     MemoryIndexingError, MemoryIndexingIncompatibleError, MemoryIndexingMissingError,
@@ -40,6 +45,7 @@ from .indexing import (
 from .memory import (
     IdempotentMemoryWrite,
     Memory,
+    MemoryArchivedError,
     MemoryIdempotencyConflictError,
     MemoryIngestionRetiredError,
     MemoryPersistenceError,
@@ -79,6 +85,13 @@ __all__ = [
     "MemoryDeletionRepository",
     "MemoryDeletionResult",
     "MemoryDeletionService",
+    "MemoryLifecycleError",
+    "MemoryLifecycleResult",
+    "MemoryLifecycleService",
+    "MemoryLifecycleStatus",
+    "MemoryMutationRepository",
+    "MemoryNotFoundError",
+    "MemoryRevisionConflictError",
     "MemoryIndexingError",
     "MemoryIndexingIncompatibleError",
     "MemoryIndexingMissingError",
@@ -89,6 +102,7 @@ __all__ = [
     "MemorySavingEvent",
     "MemorySavingPayload",
     "Memory",
+    "MemoryArchivedError",
     "MemoryIdempotencyConflictError",
     "MemoryIngestionRetiredError",
     "MemoryPersistenceError",

@@ -27,6 +27,7 @@ _MESSAGES = {
     "retrieval.incompatible_metadata": "A vector match has incompatible embedding metadata.",
     "retrieval.invalid_record_id": "A vector match has an invalid Memory identifier.",
     "retrieval.vector_orphan": "A vector match refers to a missing Memory.",
+    "retrieval.memory_archived": "A vector match refers to an archived Memory.",
     "retrieval.unsupported_metric": "The retrieval metric is incompatible.",
     "retrieval.operation_failed": "Memory retrieval could not be completed.",
 }
@@ -148,6 +149,13 @@ class MemoryRetrievalService:
                     raise MemoryRetrievalError("retrieval.vector_orphan")
                 if not isinstance(memory, Memory) or memory.id != memory_id:
                     raise MemoryRetrievalError()
+                if memory.archived_at is not None:
+                    raise MemoryRetrievalError("retrieval.memory_archived")
+                if not memory_vector_metadata_matches(
+                    match.record.metadata, memory_id=memory_id, memory_revision=memory.revision,
+                    provider_id=self._provider_id, model_tag=self._model_tag, dimension=self._dimension,
+                ):
+                    raise MemoryRetrievalError("retrieval.incompatible_metadata")
                 hits.append(MemoryRetrievalHit(
                     memory=memory, rank=rank, score=match.score, vector_record_id=match.record.id,
                 ))

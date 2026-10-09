@@ -29,6 +29,7 @@ from kulai_memory.application import (
     EventSink,
     MemoryIdempotencyConflictError,
     MemoryIngestionRetiredError,
+    MemoryArchivedError,
     MemoryRepository,
     MemoryService,
     TranscriptMemoryIngestionResult,
@@ -319,7 +320,7 @@ class VoiceMemoryServerRuntime:
                     await session.commit()
         except asyncio.CancelledError:
             raise
-        except (MemoryIdempotencyConflictError, MemoryIngestionRetiredError):
+        except (MemoryIdempotencyConflictError, MemoryIngestionRetiredError, MemoryArchivedError):
             raise
         except Exception as exc:
             raise ServerPersistenceError from exc

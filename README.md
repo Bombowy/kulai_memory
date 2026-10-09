@@ -95,27 +95,35 @@ Backups can contain all user data and must be stored outside the repository.
 The backup tool requires compatible PostgreSQL client tools (`pg_dump` and, for
 the restore smoke, `pg_restore`, `createdb`, and `dropdb`). It never installs
 them. Normal backup and restore require full read-only `db_doctor` PASS, so an
-outdated schema is deliberately blocked. Before the reviewed migration from
-`kulai_memory_0002` to local head `kulai_memory_0003`, use the explicit mode:
+outdated schema is deliberately blocked. Before migrating a 0003 source to local
+head `kulai_memory_0004`, use the explicit pre-migration mode:
 
 ```text
-.venv\Scripts\python.exe scripts\db_backup.py --output <outside-repo-backup.dump> --pre-migration-from kulai_memory_0002
-.venv\Scripts\python.exe scripts\db_restore_smoke.py <outside-repo-backup.dump> --pre-migration-from kulai_memory_0002
+.venv\Scripts\python.exe scripts\db_backup.py --output <outside-repo-backup.dump> --pre-migration-from kulai_memory_0003
+.venv\Scripts\python.exe scripts\db_restore_smoke.py <outside-repo-backup.dump> --pre-migration-from kulai_memory_0003
 ```
 
-This mode requires the source revision to be exactly 0002 and the single local
-head to be 0003. It permits exactly the pending `alembic.current`,
-`table.memory_ingestion_tombstones`, `schema.memory_ingestion_tombstones`, and
-`constraint.memory_ingestion_tombstones` failures. Every other doctor check must
-PASS; incomplete reports, diagnostics errors, and unrelated failures are
-rejected. Restore verifies 0002 without migrating it, compares Memory/vector
-fingerprints and the explicit absent tombstone state with the unchanged source,
-and removes only its owned temporary
-database. Keep the backup; migration remains a separate manual action. There is
-no generic doctor bypass. Source targets must be local development/test databases;
-protected and temporary names cannot be supplied through the CLI.
-The absent state is distinct from the real zero-row tombstone fingerprint
-required on 0003. A missing tombstone table never passes strict verification.
+The source must match the requested revision and the local migration graph must
+have one head. The 0003 -> 0004 profile accepts exactly `alembic.current`,
+`schema.memories` and `constraint.memories_revision_positive` failures, requiring
+all legacy columns to be correct and the lifecycle columns/constraint to be absent.
+All other checks must PASS. The explicit legacy 0002 profile also requires the
+pending tombstone table to be absent; restored 0002 represents tombstones as None.
+The reviewed historical 0002 -> 0003 profile remains supported when that is the
+local head. There is no generic doctor bypass or tolerance for partial schemas,
+diagnostics errors, or unrelated failures.
+
+The owned backup drill accepts the same explicit `--pre-migration-from` for its
+read-only configured-source preflight; its synthetic source/restore DBs use head.
+Its default mode still requires full doctor PASS.
+
+Restore keeps the source revision, verifies every durable fingerprint and the
+unchanged source, and removes only its owned temporary database. Keep the backup;
+migration remains a separate manual action. Strict 0004 snapshots include content
+revision and UTC archive timestamps; legacy 0002/0003 fingerprints keep their
+original serialization. Real zero-row tombstone fingerprints are required from
+0003 onward. Source targets must be local development/test databases; protected
+and temporary names cannot be supplied through the CLI.
 
 The real repository integration tests are opt-in and accept only a
 loopback development/test database:
@@ -284,7 +292,7 @@ embedding provider. `prepare(memory=...)` embeds exactly `Memory.content`,
 validates the configured dimension, and returns a reusable `VectorUpsertRequest`.
 The namespace is `kulai_memory.memories.v1`; the record ID is `str(Memory.id)`.
 Metadata contains only source Memory ID, provider ID, exact response model tag,
-and embedding dimension. Model digest is omitted until a runtime metadata
+embedding dimension, and canonical content revision. Model digest is omitted until a runtime metadata
 source is available. Memory content and its arbitrary metadata are not copied.
 
 Close the Memory read session before preparing the vector. The host caller
@@ -304,11 +312,12 @@ skips a compatible existing vector with zero embedding requests or writes.
 Empty transcripts still create neither Memory nor vector.
 
 Automatic indexing requires `source_memory_id`, provider `ollama`, model
-`bge-m3:567m-fp16` and dimension `1024` at the exact namespace/record identity.
+`bge-m3:567m-fp16`, dimension `1024`, and the current canonical `revision` at the exact namespace/record identity.
 An incompatible vector is reported and never automatically overwritten. A final
 metadata check under the canonical `FOR UPDATE` lock prevents concurrent workers
 from overwriting a compatible vector and prevents stale embeddings from reviving
-a deleted Memory. Query retrieval also requires matching `source_memory_id`.
+a deleted, archived, or edited Memory. Query retrieval also requires matching
+`source_memory_id` and canonical `revision`.
 
 Each runtime owns one reusable embedding provider/client and closes it during
 shutdown or startup failure. Embedding runs without a checked-out Memory session;
@@ -388,13 +397,66 @@ Deletion currently has no UI, CLI or transport endpoint. Real deletion and
 concurrency tests use owned temporary databases under
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; automatic validation never deletes main DB
 Memory. Host revision `kulai_memory_0003` adds the technical tombstone table;
-the reviewed vendor pin is unchanged. The main DB has been manually migrated
-to `kulai_memory_0003`, matching the local Alembic head. `db_doctor` passes and
-the tombstone schema is present. The real create/duplicate/index/retrieve/delete/
-stale-replay lifecycle and strict 0003 backup/restore have passed, verifying
-7 Memory rows, 7 vectors and 1 tombstone with matching fingerprints.
-Desktop/server startup is no longer blocked by missing tombstone schema.
-No automatic upgrade, stamp or diagnostic bypass is performed.
+the reviewed vendor pin is unchanged. Main DB retains schema `kulai_memory_0003`;
+the new local head `kulai_memory_0004` requires a separately reviewed manual upgrade.
+Until then, full doctor reports the expected revision/lifecycle-schema mismatch,
+and Desktop/server startup remains blocked by strict schema validation. No main
+migration, automatic upgrade, stamp or diagnostic bypass is performed by this task.
+
+## Memory edit, archive and restore
+
+Memory has a positive `revision` (initially 1) and nullable UTC `archived_at`.
+The neutral lifecycle service changes canonical Memory and uses reusable vector
+delete in one caller-owned PostgreSQL transaction. Mutation lock order is ingestion
+advisory lock -> canonical row -> vector, matching hard deletion. IDs, ingestion
+identity, creation time and original source/session metadata are preserved.
+
+EDIT requires `expected_revision`; stale editors receive `memory.revision_conflict`.
+Changed content increments revision and removes the previous vector atomically.
+An identical-content edit leaves revision/vector unchanged. After canonical COMMIT
+and session close, automatic indexing embeds the exact new content and writes
+metadata `revision` matching Memory. An indexing failure preserves the committed
+edit and reports INDEXING_FAILED; startup reconciliation or guarded missing-only
+backfill repairs it. Old voice retries with the original content receive a terminal
+idempotency conflict rather than overwriting edited content or looping retry.
+
+ARCHIVE sets `archived_at` and deletes the exact vector atomically. It retains the
+Memory and creates no tombstone. Repeated archive preserves its first timestamp.
+Archived Memories are excluded from Recent Memory, retrieval, automatic recovery
+and both backfill modes. A voice replay cannot unarchive them; it receives terminal
+`memory.archived`. EDIT requires RESTORE first.
+
+RESTORE clears `archived_at`, commits, then ensures indexing of the existing
+content/revision. A repeated restore can repair a missing vector. Prepared vectors
+are checked against active canonical revision under FOR UPDATE in every host write
+path, including manual reindex. Stale/archived vectors are never written; unexpected
+archived or revision-incompatible search hits fail safely. These operations have
+no client action UI or public endpoint yet.
+
+`scripts/manage_memory.py` provides `show`, `edit`, `archive`, and `restore`:
+
+```text
+.venv\Scripts\python.exe scripts\manage_memory.py show --memory-id <UUID>
+.venv\Scripts\python.exe scripts\manage_memory.py edit --memory-id <UUID> --expected-revision <N> --content-file <UTF8-file> --dry-run
+.venv\Scripts\python.exe scripts\manage_memory.py archive --memory-id <UUID> --dry-run
+.venv\Scripts\python.exe scripts\manage_memory.py restore --memory-id <UUID> --dry-run
+```
+
+Mutations default to dry-run with zero embedding/backup/write calls. Execution is
+an explicit real-data operation requiring `--execute`, `--confirm-main-memory-write`
+and a new `--backup-output` outside the repository. Doctor, local environment and
+loopback configuration guards must pass; backup plus owned restore verification
+must complete before any mutation. EDIT/RESTORE reuse one BGE client for synthetic
+preflight and indexing; ARCHIVE works without Ollama. Backups are retained. A saved
+canonical change with failed indexing returns nonzero and explicitly says retry
+is available; use the existing guarded missing-only backfill or startup recovery.
+The UTF-8 content file remains owned by the user. Only explicit `show` displays
+canonical content; mutation output and error messages omit content/vector values.
+
+Migration 0004 marks only exact compatible legacy vectors lacking `revision` as
+revision 1, without re-embedding. Incompatible records and other namespaces remain
+unchanged. No edit history is stored. Schema migration and real main lifecycle
+writes require separate review; automated tests use owned DBs only.
 
 ## Guarded Memory backfill
 
@@ -468,7 +530,7 @@ lookup share that snapshot; it is rolled back and closed without commit.
 
 The CLI intentionally displays canonical Memory content for the user. Automated
 main smoke and reports show only counts, rank, UUID and score. Incompatible
-provider/model/dimension metadata fails the entire retrieval; invalid identities
+provider/model/dimension/revision metadata fails the entire retrieval; invalid identities
 and orphan vectors are controlled integrity errors. No hits are silently dropped.
 
 Golden v1 contains 16 synthetic English Memories and 16 queries (8 English/8
@@ -479,7 +541,6 @@ PostgreSQL. Run the retrieval integration with
 `KULAI_RUN_POSTGRES_INTEGRATION=1`; add `KULAI_RUN_OLLAMA_INTEGRATION=1` for golden
 BGE evaluation.
 
-This baseline has no score cutoff, reranker or content-update freshness detection.
+This baseline has no score cutoff or reranker; revision checks enforce content freshness.
 Missing indexes awaiting repair are invisible to vector search,
-and tied scores retain the store's order. No LLM, RAG, client UI or schema changes
-are included.
+and tied scores retain the store's order. Retrieval adds no LLM, RAG or client UI.

@@ -18,6 +18,8 @@ class DesktopResultStatus(str, Enum):
     SAVE_FAILED = "save_failed"
     INDEXING_FAILED = "indexing_failed"
     INGESTION_RETIRED = "ingestion_retired"
+    INGESTION_ARCHIVED = "ingestion_archived"
+    INGESTION_CONFLICT = "ingestion_conflict"
 
 
 class DesktopProgressState(str, Enum):

@@ -43,6 +43,16 @@ class MemoryIndexingMissingError(MemoryIndexingError):
     safe_message = "The canonical Memory no longer exists."
 
 
+class MemoryIndexingArchivedError(MemoryIndexingError):
+    code = "indexing.memory_archived"
+    safe_message = "Archived memory cannot be indexed."
+
+
+class MemoryIndexingStaleRevisionError(MemoryIndexingError):
+    code = "indexing.stale_revision"
+    safe_message = "The prepared embedding belongs to an older memory revision."
+
+
 class MemoryIndexingState(str, Enum):
     INDEXED = "indexed"
     ALREADY_INDEXED = "already_indexed"
@@ -61,6 +71,7 @@ class IndexReconciliationReport:
     already_indexed: int = 0
     compatible_existing: int = 0
     deleted_skipped: int = 0
+    archived_skipped: int = 0
     failed: int = 0
     incompatible_existing: int = 0
     remaining_missing: int = 0
@@ -73,7 +84,7 @@ class IndexReconciliationReport:
 
 def memory_vector_metadata_matches(
     metadata: Mapping[str, object], *, memory_id: UUID, provider_id: str,
-    model_tag: str, dimension: int,
+    model_tag: str, dimension: int, memory_revision: int | None = None,
 ) -> bool:
     """One neutral compatibility rule for automatic indexing and retrieval."""
 
@@ -83,6 +94,9 @@ def memory_vector_metadata_matches(
         and metadata.get("embedding_model_tag") == model_tag
         and type(metadata.get("embedding_dimension")) is int
         and metadata.get("embedding_dimension") == dimension
+        and type(metadata.get("revision")) is int
+        and metadata["revision"] >= 1
+        and (memory_revision is None or metadata["revision"] == memory_revision)
     )
 
 
@@ -104,6 +118,8 @@ class MemoryIndexingService:
         """Embed exactly the canonical content and build one stable identity."""
 
         try:
+            if memory.archived_at is not None:
+                raise MemoryIndexingArchivedError()
             response = await embed(
                 provider=self._provider,
                 request=EmbeddingRequest(inputs=(memory.content,)),
@@ -122,11 +138,14 @@ class MemoryIndexingService:
                     "embedding_provider_id": response.provider_id,
                     "embedding_model_tag": response.model_id,
                     "embedding_dimension": response.dimension,
+                    "revision": memory.revision,
                 },
             )
             return VectorUpsertRequest(
                 namespace=MEMORY_VECTOR_NAMESPACE, records=(record,)
             )
+        except MemoryIndexingError:
+            raise
         except Exception:
             raise MemoryIndexingError() from None
 

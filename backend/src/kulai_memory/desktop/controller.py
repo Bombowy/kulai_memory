@@ -27,6 +27,8 @@ from sqlalchemy.ext.asyncio import (
 
 from kulai_memory.application import (
     MemoryIngestionRetiredError,
+    MemoryArchivedError,
+    MemoryIdempotencyConflictError,
     MemoryService,
     MemoryRepository,
     TranscriptFinalEvent,
@@ -399,6 +401,13 @@ class DesktopController:
                 transcript=pending.transcription.text,
                 memory_id=None,
                 save_pending=False,
+            )
+        except (MemoryArchivedError, MemoryIdempotencyConflictError) as exc:
+            self._pending = None
+            return DesktopProcessingResult(
+                status=(DesktopResultStatus.INGESTION_ARCHIVED if isinstance(exc, MemoryArchivedError)
+                        else DesktopResultStatus.INGESTION_CONFLICT),
+                transcript=pending.transcription.text, memory_id=None, save_pending=False,
             )
         except Exception:
             return DesktopProcessingResult(

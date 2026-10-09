@@ -392,7 +392,7 @@ def test_owned_database_cleanup_requires_marker_and_never_forces_drop() -> None:
 
 def test_data_drill_accepts_no_database_names() -> None:
     actions = [action.dest for action in db_backup_restore_drill.parser()._actions]
-    assert actions == ["help"]
+    assert actions == ["help", "pre_migration_from"]
 
 
 def test_owned_backup_api_rechecks_marker(

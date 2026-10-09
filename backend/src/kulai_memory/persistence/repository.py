@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,8 @@ def _to_domain(row: MemoryDb) -> Memory:
         session_id=row.session_id,
         metadata=dict(row.metadata_json),
         created_at=row.created_at,
+        revision=row.revision,
+        archived_at=row.archived_at,
     )
 
 
@@ -37,6 +39,38 @@ class PostgresMemoryRepository:
 
     def __init__(self, *, db: AsyncSession) -> None:
         self._db = db
+
+    async def get_for_update(self, memory_id: UUID) -> Memory | None:
+        """Same order as ingestion/delete: advisory identity -> canonical row."""
+        try:
+            ingestion_id = await self._db.scalar(select(MemoryDb.ingestion_id).where(MemoryDb.id == memory_id))
+            if ingestion_id is None:
+                return None
+            await lock_ingestion(self._db, ingestion_id)
+            row = await self._db.scalar(select(MemoryDb).where(MemoryDb.id == memory_id).with_for_update())
+            if row is None:
+                return None
+            if row.ingestion_id != ingestion_id:
+                raise MemoryPersistenceError()
+            return _to_domain(row)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise MemoryPersistenceError() from None
+
+    async def save_lifecycle(self, memory: Memory) -> Memory:
+        """Caller must hold get_for_update's lock; change only lifecycle fields."""
+        try:
+            row = await self._db.scalar(update(MemoryDb).where(MemoryDb.id == memory.id).values(
+                content=memory.content, revision=memory.revision, archived_at=memory.archived_at,
+            ).returning(MemoryDb).execution_options(populate_existing=True))
+            if row is None:
+                raise MemoryPersistenceError()
+            return _to_domain(row)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise MemoryPersistenceError() from None
 
     async def _require_active_ingestion(self, ingestion_id: UUID) -> None:
         await lock_ingestion(self._db, ingestion_id)
@@ -53,6 +87,8 @@ class PostgresMemoryRepository:
             id=memory.id,
             ingestion_id=memory.ingestion_id,
             content=memory.content,
+            revision=memory.revision,
+            archived_at=memory.archived_at,
             source_kind=memory.source_kind.value,
             session_id=memory.session_id,
             metadata_json=dict(memory.metadata),
@@ -81,6 +117,8 @@ class PostgresMemoryRepository:
                 id=memory.id,
                 ingestion_id=memory.ingestion_id,
                 content=memory.content,
+                revision=memory.revision,
+                archived_at=memory.archived_at,
                 source_kind=memory.source_kind.value,
                 session_id=memory.session_id,
                 metadata_json=dict(memory.metadata),
@@ -184,7 +222,7 @@ class PostgresMemoryRepository:
         except Exception as exc:
             raise MemoryPersistenceError from exc
 
-    async def list_recent(self, *, limit: int) -> tuple[Memory, ...]:
+    async def list_recent(self, *, limit: int, include_archived: bool = False) -> tuple[Memory, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("Memory list limit must be between 1 and 100.")
         statement = (
@@ -192,6 +230,8 @@ class PostgresMemoryRepository:
             .order_by(MemoryDb.created_at.desc(), MemoryDb.id.desc())
             .limit(limit)
         )
+        if not include_archived:
+            statement = statement.where(MemoryDb.archived_at.is_(None))
         try:
             result = await self._db.execute(statement)
             return tuple(_to_domain(row) for row in result.scalars().all())

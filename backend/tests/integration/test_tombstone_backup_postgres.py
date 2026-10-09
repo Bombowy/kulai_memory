@@ -134,7 +134,9 @@ async def tamper_round_trip(tmp_path, monkeypatch, field):
 async def canonical_drill():
     main_url = database_config().async_url
     before = await database_snapshot_url(main_url)
-    result = await drill.run_drill()
+    from kulai_memory.database_safety import expected_alembic_heads
+    mode = before.revision[0] if before.revision != expected_alembic_heads() else None
+    result = await drill.run_drill(pre_migration_from=mode)
     assert result.source_snapshot == result.restored_snapshot
     assert result.source_snapshot.tombstones.count == 1
     assert await database_snapshot_url(main_url) == before

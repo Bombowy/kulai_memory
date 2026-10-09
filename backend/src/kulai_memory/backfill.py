@@ -86,17 +86,22 @@ class BackfillReader:
                 SELECT count(*) FILTER (WHERE v.pk IS NOT NULL) AS existing,
                        count(*) FILTER (WHERE v.pk IS NOT NULL AND NOT
                            (v.metadata_json @> jsonb_build_object(
+                               'source_memory_id', CAST(m.id AS text),
                                'embedding_provider_id', 'ollama',
                                'embedding_model_tag', CAST(:model AS text),
-                               'embedding_dimension', 1024))) AS incompatible
+                               'embedding_dimension', 1024, 'revision', m.revision)
+                            AND v.metadata_json->>'revision' = CAST(m.revision AS text)
+                            AND v.metadata_json->>'embedding_dimension' = '1024')) AS incompatible
                 FROM memories m
                 LEFT JOIN kulai_vector_records v
                   ON v.namespace_key = :namespace AND v.record_id = CAST(m.id AS text)
-                WHERE (CAST(:memory_id AS uuid) IS NULL OR m.id = CAST(:memory_id AS uuid))
+                WHERE m.archived_at IS NULL
+                  AND (CAST(:memory_id AS uuid) IS NULL OR m.id = CAST(:memory_id AS uuid))
             """), parameters)).mappings().one()
             ids = tuple((await session.execute(text("""
                 SELECT m.id FROM memories m
-                WHERE (CAST(:memory_id AS uuid) IS NULL OR m.id = CAST(:memory_id AS uuid))
+                WHERE m.archived_at IS NULL
+                  AND (CAST(:memory_id AS uuid) IS NULL OR m.id = CAST(:memory_id AS uuid))
                   AND (:reindex OR NOT EXISTS (
                       SELECT 1 FROM kulai_vector_records v
                       WHERE v.namespace_key = :namespace AND v.record_id = CAST(m.id AS text)

@@ -115,10 +115,22 @@ _PRE_MIGRATION_REQUIRED_CHECKS = PRE_MIGRATION_FAILURES | frozenset({
 })
 
 
+def pre_migration_failures(source: str, head: str) -> frozenset[str]:
+    """Enumerate reviewed transitions only, never a generic doctor bypass."""
+    if (source, head) == ("kulai_memory_0002", "kulai_memory_0003"):
+        return PRE_MIGRATION_FAILURES
+    lifecycle = frozenset({"alembic.current", "schema.memories", "constraint.memories_revision_positive"})
+    if (source, head) == ("kulai_memory_0003", "kulai_memory_0004"):
+        return lifecycle
+    if (source, head) == ("kulai_memory_0002", "kulai_memory_0004"):
+        return PRE_MIGRATION_FAILURES | lifecycle
+    raise DatabaseSafetyError("This pre-migration transition is not supported.")
+
+
 def validate_backup_doctor(
     report: DoctorReport, *, pre_migration_from: str | None = None,
 ) -> None:
-    """Keep strict defaults; permit only the known, complete 0002 -> 0003 gap."""
+    """Keep strict defaults; permit only exact reviewed legacy-schema gaps."""
 
     if pre_migration_from is None:
         if not report.ok:
@@ -130,13 +142,12 @@ def validate_backup_doctor(
         raise DatabaseSafetyError("Pre-migration mode requires exactly one local Alembic head.")
     if pre_migration_from == heads[0]:
         raise DatabaseSafetyError("Source is already the local head; use strict backup/restore.")
-    if (pre_migration_from, heads[0]) != ("kulai_memory_0002", "kulai_memory_0003"):
-        raise DatabaseSafetyError("This pre-migration transition is not supported.")
+    allowed = pre_migration_failures(pre_migration_from, heads[0])
 
     checks = {check.name: check for check in report.checks}
     if (
         len(checks) != len(report.checks)
-        or not _PRE_MIGRATION_REQUIRED_CHECKS.issubset(checks)
+        or not (_PRE_MIGRATION_REQUIRED_CHECKS | allowed).issubset(checks)
         or "database.diagnostics" in checks
     ):
         raise DatabaseSafetyError("Pre-migration doctor report is incomplete or contains diagnostics errors.")
@@ -145,10 +156,22 @@ def validate_backup_doctor(
     if checks["alembic.current"].value != [pre_migration_from]:
         raise DatabaseSafetyError("Database revision does not match the requested pre-migration source.")
     failures = {check.name for check in report.checks if not check.ok}
-    if failures != PRE_MIGRATION_FAILURES:
+    if failures != allowed:
         raise DatabaseSafetyError("Doctor failures do not match the exact allowed pre-migration gap.")
-    if checks["schema.memory_ingestion_tombstones"].value != {"columns": []}:
+    if pre_migration_from == "kulai_memory_0002" and checks["schema.memory_ingestion_tombstones"].value != {"columns": []}:
         raise DatabaseSafetyError("Pre-migration mode requires the pending tombstone table to be absent.")
+    if heads[0] == "kulai_memory_0004":
+        columns = checks["schema.memories"].value
+        if not isinstance(columns, dict):
+            raise DatabaseSafetyError("Legacy Memory schema could not be verified.")
+        for name, expected in LEGACY_MEMORY_COLUMNS.items():
+            if columns.get(name) != dict(type=expected[0], nullable=expected[1], max_length=expected[2]):
+                raise DatabaseSafetyError("Legacy Memory schema is incompatible.")
+        absent = dict(type=None, nullable=None, max_length=None)
+        if any(columns.get(name) != absent for name in ("revision", "archived_at")):
+            raise DatabaseSafetyError("Pre-migration lifecycle columns must be absent.")
+        if checks["constraint.memories_revision_positive"].value != {"exists": False, "valid": False}:
+            raise DatabaseSafetyError("Pre-migration lifecycle constraint must be absent.")
 
 
 def validate_backup_output(output: Path, *, force: bool) -> Path:
@@ -386,16 +409,14 @@ async def memory_fingerprint(connection: AsyncConnection) -> MemoryFingerprint:
 
     digest = hashlib.sha256()
     count = 0
-    result = await connection.stream(
-        text(
-            """
-            SELECT id, ingestion_id, content, source_kind, session_id,
-                   metadata_json, created_at
-            FROM memories
-            ORDER BY id
-            """
-        )
-    )
+    lifecycle = bool(await connection.scalar(text("""
+        SELECT EXISTS(SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='memories' AND column_name='revision')
+    """)))
+    fields = "id, ingestion_id, content, source_kind, session_id, metadata_json, created_at"
+    if lifecycle:
+        fields += ", revision, archived_at"
+    result = await connection.stream(text(f"SELECT {fields} FROM memories ORDER BY id"))
     async for row in result:
         mapping = row._mapping
         created_at = mapping["created_at"]
@@ -403,8 +424,7 @@ async def memory_fingerprint(connection: AsyncConnection) -> MemoryFingerprint:
             created_at_value = created_at.astimezone(UTC).isoformat()
         else:
             created_at_value = str(created_at)
-        canonical = json.dumps(
-            {
+        payload = {
                 "id": str(mapping["id"]),
                 "ingestion_id": str(mapping["ingestion_id"]),
                 "content": mapping["content"],
@@ -416,7 +436,14 @@ async def memory_fingerprint(connection: AsyncConnection) -> MemoryFingerprint:
                 ),
                 "metadata": mapping["metadata_json"],
                 "created_at": created_at_value,
-            },
+            }
+        if lifecycle:
+            archived_at = mapping["archived_at"]
+            if archived_at is not None and (not isinstance(archived_at, datetime) or archived_at.tzinfo is None):
+                raise DatabaseSafetyError("Memory archive timestamp is incompatible.")
+            payload.update(revision=mapping["revision"], archived_at=(archived_at.astimezone(UTC).isoformat() if archived_at is not None else None))
+        canonical = json.dumps(
+            payload,
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -499,7 +526,7 @@ async def database_snapshot_url(
     """Read all durable tables in one consistent, read-only transaction.
 
     Backup/restore callers additionally require validate_backup_doctor. Absence
-    is represented only for the explicit, known 0002 -> 0003 transition.
+    is represented only for explicitly supported source revision 0002.
     """
 
     engine = create_async_engine(url)
@@ -516,14 +543,18 @@ async def database_snapshot_url(
                     "SELECT to_regclass('public.memory_ingestion_tombstones') IS NOT NULL"
                 ))
                 if pre_migration_from is not None:
-                    if (
-                        pre_migration_from != "kulai_memory_0002"
-                        or expected_alembic_heads() != ("kulai_memory_0003",)
-                        or revisions != (pre_migration_from,)
-                        or present
-                    ):
+                    heads = expected_alembic_heads()
+                    if len(heads) != 1 or revisions != (pre_migration_from,):
                         raise DatabaseSafetyError("Invalid pre-migration tombstone absence state.")
-                    tombstones = None
+                    pre_migration_failures(pre_migration_from, heads[0])
+                    if pre_migration_from == "kulai_memory_0002":
+                        if present:
+                            raise DatabaseSafetyError("Legacy tombstone table must be absent.")
+                        tombstones = None
+                    else:
+                        if not present:
+                            raise DatabaseSafetyError("Tombstone table is required.")
+                        tombstones = await tombstone_fingerprint(connection)
                 else:
                     if not present:
                         raise DatabaseSafetyError("Strict snapshot requires the tombstone table.")
@@ -544,7 +575,7 @@ async def database_snapshot_url(
         await engine.dispose()
 
 
-EXPECTED_MEMORY_COLUMNS: dict[str, tuple[str, bool, int | None]] = {
+LEGACY_MEMORY_COLUMNS: dict[str, tuple[str, bool, int | None]] = {
     "id": ("uuid", False, None),
     "ingestion_id": ("uuid", False, None),
     "content": ("text", False, None),
@@ -552,6 +583,12 @@ EXPECTED_MEMORY_COLUMNS: dict[str, tuple[str, bool, int | None]] = {
     "session_id": ("uuid", True, None),
     "metadata_json": ("jsonb", False, None),
     "created_at": ("timestamptz", False, None),
+}
+
+EXPECTED_MEMORY_COLUMNS = {
+    **LEGACY_MEMORY_COLUMNS,
+    "revision": ("int4", False, None),
+    "archived_at": ("timestamptz", True, None),
 }
 
 
@@ -873,6 +910,17 @@ async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
             )
 
             checks.extend(await _tombstone_schema_checks(connection))
+
+            revision_constraint = await connection.scalar(text("""
+                  SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+                  JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+                  WHERE n.nspname='public' AND r.relname='memories'
+                    AND c.conname='ck_memories_revision_positive' AND c.contype='c'
+            """))
+            revision_valid = revision_constraint == "CHECK ((revision >= 1))"
+            checks.append(CheckResult(name="constraint.memories_revision_positive", ok=revision_valid,
+                value={"exists": revision_constraint is not None, "valid": revision_valid},
+                message=None if revision_valid else "The Memory revision constraint is incompatible."))
 
             query_value = await connection.scalar(text("SELECT 1"))
             checks.append(

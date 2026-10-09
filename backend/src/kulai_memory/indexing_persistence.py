@@ -15,6 +15,7 @@ from .application.indexing import (
     MEMORY_VECTOR_NAMESPACE, MemoryIndexingError, MemoryIndexingService,
     EnsureMemoryIndexedResult, MemoryIndexingIncompatibleError,
     MemoryIndexingMissingError, MemoryIndexingState, memory_vector_metadata_matches,
+    MemoryIndexingArchivedError, MemoryIndexingStaleRevisionError,
 )
 from .application.memory import Memory
 from .persistence import MemoryDb
@@ -33,9 +34,17 @@ async def _lock_memory_for_indexing(*, db: AsyncSession, request: VectorUpsertRe
     memory_id = UUID(record_id)
     if str(memory_id) != record_id:
         raise MemoryIndexingError()
-    statement = select(MemoryDb.id).where(MemoryDb.id == memory_id).with_for_update()
-    if await db.scalar(statement) != memory_id:
+    statement = select(MemoryDb).where(MemoryDb.id == memory_id).with_for_update()
+    canonical = await db.scalar(statement)
+    if canonical is None:
         raise MemoryIndexingMissingError()
+    if canonical.archived_at is not None:
+        raise MemoryIndexingArchivedError()
+    revision = request.records[0].metadata.get("revision")
+    if type(revision) is not int or revision != canonical.revision:
+        raise MemoryIndexingStaleRevisionError()
+    if request.records[0].metadata.get("source_memory_id") != str(canonical.id):
+        raise MemoryIndexingIncompatibleError()
 
 
 async def save_prepared_memory_vector(
@@ -60,6 +69,8 @@ async def save_prepared_memory_vector(
                 )
                 result = await service.upsert(store=store, request=request)
         return result
+    except MemoryIndexingError:
+        raise
     except Exception:
         raise MemoryIndexingError() from None
 
@@ -82,10 +93,11 @@ async def index_memory(
     )
 
 
-def _require_compatible(metadata: Mapping[str, object], memory_id: UUID) -> None:
+def _require_compatible(metadata: Mapping[str, object], memory_id: UUID, revision: int) -> None:
     if not memory_vector_metadata_matches(
         metadata, memory_id=memory_id, provider_id=AUTOMATIC_EMBEDDING_PROVIDER,
         model_tag=AUTOMATIC_EMBEDDING_MODEL, dimension=AUTOMATIC_EMBEDDING_DIMENSION,
+        memory_revision=revision,
     ):
         raise MemoryIndexingIncompatibleError()
 
@@ -121,11 +133,16 @@ async def ensure_memory_indexed(
                 await session.execute(text(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
                 ))
-                if await session.scalar(select(MemoryDb.id).where(MemoryDb.id == memory.id)) is None:
+                canonical = await session.scalar(select(MemoryDb).where(MemoryDb.id == memory.id))
+                if canonical is None:
                     raise MemoryIndexingMissingError()
+                if canonical.archived_at is not None:
+                    raise MemoryIndexingArchivedError()
+                if canonical.revision != memory.revision:
+                    raise MemoryIndexingStaleRevisionError()
                 existing = await _vector_metadata(session, memory.id)
                 if existing is not None:
-                    _require_compatible(existing, memory.id)
+                    _require_compatible(existing, memory.id, memory.revision)
                     return EnsureMemoryIndexedResult(memory.id, MemoryIndexingState.ALREADY_INDEXED)
             finally:
                 await session.rollback()
@@ -139,13 +156,13 @@ async def ensure_memory_indexed(
             or not any(value != 0.0 for value in request.records[0].vector.values)
         ):
             raise MemoryIndexingError()
-        _require_compatible(request.records[0].metadata, memory.id)
+        _require_compatible(request.records[0].metadata, memory.id, memory.revision)
         async with session_factory() as session:
             async with session.begin():
                 await _lock_memory_for_indexing(db=session, request=request)
                 existing = await _vector_metadata(session, memory.id)
                 if existing is not None:
-                    _require_compatible(existing, memory.id)
+                    _require_compatible(existing, memory.id, memory.revision)
                     state = MemoryIndexingState.ALREADY_INDEXED
                 else:
                     await service.upsert(store=PgVectorStore(

@@ -34,7 +34,7 @@ from kulai_memory.settings import Settings
 
 def _metadata(record_id):
     return {"source_memory_id": record_id, "embedding_provider_id": "ollama",
-            "embedding_model_tag": EMBEDDING_MODEL, "embedding_dimension": 1024,
+            "embedding_model_tag": EMBEDDING_MODEL, "embedding_dimension": 1024, "revision": 1,
             "content": "synthetic vector metadata is not canonical content"}
 
 

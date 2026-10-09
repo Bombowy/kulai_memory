@@ -8,8 +8,10 @@ from uuid import UUID, uuid4
 
 from kulai_db import Base
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Index,
+    Integer,
     PrimaryKeyConstraint,
     String,
     Text,
@@ -29,6 +31,7 @@ class MemoryDb(Base):
     __table_args__ = (
         Index("ix_memories_created_at", "created_at"),
         UniqueConstraint("ingestion_id", name="uq_memories_ingestion_id"),
+        CheckConstraint("revision >= 1", name="ck_memories_revision_positive"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -38,6 +41,8 @@ class MemoryDb(Base):
         default=uuid4,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     session_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
