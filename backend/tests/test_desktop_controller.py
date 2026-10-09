@@ -126,10 +126,14 @@ class InMemoryRepository:
             None,
         )
 
+    async def list_library(self, *, archived: bool, limit: int) -> tuple[Memory, ...]:
+        return tuple(sorted((m for m in self.by_ingestion.values() if (m.archived_at is not None) == archived),
+                            key=lambda m: (m.created_at, m.id), reverse=True)[:limit])
+
     async def list_recent(self, *, limit: int) -> tuple[Memory, ...]:
         return tuple(
             sorted(
-                self.by_ingestion.values(),
+                (m for m in self.by_ingestion.values() if m.archived_at is None),
                 key=lambda item: (item.created_at, item.id),
                 reverse=True,
             )[:limit]
@@ -153,6 +157,12 @@ class FakeSession:
         self.commits += 1
         if self.fail_commit:
             raise RuntimeError("private database detail")
+
+    async def execute(self, statement):
+        assert str(statement) == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+
+    async def rollback(self):
+        pass
 
 
 class FakeSessionFactory:

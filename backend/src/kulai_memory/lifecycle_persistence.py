@@ -8,7 +8,7 @@ from kulai_vector_store_pgvector import PgVectorStore, PgVectorStoreConfig
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .application.indexing import EnsureMemoryIndexedResult, MemoryIndexingError
-from .application.lifecycle import MemoryLifecycleError, MemoryLifecycleResult, MemoryLifecycleService
+from .application.lifecycle import MemoryLifecycleError, MemoryLifecycleResult, MemoryLifecycleService, MemoryLifecycleStatus
 from .application.memory import MemoryArchivedError
 from .automatic_indexing import RuntimeMemoryIndexer
 from .persistence import PostgresMemoryRepository
@@ -45,7 +45,7 @@ async def change_memory(
         raise MemoryLifecycleError() from None
     # Canonical COMMIT succeeded and the session is closed. Cancellation must
     # propagate; a crash leaves durable missing-index state for reconciliation.
-    if action == "archive":
+    if action == "archive" or result.status is MemoryLifecycleStatus.UNCHANGED:
         return MemoryChangeResult(result)
     try:
         indexed = await indexer.ensure(memory=result.memory)

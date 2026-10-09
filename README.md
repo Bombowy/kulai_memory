@@ -227,6 +227,38 @@ conversational multi-turn or partial STT; Android has no RAG UI, and WebSocket
 has no voice RAG flow. The existing voice-note save/index/Recent Memory flow is
 unchanged.
 
+The Desktop **Memory Library** shows **Active** and **Archived** Memories in
+created-at/UUID descending order, with a bounded limit of 100 rows. Select a row
+to read its full content; the table shows a preview, canonical revision and
+status. **REFRESH** reloads the current filter and Recent Memory. Library reads
+perform no model requests and run on the same worker thread as other operations.
+
+For an active Memory, **EDIT** opens its current content and saves with the
+observed revision. A changed edit increments that revision and commits the
+canonical content and removal of the old vector before the existing shared BGE
+indexer embeds the new content. Identical content is **UNCHANGED**, with no
+revision change or reindex request. A stale editor cannot overwrite a newer
+revision: **Memory changed. Reload it before editing.** triggers a reload.
+
+**ARCHIVE** asks for confirmation and reversibly removes an active Memory from
+retrieval. It preserves canonical content/identity/revision, atomically removes
+the vector, and creates no tombstone. **RESTORE** returns an archived Memory to
+Active and indexes its latest revision. Archived Memories can be read and
+restored; editing is available only for active Memories. Text ASK and Ask by
+Voice see the new content after edit, exclude archived Memories and can retrieve
+restored Memories.
+
+If edit or restore commits but indexing fails, the Library displays the updated
+canonical state and **semantic indexing needs retry**. **RETRY INDEXING** runs
+bounded reconciliation (at most 100 missing indexes) using the same BGE, without
+repeating the edit/restore or changing canonical content. A no-op edit does not
+repair a missing vector; use this retry action. Library operations are serialized
+with Voice Note, Text ASK, Ask by Voice and pending save/indexing retry. Closing
+during indexing cancels the work; a committed change remains durable and startup
+reconciliation can repair its missing index. Public errors do not include Memory
+content. There is no hard-delete UI yet; archive is the reversible removal flow.
+Voice/RAG functionality remains available, and TTS is still outside the Desktop.
+
 ## Local WebSocket voice-memory adapter
 
 Install development dependencies and start the existing ASGI app locally:
@@ -559,8 +591,9 @@ RESTORE clears `archived_at`, commits, then ensures indexing of the existing
 content/revision. A repeated restore can repair a missing vector. Prepared vectors
 are checked against active canonical revision under FOR UPDATE in every host write
 path, including manual reindex. Stale/archived vectors are never written; unexpected
-archived or revision-incompatible search hits fail safely. These operations have
-no client action UI or public endpoint yet.
+archived or revision-incompatible search hits fail safely. Desktop Memory Library
+provides EDIT, ARCHIVE, and RESTORE controls. There is no public HTTP/WebSocket
+lifecycle endpoint yet, and hard DELETE has no Desktop UI.
 
 `scripts/manage_memory.py` provides `show`, `edit`, `archive`, and `restore`:
 

@@ -44,6 +44,10 @@ from kulai_memory.database_safety import (
     run_database_doctor,
 )
 from kulai_memory.application.indexing import IndexReconciliationReport
+from kulai_memory.application.memory import Memory
+from kulai_memory.application.lifecycle import MemoryRevisionConflictError
+from kulai_memory.library_persistence import read_memory_library
+from kulai_memory.lifecycle_persistence import change_memory
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER, MemoryRagError, MemoryRagResult
 from kulai_memory.application.retrieval import MemoryRetrievalError, MemoryRetrievalService
 from kulai_memory.automatic_indexing import (
@@ -81,6 +85,9 @@ from .models import (
     DesktopVoiceQuestionResult,
     DesktopVoiceQuestionTranscriptionError,
     MemorySummary,
+    DesktopMemoryItem, DesktopMemoryFilter, DesktopMemoryChangeStatus, DesktopMemoryChangeResult,
+    DesktopLibraryInputError, DesktopLibraryReadError, DesktopMemoryChangeError,
+    DesktopMemoryEditInputError, DesktopMemoryConflictError, DesktopMemoryArchivedError,
 )
 from .recorder import MicrophoneRecorder
 
@@ -209,6 +216,7 @@ class DesktopController:
         self._embedding_provider: OwnedEmbeddingProvider | None = None
         self._rag: DesktopMemoryRag | None = None
         self._rag_task: asyncio.Task[Any] | None = None
+        self._library_task: asyncio.Task[Any] | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
         self._closing = False
         self._indexer: RuntimeMemoryIndexer | None = None
@@ -382,7 +390,7 @@ class DesktopController:
             raise
 
     async def _shutdown(self) -> None:
-        tasks = {task for task in (self._rag_task, self._voice_question_task)
+        tasks = {task for task in (self._rag_task, self._voice_question_task, self._library_task)
                  if task is not None and not task.done()}
         for task in tasks:
             task.cancel()
@@ -515,15 +523,80 @@ class DesktopController:
             return
         await asyncio.to_thread(self._recorder.cleanup, artifact)
 
-    async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
+    def _require_library_idle(self) -> None:
+        self._require_started()
+        if self._voice_mode is not None or self._voice_question_task is not None or self._pending is not None:
+            raise DesktopStateError
+
+    async def list_memory_library(
+        self, *, filter: DesktopMemoryFilter = DesktopMemoryFilter.ACTIVE, limit: int = 100,
+    ) -> tuple[DesktopMemoryItem, ...]:
+        if not isinstance(filter, DesktopMemoryFilter) or type(limit) is not int or not 1 <= limit <= 100:
+            raise DesktopLibraryInputError from None
+        if self._operation_lock.locked():
+            raise DesktopStateError
         async with self._operation_lock:
-            self._require_started()
-            if self._voice_mode is not None or self._voice_question_task is not None:
-                raise DesktopStateError
+            self._require_library_idle()
+            self._library_task = asyncio.current_task()
+            try:
+                memories = await read_memory_library(archived=filter is DesktopMemoryFilter.ARCHIVED,
+                    limit=limit, session_factory=self._session_factory,
+                    repository_factory=self._repository_factory)
+                return tuple(_library_item(memory) for memory in memories)
+            except Exception:
+                raise DesktopLibraryReadError from None
+            finally:
+                self._library_task = None
+
+    async def edit_memory(self, *, memory_id: UUID, expected_revision: int, content: str) -> DesktopMemoryChangeResult:
+        if type(expected_revision) is not int or expected_revision < 1 or not isinstance(content, str) or not content.strip():
+            raise DesktopMemoryEditInputError from None
+        return await self._change_library_memory(action="edit", memory_id=memory_id,
+                                                 expected_revision=expected_revision, content=content)
+
+    async def archive_memory(self, *, memory_id: UUID) -> DesktopMemoryChangeResult:
+        return await self._change_library_memory(action="archive", memory_id=memory_id)
+
+    async def restore_memory(self, *, memory_id: UUID) -> DesktopMemoryChangeResult:
+        return await self._change_library_memory(action="restore", memory_id=memory_id)
+
+    async def _change_library_memory(self, *, action: str, memory_id: UUID, **kwargs: Any) -> DesktopMemoryChangeResult:
+        if not isinstance(memory_id, UUID):
+            raise DesktopMemoryChangeError from None
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        async with self._operation_lock:
+            self._require_library_idle()
+            self._library_task = asyncio.current_task()
+            try:
+                result = await change_memory(action=action, memory_id=memory_id,
+                    session_factory=self._session_factory, indexer=self._indexer, **kwargs)
+                return DesktopMemoryChangeResult(_library_item(result.canonical.memory),
+                    DesktopMemoryChangeStatus(result.canonical.status.value), bool(result.indexing_error_code))
+            except MemoryRevisionConflictError:
+                raise DesktopMemoryConflictError from None
+            except MemoryArchivedError:
+                raise DesktopMemoryArchivedError from None
+            except Exception:
+                raise DesktopMemoryChangeError from None
+            finally:
+                self._library_task = None
+
+    async def reconcile_missing_indexes(self) -> IndexReconciliationReport:
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        async with self._operation_lock:
+            self._require_library_idle()
             if self._indexer is None:
                 raise DesktopStateError
-            self._indexing_report = await self._indexer.reconcile()
-            return self._indexing_report
+            self._library_task = asyncio.current_task()
+            try:
+                self._indexing_report = await self._indexer.reconcile()
+                return self._indexing_report
+            except Exception:
+                raise DesktopMemoryChangeError from None
+            finally:
+                self._library_task = None
 
     def _validate_canonical_stt(self) -> None:
         if (
@@ -703,6 +776,11 @@ class DesktopController:
         self._cuda_scope.close()
         if cancellation is not None:
             raise cancellation
+
+
+def _library_item(memory: Memory) -> DesktopMemoryItem:
+    return DesktopMemoryItem(memory.id, memory.created_at, memory.revision,
+                             memory.archived_at is not None, memory.content)
 
 
 def _rag_error_message(code: str) -> str:

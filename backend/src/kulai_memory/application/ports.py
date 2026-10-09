@@ -43,6 +43,15 @@ class MemoryRepository(Protocol):
 
 
 @runtime_checkable
+class MemoryLibraryRepository(Protocol):
+    """Bounded canonical reads with an explicit active/archived partition."""
+
+    async def list_library(self, *, archived: bool, limit: int) -> tuple[Memory, ...]:
+        """Order by created_at DESC, id DESC; include only the requested partition."""
+        ...
+
+
+@runtime_checkable
 class MemoryDeletionRepository(Protocol):
     """Delete canonical Memory within the caller's shared transaction."""
 

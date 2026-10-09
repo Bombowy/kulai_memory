@@ -52,7 +52,7 @@ from .memory import (
     MemoryService,
     MemorySourceKind,
 )
-from .ports import EventSink, MemoryDeletionRepository, MemoryRepository
+from .ports import EventSink, MemoryDeletionRepository, MemoryRepository, MemoryLibraryRepository
 from .retrieval import (
     MemoryRetrievalError,
     MemoryRetrievalHit,
@@ -108,6 +108,7 @@ __all__ = [
     "MemoryIngestionRetiredError",
     "MemoryPersistenceError",
     "MemoryRepository",
+    "MemoryLibraryRepository",
     "MemoryRetrievalError",
     "MemoryRetrievalHit",
     "MemoryRetrievalResult",

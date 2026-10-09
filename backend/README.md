@@ -118,6 +118,20 @@ Zero evidence skips the LLM. There is no reviewed score cutoff/reranker, TTS,
 Android RAG UI, WebSocket voice RAG, or multi-turn conversation yet. Tests use
 only owned DBs with synthetic evidence and controlled audio.
 
+Desktop **Memory Library** provides bounded Active/Archived views, full content,
+revision-safe EDIT, confirmed reversible ARCHIVE and RESTORE. Its neutral read
+port uses a short read-only canonical snapshot; existing Recent Memory remains
+active only. Mutations reuse `lifecycle_persistence.change_memory`, committing
+canonical changes/vector removal before the shared Desktop indexer runs.
+Same-content edits skip reindexing. Revision conflicts reload rather than
+overwrite. Committed edit/restore with indexing failure shows the new canonical
+state and a bounded **RETRY INDEXING** action that repairs missing vectors without
+another save. Archive creates no tombstone, performs no embedding and excludes
+the Memory from both text and voice RAG; restore indexes the current revision.
+Library DB/model work stays on the existing worker and is serialized with Voice
+Note/Text ASK/Ask by Voice. There is no delete UI or TTS; no schema change is
+required. Lifecycle/RAG tests use owned synthetic DBs, never main mutations.
+
 Local PostgreSQL is started only through `scripts/postgres.py`, which passes
 `backend/.env` explicitly to Compose. `scripts/db_doctor.py` performs read-only
 schema and revision checks. `scripts/db_backup.py` creates a full PostgreSQL

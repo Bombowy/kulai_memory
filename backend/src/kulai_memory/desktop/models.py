@@ -85,6 +85,36 @@ class DesktopVoiceQuestionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DesktopMemoryItem:
+    id: UUID
+    created_at: datetime
+    revision: int
+    archived: bool
+    content: str
+
+
+class DesktopMemoryFilter(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class DesktopMemoryChangeStatus(str, Enum):
+    EDITED = "edited"
+    UNCHANGED = "unchanged"
+    ARCHIVED = "archived"
+    ALREADY_ARCHIVED = "already_archived"
+    RESTORED = "restored"
+    ALREADY_ACTIVE = "already_active"
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMemoryChangeResult:
+    item: DesktopMemoryItem
+    status: DesktopMemoryChangeStatus
+    indexing_degraded: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class MicrophoneDevice:
     device_id: int
     name: str
@@ -175,3 +205,27 @@ class DesktopRagConfigurationError(DesktopPublicError):
 
 class DesktopVoiceQuestionTranscriptionError(DesktopPublicError):
     safe_message = "Question transcription failed."
+
+
+class DesktopLibraryInputError(DesktopPublicError):
+    safe_message = "Choose Active or Archived and a library limit between 1 and 100."
+
+
+class DesktopLibraryReadError(DesktopPublicError):
+    safe_message = "Memory Library could not be loaded."
+
+
+class DesktopMemoryChangeError(DesktopPublicError):
+    safe_message = "The memory change could not be completed."
+
+
+class DesktopMemoryEditInputError(DesktopPublicError):
+    safe_message = "Enter nonblank memory content and a valid revision."
+
+
+class DesktopMemoryConflictError(DesktopPublicError):
+    safe_message = "Memory changed. Reload it before editing."
+
+
+class DesktopMemoryArchivedError(DesktopPublicError):
+    safe_message = "Archived memories cannot be edited."

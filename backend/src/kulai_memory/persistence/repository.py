@@ -222,6 +222,20 @@ class PostgresMemoryRepository:
         except Exception as exc:
             raise MemoryPersistenceError from exc
 
+    async def list_library(self, *, archived: bool, limit: int) -> tuple[Memory, ...]:
+        if type(archived) is not bool or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid Memory library filter or limit.")
+        statement = select(MemoryDb).where(
+            MemoryDb.archived_at.is_not(None) if archived else MemoryDb.archived_at.is_(None)
+        ).order_by(MemoryDb.created_at.desc(), MemoryDb.id.desc()).limit(limit)
+        try:
+            result = await self._db.execute(statement)
+            return tuple(_to_domain(row) for row in result.scalars().all())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise MemoryPersistenceError() from None
+
     async def list_recent(self, *, limit: int, include_archived: bool = False) -> tuple[Memory, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("Memory list limit must be between 1 and 100.")

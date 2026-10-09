@@ -14,6 +14,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog, QDialogButtonBox, QMessageBox, QScrollArea,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -39,6 +40,7 @@ from .models import (
     MemorySummary,
     DesktopRagProgress, DesktopRagProgressState, DesktopRagResult, DesktopRagStatus,
     DesktopVoiceQuestionProgress, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionResult,
+    DesktopMemoryFilter, DesktopMemoryItem, DesktopMemoryChangeResult, DesktopMemoryChangeStatus,
 )
 from .recorder import DEFAULT_MAX_DURATION_SECONDS
 
@@ -58,6 +60,9 @@ class AsyncDesktopThread(QThread):
     voice_question_started = Signal()
     voice_question_finished = Signal(object)
     recent_loaded = Signal(object)
+    library_loaded = Signal(object)
+    library_changed = Signal(object)
+    library_indexing_finished = Signal(object)
     operation_failed = Signal(str, str)
     shutdown_finished = Signal()
 
@@ -167,6 +172,28 @@ class AsyncDesktopThread(QThread):
             lambda controller: controller.stop_voice_question_and_ask(top_k=top_k),
             self.voice_question_finished.emit)
 
+    def request_library(self, filter: DesktopMemoryFilter, limit: int = 100) -> None:
+        async def read(controller):
+            items = await controller.list_memory_library(filter=filter, limit=limit)
+            recent = await controller.list_recent()
+            if not self._shutdown_requested.is_set():
+                self.recent_loaded.emit(recent)
+            return items
+        self._submit("library_read", read, self.library_loaded.emit)
+
+    def request_edit_memory(self, item: DesktopMemoryItem, content: str) -> None:
+        self._submit("library_edit", lambda c: c.edit_memory(memory_id=item.id,
+            expected_revision=item.revision, content=content), self.library_changed.emit)
+
+    def request_archive_memory(self, memory_id) -> None:
+        self._submit("library_archive", lambda c: c.archive_memory(memory_id=memory_id), self.library_changed.emit)
+
+    def request_restore_memory(self, memory_id) -> None:
+        self._submit("library_restore", lambda c: c.restore_memory(memory_id=memory_id), self.library_changed.emit)
+
+    def request_library_indexing_retry(self) -> None:
+        self._submit("library_retry", lambda c: c.reconcile_missing_indexes(), self.library_indexing_finished.emit)
+
     def request_shutdown(self) -> None:
         if self._shutdown_requested.is_set():
             return
@@ -234,6 +261,32 @@ def _public_message(exc: Exception) -> str:
     return "The desktop operation could not be completed."
 
 
+class MemoryEditDialog(QDialog):
+    """Qt-only editor holding the canonical revision observed when opened."""
+
+    def __init__(self, item: DesktopMemoryItem, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Memory")
+        self.resize(640, 420)
+        self._original = item.content
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Memory {item.id} — revision {item.revision}"))
+        self.editor = QPlainTextEdit(self)
+        self.editor.setPlainText(item.content)
+        self.editor.document().setModified(False)
+        layout.addWidget(self.editor)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel, self)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.editor.textChanged.connect(lambda: self.buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(
+            bool(self.editor.toPlainText().strip())))
+        layout.addWidget(self.buttons)
+
+    @property
+    def content(self) -> str:
+        return self.editor.toPlainText() if self.editor.document().isModified() else self._original
+
+
 class MainWindow(QMainWindow):
     """Separate voice notes and read-only text/voice questions on one worker."""
 
@@ -254,6 +307,10 @@ class MainWindow(QMainWindow):
         self._rag_active = False
         self._voice_question_active = False
         self._question_recording = False
+        self._library_items: tuple[DesktopMemoryItem, ...] = ()
+        self._library_active = False
+        self._library_selection_id = None
+        self._library_indexing_degraded = False
         self._save_pending = False
         self._closing = False
         self._shutdown_done = False
@@ -333,6 +390,44 @@ class MainWindow(QMainWindow):
         ask_layout.addWidget(self.sources_table)
         layout.addWidget(self.ask_group)
 
+        self.library_group = QGroupBox("Memory Library", root)
+        library_layout = QVBoxLayout(self.library_group)
+        library_header = QHBoxLayout()
+        self.library_filter = QComboBox(self.library_group)
+        self.library_filter.addItem("Active", DesktopMemoryFilter.ACTIVE)
+        self.library_filter.addItem("Archived", DesktopMemoryFilter.ARCHIVED)
+        self.library_refresh_button = QPushButton("REFRESH", self.library_group)
+        library_header.addWidget(self.library_filter)
+        library_header.addStretch(1)
+        library_header.addWidget(self.library_refresh_button)
+        library_layout.addLayout(library_header)
+        self.library_table = QTableWidget(0, 4, self.library_group)
+        self.library_table.setHorizontalHeaderLabels(["Created", "Revision", "Status", "Content preview"])
+        self.library_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.library_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.library_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.library_table.horizontalHeader().setStretchLastSection(True)
+        self.library_table.setMaximumHeight(220)
+        library_layout.addWidget(self.library_table)
+        self.library_content = QPlainTextEdit(self.library_group)
+        self.library_content.setReadOnly(True)
+        self.library_content.setPlaceholderText("Select a memory to read its full content.")
+        self.library_content.setMaximumHeight(200)
+        library_layout.addWidget(self.library_content)
+        action_row = QHBoxLayout()
+        self.library_edit_button = QPushButton("EDIT", self.library_group)
+        self.library_archive_button = QPushButton("ARCHIVE", self.library_group)
+        self.library_restore_button = QPushButton("RESTORE", self.library_group)
+        self.library_retry_button = QPushButton("RETRY INDEXING", self.library_group)
+        for button in (self.library_edit_button, self.library_archive_button,
+                       self.library_restore_button, self.library_retry_button):
+            action_row.addWidget(button)
+        library_layout.addLayout(action_row)
+        self.library_status = QLabel("Starting...", self.library_group)
+        self.library_status.setWordWrap(True)
+        library_layout.addWidget(self.library_status)
+        layout.addWidget(self.library_group)
+
         recent_header = QHBoxLayout()
         recent_header.addWidget(QLabel("Recent Memory"))
         recent_header.addStretch(1)
@@ -347,7 +442,10 @@ class MainWindow(QMainWindow):
             QTableWidget.SelectionBehavior.SelectRows
         )
         layout.addWidget(self.recent_table)
-        self.setCentralWidget(root)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(root)
+        self.setCentralWidget(scroll)
 
         self.record_button.setEnabled(False)
         self.stop_button.setEnabled(False)
@@ -361,6 +459,13 @@ class MainWindow(QMainWindow):
         self.query_input.returnPressed.connect(self._ask_memory)
         self.ask_button.clicked.connect(self._ask_memory)
         self.voice_ask_button.clicked.connect(self._toggle_voice_question)
+        self.library_filter.currentIndexChanged.connect(self._refresh_library)
+        self.library_refresh_button.clicked.connect(self._refresh_library)
+        self.library_table.itemSelectionChanged.connect(self._library_selection_changed)
+        self.library_edit_button.clicked.connect(self._edit_library_memory)
+        self.library_archive_button.clicked.connect(self._archive_library_memory)
+        self.library_restore_button.clicked.connect(self._restore_library_memory)
+        self.library_retry_button.clicked.connect(self._retry_library_indexing)
         self._update_controls()
 
     def _connect_worker(self) -> None:
@@ -373,6 +478,9 @@ class MainWindow(QMainWindow):
         self._worker.voice_question_started.connect(self._on_voice_question_started)
         self._worker.voice_question_finished.connect(self._on_voice_question_finished)
         self._worker.recent_loaded.connect(self._set_recent)
+        self._worker.library_loaded.connect(self._on_library_loaded)
+        self._worker.library_changed.connect(self._on_library_changed)
+        self._worker.library_indexing_finished.connect(self._on_library_indexing_finished)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._worker.shutdown_finished.connect(self._on_shutdown_finished)
         self._worker.finished.connect(self._on_shutdown_finished)
@@ -391,6 +499,144 @@ class MainWindow(QMainWindow):
         self.refresh_button.setEnabled(self._rag_ready and not self._busy and not self._recording
                                        and not self._voice_question_active and not self._closing)
         self.device_selector.setEnabled(not blocked)
+        library_ready = self._rag_ready and not blocked
+        item = self._selected_library_item()
+        self.library_filter.setEnabled(library_ready)
+        self.library_refresh_button.setEnabled(library_ready)
+        self.library_table.setEnabled(library_ready)
+        self.library_edit_button.setEnabled(library_ready and item is not None and not item.archived)
+        self.library_archive_button.setEnabled(library_ready and item is not None and not item.archived)
+        self.library_restore_button.setEnabled(library_ready and item is not None and item.archived)
+        self.library_retry_button.setVisible(self._library_indexing_degraded)
+        self.library_retry_button.setEnabled(library_ready and self._library_indexing_degraded)
+
+    def _selected_library_item(self) -> DesktopMemoryItem | None:
+        row = self.library_table.currentRow()
+        return self._library_items[row] if self.library_table.selectedItems() and 0 <= row < len(self._library_items) else None
+
+    @Slot()
+    def _library_selection_changed(self) -> None:
+        item = self._selected_library_item()
+        self.library_content.setPlainText(item.content if item else "")
+        self._update_controls()
+
+    @Slot()
+    def _refresh_library(self, *, preserve_status: bool = False) -> None:
+        if not self._rag_ready or self._busy or self._recording or self._voice_question_active or self._save_pending or self._closing:
+            return
+        item = self._selected_library_item()
+        self._library_selection_id = item.id if item else None
+        self._busy = self._library_active = True
+        if not preserve_status:
+            self.library_status.setText("Loading memories...")
+        self.library_content.clear()
+        self._update_controls()
+        self._worker.request_library(DesktopMemoryFilter(self.library_filter.currentData()), limit=100)
+
+    @Slot(object)
+    def _on_library_loaded(self, items: tuple[DesktopMemoryItem, ...]) -> None:
+        if self._closing:
+            return
+        self._library_items = items
+        self.library_table.blockSignals(True)
+        self.library_table.clearSelection()
+        self.library_table.setRowCount(len(items))
+        for row, item in enumerate(items):
+            values = (item.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"), str(item.revision),
+                      "Archived" if item.archived else "Active", " ".join(item.content.split())[:160])
+            for column, value in enumerate(values):
+                self.library_table.setItem(row, column, QTableWidgetItem(value))
+            if item.id == self._library_selection_id:
+                self.library_table.selectRow(row)
+        self.library_table.blockSignals(False)
+        if self._library_active:
+            self._busy = self._library_active = False
+        if self.library_status.text() in {"Starting...", "Loading memories..."}:
+            self.library_status.setText(f"{len(items)} memories (limit 100)")
+        self._library_selection_changed()
+
+    def _begin_library_action(self, message: str) -> None:
+        self._busy = self._library_active = True
+        self.library_status.setText(message)
+        self._update_controls()
+
+    @Slot()
+    def _edit_library_memory(self) -> None:
+        item = self._selected_library_item()
+        if not self.library_edit_button.isEnabled() or item is None:
+            return
+        self._begin_library_action("Editing memory...")
+        dialog = MemoryEditDialog(item, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if self._closing:
+            return
+        if accepted:
+            self._worker.request_edit_memory(item, dialog.content)
+        else:
+            self._busy = self._library_active = False
+            self.library_status.setText("Edit cancelled")
+            self._update_controls()
+
+    @Slot()
+    def _archive_library_memory(self) -> None:
+        item = self._selected_library_item()
+        if not self.library_archive_button.isEnabled() or item is None:
+            return
+        self._begin_library_action("Archiving memory...")
+        confirmed = QMessageBox.question(self, "Archive Memory", "Archive this memory?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if self._closing:
+            return
+        if confirmed == QMessageBox.StandardButton.Yes:
+            self._worker.request_archive_memory(item.id)
+        else:
+            self._busy = self._library_active = False
+            self.library_status.setText("Archive cancelled")
+            self._update_controls()
+
+    @Slot()
+    def _restore_library_memory(self) -> None:
+        item = self._selected_library_item()
+        if self.library_restore_button.isEnabled() and item is not None:
+            self._begin_library_action("Restoring memory...")
+            self._worker.request_restore_memory(item.id)
+
+    @Slot(object)
+    def _on_library_changed(self, result: DesktopMemoryChangeResult) -> None:
+        if self._closing:
+            return
+        self._busy = self._library_active = False
+        self._library_selection_id = result.item.id
+        current_archived = DesktopMemoryFilter(self.library_filter.currentData()) is DesktopMemoryFilter.ARCHIVED
+        items = tuple(result.item if item.id == result.item.id else item for item in self._library_items)
+        if result.item.archived != current_archived:
+            items = tuple(item for item in items if item.id != result.item.id)
+        self._on_library_loaded(items)
+        if result.indexing_degraded:
+            self._library_indexing_degraded = True
+            self.library_status.setText("Memory was updated, but semantic indexing needs retry." if
+                result.status is DesktopMemoryChangeStatus.EDITED else "Memory was restored, but semantic indexing needs retry.")
+        else:
+            self.library_status.setText({DesktopMemoryChangeStatus.EDITED: "Memory updated",
+                DesktopMemoryChangeStatus.UNCHANGED: "Memory unchanged", DesktopMemoryChangeStatus.ARCHIVED: "Memory archived",
+                DesktopMemoryChangeStatus.ALREADY_ARCHIVED: "Memory already archived", DesktopMemoryChangeStatus.RESTORED: "Memory restored",
+                DesktopMemoryChangeStatus.ALREADY_ACTIVE: "Memory already active"}[result.status])
+        self._refresh_library(preserve_status=True)
+
+    @Slot()
+    def _retry_library_indexing(self) -> None:
+        if self.library_retry_button.isEnabled():
+            self._begin_library_action("Retrying semantic indexing...")
+            self._worker.request_library_indexing_retry()
+
+    @Slot(object)
+    def _on_library_indexing_finished(self, report) -> None:
+        if self._closing:
+            return
+        self._busy = self._library_active = False
+        self._library_indexing_degraded = report.degraded
+        self.library_status.setText("Semantic indexing needs retry." if report.degraded else "Semantic indexing is current")
+        self._refresh_library(preserve_status=True)
 
     @Slot()
     def _ask_memory(self) -> None:
@@ -489,13 +735,17 @@ class MainWindow(QMainWindow):
         self._set_recent(result.memories)
         self._ready = bool(result.devices)
         self._rag_ready = True
+        self._library_indexing_degraded = result.indexing.degraded
         self.rag_status.setText("Ready")
+        self.library_status.setText("Click REFRESH to load memories (limit 100)")
         self.status_label.setText("Ready" if result.devices else "No input device found")
         if result.indexing.degraded:
             self.save_status.setText("Semantic indexing is degraded; missing indexes can be retried.")
         self.record_button.setEnabled(self._ready)
         self.refresh_button.setEnabled(True)
         self._update_controls()
+        if self._worker.isRunning():
+            self._refresh_library()
 
     @Slot(str)
     def _on_startup_failed(self, message: str) -> None:
@@ -652,6 +902,17 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self._busy = False
+        if operation.startswith("library_"):
+            self._library_active = False
+            self.library_status.setText(message)
+            if operation == "library_read":
+                self._library_items = ()
+                self.library_table.setRowCount(0)
+                self.library_content.clear()
+            self._update_controls()
+            if message == "Memory changed. Reload it before editing." or message == "Archived memories cannot be edited.":
+                self._refresh_library(preserve_status=True)
+            return
         if operation in {"ask", "voice_question_start", "voice_question"}:
             self._rag_active = False
             self._voice_question_active = self._question_recording = False

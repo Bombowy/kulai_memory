@@ -13,6 +13,7 @@ from .models import (
     DesktopRagResult, DesktopRagCitation,
     DesktopVoiceMode, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionProgress,
     DesktopVoiceQuestionResult,
+    DesktopMemoryItem, DesktopMemoryFilter, DesktopMemoryChangeStatus, DesktopMemoryChangeResult,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "DesktopRagResult", "DesktopRagCitation",
     "DesktopVoiceMode", "DesktopVoiceQuestionProgressState", "DesktopVoiceQuestionProgress",
     "DesktopVoiceQuestionResult",
+    "DesktopMemoryItem", "DesktopMemoryFilter", "DesktopMemoryChangeStatus", "DesktopMemoryChangeResult",
 ]
