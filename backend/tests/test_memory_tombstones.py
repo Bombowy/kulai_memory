@@ -33,7 +33,7 @@ class ScriptedSession:
     async def execute(self, statement, parameters=None):
         self.statements.append((statement, parameters))
         value = self.values.pop(0)
-        return SimpleNamespace(scalar_one_or_none=lambda: value)
+        return SimpleNamespace(scalar_one_or_none=lambda: value, one_or_none=lambda: value)
 
     def add(self, row):
         self.added.append(row)

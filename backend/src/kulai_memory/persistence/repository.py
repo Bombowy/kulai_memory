@@ -17,6 +17,7 @@ from kulai_memory.application.memory import (
 )
 
 from .ingestion_lock import lock_ingestion
+from kulai_memory.application.deletion import MemoryDeletionRevisionConflictError
 from .models import MemoryDb, MemoryIngestionTombstoneDb
 
 
@@ -159,7 +160,7 @@ class PostgresMemoryRepository:
         except Exception as exc:
             raise MemoryPersistenceError from exc
 
-    async def delete_by_id(self, memory_id: UUID) -> bool:
+    async def delete_by_id(self, memory_id: UUID, *, expected_revision: int | None = None) -> bool:
         """Retire identity and delete the row in the caller-owned transaction.
 
         Discover without a row lock, then lock ingestion before rechecking the
@@ -167,6 +168,8 @@ class PostgresMemoryRepository:
         """
 
         try:
+            if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+                raise MemoryPersistenceError()
             identity = await self._db.execute(
                 select(MemoryDb.ingestion_id).where(MemoryDb.id == memory_id),
             )
@@ -179,19 +182,26 @@ class PostgresMemoryRepository:
                 )
                 ingestion_id = retired.scalar_one_or_none()
             if ingestion_id is None:
+                if expected_revision is not None:
+                    raise MemoryDeletionRevisionConflictError()
                 return False
 
             await lock_ingestion(self._db, ingestion_id)
             canonical = await self._db.execute(
-                select(MemoryDb.ingestion_id)
+                select(MemoryDb.ingestion_id, MemoryDb.revision)
                 .where(MemoryDb.id == memory_id)
                 .with_for_update(),
             )
-            current_ingestion_id = canonical.scalar_one_or_none()
-            if current_ingestion_id is None:
+            current = canonical.one_or_none()
+            if current is None:
+                if expected_revision is not None:
+                    raise MemoryDeletionRevisionConflictError()
                 return False
+            current_ingestion_id, revision = current
             if current_ingestion_id != ingestion_id:
                 raise MemoryPersistenceError()
+            if expected_revision is not None and revision != expected_revision:
+                raise MemoryDeletionRevisionConflictError()
 
             tombstone = await self._db.execute(
                 insert(MemoryIngestionTombstoneDb)
@@ -217,7 +227,7 @@ class PostgresMemoryRepository:
             return result.scalar_one_or_none() is not None
         except asyncio.CancelledError:
             raise
-        except MemoryPersistenceError:
+        except (MemoryPersistenceError, MemoryDeletionRevisionConflictError):
             raise
         except Exception as exc:
             raise MemoryPersistenceError from exc

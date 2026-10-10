@@ -127,8 +127,8 @@ async def _rollback_failure(stage, monkeypatch):
         calls = []
 
         class Repository(PostgresMemoryRepository):
-            async def delete_by_id(self, identity):
-                result = await super().delete_by_id(identity)
+            async def delete_by_id(self, identity, *, expected_revision=None):
+                result = await super().delete_by_id(identity, expected_revision=expected_revision)
                 calls.append("memory")
                 if stage == "memory":
                     raise RuntimeError(PRIVATE)

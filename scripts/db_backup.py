@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
-import os
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 from kulai_db import DbConfig
 
@@ -19,23 +16,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kulai_memory.database_safety import (
-    DatabaseSafetyError,
-    OwnedTemporaryDatabase,
-    database_config,
-    database_config_for_database,
-    database_snapshot_url,
-    find_postgres_tool,
-    postgres_connection,
-    postgres_tool_version,
-    require_owned_database,
-    run_database_doctor,
-    run_postgres_tool,
-    safe_error_message,
-    validate_backup_doctor,
-    validate_backup_output,
-    validate_restore_source,
-    version_major,
+    DatabaseSafetyError, OwnedTemporaryDatabase, database_config, database_config_for_database,
+    require_owned_database, safe_error_message, validate_restore_source,
 )
+from kulai_memory.backup_service import sha256_file, _create_backup
 from kulai_memory.settings import get_settings
 
 
@@ -45,76 +29,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--force", action="store_true")
     result.add_argument("--pre-migration-from", metavar="REVISION")
     return result
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-async def _create_backup(
-    output: Path,
-    *,
-    force: bool,
-    config: DbConfig,
-    pre_migration_from: str | None = None,
-) -> tuple[int, str, str]:
-    output = validate_backup_output(output, force=force)
-
-    report = await run_database_doctor(async_url=config.async_url)
-    validate_backup_doctor(report, pre_migration_from=pre_migration_from)
-    version_check = next(
-        check for check in report.checks if check.name == "postgres.version"
-    )
-    if not isinstance(version_check.value, dict):
-        raise DatabaseSafetyError("PostgreSQL server version is unavailable.")
-    server_version = str(version_check.value["display"])
-
-    pg_dump = find_postgres_tool("pg_dump")
-    pg_dump_version = postgres_tool_version(pg_dump)
-    if version_major(pg_dump_version) < version_major(server_version):
-        raise DatabaseSafetyError("pg_dump is older than the PostgreSQL server.")
-
-    source_before = await database_snapshot_url(
-        config.async_url, pre_migration_from=pre_migration_from,
-    )
-    connection = postgres_connection(config)
-    temporary = output.parent / f".{output.name}.{uuid4().hex}.partial"
-    try:
-        completed = run_postgres_tool(
-            pg_dump,
-            [
-                *connection.command_arguments(),
-                "--format=custom",
-                "--no-owner",
-                "--no-privileges",
-                "--file",
-                str(temporary),
-            ],
-            connection=connection,
-        )
-        if completed.returncode != 0:
-            raise DatabaseSafetyError(f"pg_dump failed with exit code {completed.returncode}.")
-        if not temporary.is_file() or temporary.stat().st_size == 0:
-            raise DatabaseSafetyError("pg_dump did not create a non-empty backup.")
-        validate_backup_doctor(
-            await run_database_doctor(async_url=config.async_url),
-            pre_migration_from=pre_migration_from,
-        )
-        source_after = await database_snapshot_url(
-            config.async_url, pre_migration_from=pre_migration_from,
-        )
-        if source_after != source_before:
-            raise DatabaseSafetyError("Source database changed during backup; archive was not published.")
-        os.replace(temporary, output)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-    return output.stat().st_size, sha256_file(output), pg_dump_version
 
 
 async def create_backup(

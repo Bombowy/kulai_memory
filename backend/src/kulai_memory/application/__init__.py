@@ -31,7 +31,7 @@ from .ingestion import (
     TranscriptMemoryIngestionStatus,
     transcription_is_empty,
 )
-from .deletion import MemoryDeletionError, MemoryDeletionResult, MemoryDeletionService
+from .deletion import MemoryDeletionError, MemoryDeletionResult, MemoryDeletionService, MemoryDeletionRevisionConflictError
 from .lifecycle import (
     MemoryLifecycleError, MemoryLifecycleResult, MemoryLifecycleService,
     MemoryLifecycleStatus, MemoryMutationRepository, MemoryNotFoundError,
@@ -83,6 +83,7 @@ __all__ = [
     "EnsureMemoryIndexedResult",
     "IndexReconciliationReport",
     "MemoryDeletionError",
+    "MemoryDeletionRevisionConflictError",
     "MemoryDeletionRepository",
     "MemoryDeletionResult",
     "MemoryDeletionService",

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from kulai_memory import backup_service
 
 import asyncio
 import json
@@ -27,7 +28,7 @@ async def _exercise(tmp_path, monkeypatch):
     source = await create_owned_temporary_database(kind="backup", config=config)
     url = async_database_url(database=source.name, config=config)
     observed_restores = []
-    original_doctor = db_restore_smoke.run_database_doctor
+    original_doctor = backup_service.run_database_doctor
 
     async def observe_doctor(*, async_url):
         report = await original_doctor(async_url=async_url)
@@ -39,7 +40,7 @@ async def _exercise(tmp_path, monkeypatch):
             observed_restores.append((report, fingerprints))
         return report
 
-    monkeypatch.setattr(db_restore_smoke, "run_database_doctor", observe_doctor)
+    monkeypatch.setattr(backup_service, "run_database_doctor", observe_doctor)
     try:
         await asyncio.to_thread(_upgrade_database, url, "kulai_memory_0002")
         engine = create_async_engine(url)

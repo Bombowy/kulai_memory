@@ -1,4 +1,5 @@
 from __future__ import annotations
+from kulai_memory import backup_service
 
 import asyncio
 import json
@@ -98,7 +99,7 @@ async def tamper_round_trip(tmp_path, monkeypatch, field):
         baseline = await database_snapshot_url(url)
         archive = tmp_path / "tamper.dump"
         await db_backup.create_owned_database_backup(archive, force=False, owned=source, config=config)
-        original = db_restore_smoke.restore_archive_to_owned_database
+        original = backup_service.restore_archive_to_owned_database
         targets = []
         async def restore_then_tamper(backup, owned, *, config):
             await original(backup, owned, config=config)
@@ -121,7 +122,7 @@ async def tamper_round_trip(tmp_path, monkeypatch, field):
             assert tampered.memories == baseline.memories and tampered.vectors == baseline.vectors
             assert tampered.tombstones.count == baseline.tombstones.count
             assert tampered.tombstones.sha256 != baseline.tombstones.sha256
-        monkeypatch.setattr(db_restore_smoke, "restore_archive_to_owned_database", restore_then_tamper)
+        monkeypatch.setattr(backup_service, "restore_archive_to_owned_database", restore_then_tamper)
         with pytest.raises(DatabaseSafetyError, match="fingerprints do not match") as caught:
             await db_restore_smoke.restore_owned_database_backup(archive, owned=source, config=config)
         assert "ffffffff" not in str(caught.value) and "eeeeeeee" not in str(caught.value)

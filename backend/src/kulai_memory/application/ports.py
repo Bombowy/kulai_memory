@@ -55,7 +55,11 @@ class MemoryLibraryRepository(Protocol):
 class MemoryDeletionRepository(Protocol):
     """Delete canonical Memory within the caller's shared transaction."""
 
-    async def delete_by_id(self, memory_id: UUID) -> bool:
-        """Return whether one Memory was deleted, without committing."""
+    async def delete_by_id(self, memory_id: UUID, *, expected_revision: int | None = None) -> bool:
+        """Check an optional revision under the canonical lock before any mutation.
+
+        A missing/stale row raises a revision conflict when a revision is supplied.
+        Return whether one Memory was deleted, without committing.
+        """
 
         ...

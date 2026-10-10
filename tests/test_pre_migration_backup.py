@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import db_backup, db_restore_smoke
-from kulai_memory import database_safety as safety
+from kulai_memory import database_safety as safety, backup_service
 
 
 SOURCE = "kulai_memory_0002"
@@ -144,13 +144,13 @@ def install_backup(monkeypatch, doctor_report):
         assert {"--format=custom", "--no-owner", "--no-privileges"}.issubset(arguments)
         Path(arguments[arguments.index("--file") + 1]).write_bytes(b"PGDMP synthetic archive")
         return subprocess.CompletedProcess(arguments, 0, PRIVATE, PRIVATE)
-    monkeypatch.setattr(db_backup, "run_database_doctor", doctor)
-    monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
-    monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
-    monkeypatch.setattr(db_backup, "run_postgres_tool", dump)
+    monkeypatch.setattr(backup_service, "run_database_doctor", doctor)
+    monkeypatch.setattr(backup_service, "find_postgres_tool", lambda name: Path(name))
+    monkeypatch.setattr(backup_service, "postgres_tool_version", lambda path: "18.6")
+    monkeypatch.setattr(backup_service, "run_postgres_tool", dump)
     async def fingerprint(*args, **kwargs):
         return snapshot(strict=kwargs.get("pre_migration_from") is None)
-    monkeypatch.setattr(db_backup, "database_snapshot_url", fingerprint)
+    monkeypatch.setattr(backup_service, "database_snapshot_url", fingerprint)
     return calls
 
 
@@ -177,7 +177,7 @@ def test_source_revision_change_during_dump_does_not_publish_archive(tmp_path, m
     reports = iter((report(), report(current=HEAD, strict=True)))
     async def doctor(**kwargs):
         return next(reports)
-    monkeypatch.setattr(db_backup, "run_database_doctor", doctor)
+    monkeypatch.setattr(backup_service, "run_database_doctor", doctor)
     with pytest.raises(safety.DatabaseSafetyError):
         asyncio.run(db_backup.create_backup(tmp_path / "archive.dump", force=False, pre_migration_from=SOURCE))
     assert calls == ["dump"] and list(tmp_path.iterdir()) == []
@@ -199,7 +199,7 @@ def test_public_target_guards_before_doctor(tmp_path, monkeypatch, module, mode,
     monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(app_env=env))
     async def unexpected(**kwargs):
         pytest.fail("Unsafe target must be rejected before doctor or DB work")
-    monkeypatch.setattr(module, "run_database_doctor", unexpected)
+    monkeypatch.setattr(backup_service, "run_database_doctor", unexpected)
     with pytest.raises(ValueError):
         if module is db_backup:
             asyncio.run(module.create_backup(tmp_path / "archive.dump", force=False, pre_migration_from=mode))
@@ -269,11 +269,11 @@ def install_restore(monkeypatch, tmp_path, *, reports=None, fingerprints=None, r
             raise restore_error
     async def drop(*args, **kwargs):
         calls.append("drop")
-    monkeypatch.setattr(db_restore_smoke, "run_database_doctor", doctor)
-    monkeypatch.setattr(db_restore_smoke, "fingerprint_url", fingerprint)
-    monkeypatch.setattr(db_restore_smoke, "create_owned_temporary_database", create)
-    monkeypatch.setattr(db_restore_smoke, "restore_archive_to_owned_database", restore)
-    monkeypatch.setattr(db_restore_smoke, "drop_owned_temporary_database", drop)
+    monkeypatch.setattr(backup_service, "run_database_doctor", doctor)
+    monkeypatch.setattr(backup_service, "fingerprint_url", fingerprint)
+    monkeypatch.setattr(backup_service, "create_owned_temporary_database", create)
+    monkeypatch.setattr(backup_service, "restore_archive_to_owned_database", restore)
+    monkeypatch.setattr(backup_service, "drop_owned_temporary_database", drop)
     return archive, owned, before, calls
 
 
@@ -337,7 +337,7 @@ def test_cleanup_failure_cannot_report_success(tmp_path, monkeypatch):
     archive, _, _, _ = install_restore(monkeypatch, tmp_path)
     async def drop(*args, **kwargs):
         raise RuntimeError(PRIVATE)
-    monkeypatch.setattr(db_restore_smoke, "drop_owned_temporary_database", drop)
+    monkeypatch.setattr(backup_service, "drop_owned_temporary_database", drop)
     with pytest.raises(safety.DatabaseSafetyError, match="Safe cleanup failed") as caught:
         asyncio.run(db_restore_smoke.restore_smoke(archive, pre_migration_from=SOURCE))
     assert PRIVATE not in str(caught.value)
@@ -366,7 +366,7 @@ def test_backup_tombstone_change_blocks_publication_and_keeps_previous_archive(t
     states = iter([before, replace(before, tombstones=safety.TombstoneFingerprint(1, "d" * 64))])
     async def fingerprint(*args, **kwargs):
         return next(states)
-    monkeypatch.setattr(db_backup, "database_snapshot_url", fingerprint)
+    monkeypatch.setattr(backup_service, "database_snapshot_url", fingerprint)
     archive = tmp_path / "retained.dump"
     archive.write_bytes(b"previous user backup")
     with pytest.raises(safety.DatabaseSafetyError, match="archive was not published"):

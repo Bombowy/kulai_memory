@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -1076,7 +1077,7 @@ async def create_owned_temporary_database(
         raise RuntimeError("Generated temporary database already exists.")
 
     createdb = find_postgres_tool("createdb")
-    completed = run_postgres_tool(
+    completed = await asyncio.to_thread(run_postgres_tool,
         createdb,
         [
             *source.command_arguments(include_database=False),
@@ -1115,7 +1116,7 @@ async def drop_owned_temporary_database(
     )
     await require_owned_database(owned, config=active_config)
     dropdb = find_postgres_tool("dropdb")
-    completed = run_postgres_tool(
+    completed = await asyncio.to_thread(run_postgres_tool,
         dropdb,
         [
             *source.command_arguments(include_database=False),
@@ -1144,7 +1145,7 @@ async def restore_archive_to_owned_database(
         raise FileNotFoundError("Backup file does not exist.")
     await require_owned_database(owned, config=active_config)
     pg_restore = find_postgres_tool("pg_restore")
-    catalog = run_postgres_tool(
+    catalog = await asyncio.to_thread(run_postgres_tool,
         pg_restore,
         ["--list", str(archive)],
         connection=source,
@@ -1159,7 +1160,7 @@ async def restore_archive_to_owned_database(
         password=source.password,
         database=owned.name,
     )
-    completed = run_postgres_tool(
+    completed = await asyncio.to_thread(run_postgres_tool,
         pg_restore,
         [
             *target.command_arguments(),

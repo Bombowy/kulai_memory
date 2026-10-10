@@ -26,7 +26,7 @@ class Repository:
         self.present = present
         self.error = error
 
-    async def delete_by_id(self, memory_id):
+    async def delete_by_id(self, memory_id, *, expected_revision=None):
         self.operations.append(("memory", memory_id))
         if self.error is not None:
             raise self.error
@@ -212,3 +212,30 @@ def test_neutral_service_does_not_own_transaction():
     calls = {node.func.attr for node in ast.walk(tree)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
     assert not calls & {"commit", "rollback", "begin", "close"}
+
+
+@pytest.mark.parametrize("revision", [0, -1, True, "1", 1.5])
+def test_invalid_expected_revision_rejected_before_storage(revision):
+    operations = []
+    with pytest.raises(MemoryDeletionError):
+        asyncio.run(MemoryDeletionService(repository=Repository(operations), store=Store(operations)).delete(
+            uuid4(), expected_revision=revision))
+    assert operations == []
+
+
+def test_revision_conflict_preserved_and_blocks_vector_delete():
+    from kulai_memory.application import MemoryDeletionRevisionConflictError
+    operations = []
+    with pytest.raises(MemoryDeletionRevisionConflictError) as caught:
+        asyncio.run(MemoryDeletionService(repository=Repository(operations,
+            error=MemoryDeletionRevisionConflictError()), store=Store(operations)).delete(uuid4(), expected_revision=2))
+    assert len(operations) == 1 and caught.value.code == "memory.revision_conflict"
+
+
+@pytest.mark.parametrize("revision", [0, True, "1"])
+def test_invalid_expected_revision_does_not_open_host_session(revision):
+    def unexpected():
+        pytest.fail("Invalid revision must not open storage")
+    with pytest.raises(MemoryDeletionError):
+        asyncio.run(deletion_persistence.delete_memory(memory_id=uuid4(), expected_revision=revision,
+                                                       session_factory=unexpected))

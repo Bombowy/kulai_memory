@@ -114,6 +114,27 @@ class DesktopMemoryChangeResult:
     indexing_degraded: bool = False
 
 
+class DesktopDeleteProgressState(str, Enum):
+    PREPARING_BACKUP = "preparing_backup"
+    VERIFYING_BACKUP = "verifying_backup"
+    DELETING = "deleting"
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopDeleteProgress:
+    state: DesktopDeleteProgressState
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopMemoryDeleteResult:
+    memory_id: UUID
+    backup_path: Path
+    backup_size: int
+    backup_sha256: str
+    memory_deleted: bool
+    vector_deleted_count: int
+
+
 @dataclass(frozen=True, slots=True)
 class MicrophoneDevice:
     device_id: int
@@ -229,3 +250,19 @@ class DesktopMemoryConflictError(DesktopPublicError):
 
 class DesktopMemoryArchivedError(DesktopPublicError):
     safe_message = "Archived memories cannot be edited."
+
+
+class DesktopDeleteInputError(DesktopPublicError):
+    safe_message = "Select a memory with a valid revision and choose a new .dump backup outside the repository."
+
+
+class DesktopBackupError(DesktopPublicError):
+    safe_message = "Backup verification could not be completed. Memory was not deleted; retain any backup file."
+
+
+class DesktopDeleteError(DesktopPublicError):
+    safe_message = "Memory deletion could not be completed. Retain the backup file."
+
+
+class DesktopDeleteConflictError(DesktopPublicError):
+    safe_message = "Memory changed. Reload it before deleting."

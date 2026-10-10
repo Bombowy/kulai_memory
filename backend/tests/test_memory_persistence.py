@@ -155,6 +155,8 @@ def test_repository_deletes_by_id_without_owning_transaction(present):
             if present else (None, None)
         )
         fake.execute_results = [_scalar_result(value) for value in values]
+        if present:
+            fake.execute_results[2].one_or_none.return_value = (memory.ingestion_id, memory.revision)
         repository = PostgresMemoryRepository(db=cast(AsyncSession, fake))
         assert await repository.delete_by_id(memory.id) is present
         compiled = [str(statement.compile(dialect=postgresql.dialect()))

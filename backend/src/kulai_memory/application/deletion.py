@@ -18,6 +18,15 @@ class MemoryDeletionError(RuntimeError):
         super().__init__("Memory deletion could not be completed.")
 
 
+class MemoryDeletionRevisionConflictError(MemoryDeletionError):
+    """The locked canonical row is missing or no longer at the selected revision."""
+
+    code = "memory.revision_conflict"
+
+    def __init__(self) -> None:
+        RuntimeError.__init__(self, "Memory changed. Reload it before deleting.")
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryDeletionResult:
     memory_id: UUID
@@ -39,11 +48,13 @@ class MemoryDeletionService:
         self._repository = repository
         self._store = store
 
-    async def delete(self, memory_id: UUID) -> MemoryDeletionResult:
+    async def delete(self, memory_id: UUID, *, expected_revision: int | None = None) -> MemoryDeletionResult:
         try:
             if not isinstance(memory_id, UUID):
                 raise MemoryDeletionError()
-            memory_deleted = await self._repository.delete_by_id(memory_id)
+            if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+                raise MemoryDeletionError()
+            memory_deleted = await self._repository.delete_by_id(memory_id, expected_revision=expected_revision)
             if type(memory_deleted) is not bool:
                 raise MemoryDeletionError()
             result = await vector_delete(
@@ -53,5 +64,7 @@ class MemoryDeletionService:
                 ),
             )
             return MemoryDeletionResult(memory_id, memory_deleted, result.deleted_count)
+        except MemoryDeletionRevisionConflictError:
+            raise
         except Exception:
             raise MemoryDeletionError() from None

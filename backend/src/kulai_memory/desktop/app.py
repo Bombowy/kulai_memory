@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+from datetime import datetime
+from pathlib import Path
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
 from typing import Any
@@ -14,7 +16,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDialog, QDialogButtonBox, QMessageBox, QScrollArea,
+    QDialog, QDialogButtonBox, QMessageBox, QScrollArea, QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -41,6 +43,7 @@ from .models import (
     DesktopRagProgress, DesktopRagProgressState, DesktopRagResult, DesktopRagStatus,
     DesktopVoiceQuestionProgress, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionResult,
     DesktopMemoryFilter, DesktopMemoryItem, DesktopMemoryChangeResult, DesktopMemoryChangeStatus,
+    DesktopMemoryDeleteResult, DesktopDeleteProgress, DesktopDeleteProgressState,
 )
 from .recorder import DEFAULT_MAX_DURATION_SECONDS
 
@@ -63,6 +66,7 @@ class AsyncDesktopThread(QThread):
     library_loaded = Signal(object)
     library_changed = Signal(object)
     library_indexing_finished = Signal(object)
+    memory_deleted = Signal(object)
     operation_failed = Signal(str, str)
     shutdown_finished = Signal()
 
@@ -194,6 +198,10 @@ class AsyncDesktopThread(QThread):
     def request_library_indexing_retry(self) -> None:
         self._submit("library_retry", lambda c: c.reconcile_missing_indexes(), self.library_indexing_finished.emit)
 
+    def request_delete_memory(self, item: DesktopMemoryItem, backup_output: Path) -> None:
+        self._submit("library_delete", lambda c: c.delete_memory(memory_id=item.id,
+            expected_revision=item.revision, backup_output=backup_output), self.memory_deleted.emit)
+
     def request_shutdown(self) -> None:
         if self._shutdown_requested.is_set():
             return
@@ -285,6 +293,40 @@ class MemoryEditDialog(QDialog):
     @property
     def content(self) -> str:
         return self.editor.toPlainText() if self.editor.document().isModified() else self._original
+
+
+class MemoryDeleteDialog(QDialog):
+    """Explicit destruction confirmation; never displays canonical content."""
+
+    def __init__(self, item: DesktopMemoryItem, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Delete Memory permanently")
+        layout = QVBoxLayout(self)
+        self.warning = QLabel(
+            f"Delete this memory permanently?\n\nMemory UUID: {item.id}\nRevision: {item.revision}\n"
+            f"Status: {'Archived' if item.archived else 'Active'}\n\n"
+            "Archive is a reversible alternative. Delete is permanent in the canonical database.\n"
+            "Recovery requires the retained PostgreSQL backup. A full backup and an actual\n"
+            "restore verification must succeed before deletion.\n\nType exactly DELETE to continue.", self)
+        self.warning.setWordWrap(True)
+        layout.addWidget(self.warning)
+        self.confirmation = QLineEdit(self)
+        layout.addWidget(self.confirmation)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        self.delete_button = self.buttons.addButton("Delete permanently", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.delete_button.setAutoDefault(False)
+        self.delete_button.setEnabled(False)
+        cancel = self.buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        cancel.setDefault(True)
+        cancel.setFocus()
+        self.confirmation.textChanged.connect(lambda text: self.delete_button.setEnabled(text == "DELETE"))
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+    def accept(self) -> None:
+        if self.confirmation.text() == "DELETE":
+            super().accept()
 
 
 class MainWindow(QMainWindow):
@@ -418,9 +460,10 @@ class MainWindow(QMainWindow):
         self.library_edit_button = QPushButton("EDIT", self.library_group)
         self.library_archive_button = QPushButton("ARCHIVE", self.library_group)
         self.library_restore_button = QPushButton("RESTORE", self.library_group)
+        self.library_delete_button = QPushButton("DELETE", self.library_group)
         self.library_retry_button = QPushButton("RETRY INDEXING", self.library_group)
         for button in (self.library_edit_button, self.library_archive_button,
-                       self.library_restore_button, self.library_retry_button):
+                       self.library_restore_button, self.library_delete_button, self.library_retry_button):
             action_row.addWidget(button)
         library_layout.addLayout(action_row)
         self.library_status = QLabel("Starting...", self.library_group)
@@ -465,6 +508,7 @@ class MainWindow(QMainWindow):
         self.library_edit_button.clicked.connect(self._edit_library_memory)
         self.library_archive_button.clicked.connect(self._archive_library_memory)
         self.library_restore_button.clicked.connect(self._restore_library_memory)
+        self.library_delete_button.clicked.connect(self._delete_library_memory)
         self.library_retry_button.clicked.connect(self._retry_library_indexing)
         self._update_controls()
 
@@ -481,6 +525,7 @@ class MainWindow(QMainWindow):
         self._worker.library_loaded.connect(self._on_library_loaded)
         self._worker.library_changed.connect(self._on_library_changed)
         self._worker.library_indexing_finished.connect(self._on_library_indexing_finished)
+        self._worker.memory_deleted.connect(self._on_memory_deleted)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._worker.shutdown_finished.connect(self._on_shutdown_finished)
         self._worker.finished.connect(self._on_shutdown_finished)
@@ -507,6 +552,7 @@ class MainWindow(QMainWindow):
         self.library_edit_button.setEnabled(library_ready and item is not None and not item.archived)
         self.library_archive_button.setEnabled(library_ready and item is not None and not item.archived)
         self.library_restore_button.setEnabled(library_ready and item is not None and item.archived)
+        self.library_delete_button.setEnabled(library_ready and item is not None)
         self.library_retry_button.setVisible(self._library_indexing_degraded)
         self.library_retry_button.setEnabled(library_ready and self._library_indexing_degraded)
 
@@ -600,6 +646,42 @@ class MainWindow(QMainWindow):
         if self.library_restore_button.isEnabled() and item is not None:
             self._begin_library_action("Restoring memory...")
             self._worker.request_restore_memory(item.id)
+
+    @Slot()
+    def _delete_library_memory(self) -> None:
+        item = self._selected_library_item()
+        if not self.library_delete_button.isEnabled() or item is None:
+            return
+        self._begin_library_action("Confirm permanent deletion...")
+        accepted = MemoryDeleteDialog(item, self).exec() == QDialog.DialogCode.Accepted
+        if self._closing:
+            return
+        output = ""
+        if accepted:
+            suggested = Path.home() / f"kulai_memory_before_delete_{datetime.now():%Y%m%d_%H%M%S}.dump"
+            output, _ = QFileDialog.getSaveFileName(self, "Choose a NEW backup outside the repository",
+                str(suggested), "PostgreSQL backup (*.dump)",
+                options=QFileDialog.Option.DontConfirmOverwrite)
+        if self._closing:
+            return
+        if not accepted or not output:
+            self._busy = self._library_active = False
+            self.library_status.setText("Delete cancelled")
+            self._update_controls()
+            return
+        self.library_status.setText("Preparing verified backup...")
+        self._worker.request_delete_memory(item, Path(output))
+
+    @Slot(object)
+    def _on_memory_deleted(self, result: DesktopMemoryDeleteResult) -> None:
+        if self._closing:
+            return
+        self._busy = self._library_active = False
+        self._library_selection_id = None
+        self.library_content.clear()
+        self._on_library_loaded(tuple(item for item in self._library_items if item.id != result.memory_id))
+        self.library_status.setText(f"Memory deleted. Retain backup: {result.backup_path}")
+        self._refresh_library(preserve_status=True)
 
     @Slot(object)
     def _on_library_changed(self, result: DesktopMemoryChangeResult) -> None:
@@ -804,8 +886,14 @@ class MainWindow(QMainWindow):
         self._worker.request_stop_and_process()
 
     @Slot(object)
-    def _on_progress(self, progress: DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress) -> None:
+    def _on_progress(self, progress: DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress | DesktopDeleteProgress) -> None:
         if self._closing:
+            return
+        if isinstance(progress, DesktopDeleteProgress):
+            if self._library_active:
+                self.library_status.setText({DesktopDeleteProgressState.PREPARING_BACKUP: "Preparing verified backup...",
+                    DesktopDeleteProgressState.VERIFYING_BACKUP: "Verifying backup restore...",
+                    DesktopDeleteProgressState.DELETING: "Deleting memory..."}[progress.state])
             return
         if isinstance(progress, DesktopVoiceQuestionProgress):
             if self._voice_question_active:
@@ -910,7 +998,8 @@ class MainWindow(QMainWindow):
                 self.library_table.setRowCount(0)
                 self.library_content.clear()
             self._update_controls()
-            if message == "Memory changed. Reload it before editing." or message == "Archived memories cannot be edited.":
+            if message in {"Memory changed. Reload it before editing.", "Memory changed. Reload it before deleting.",
+                           "Archived memories cannot be edited."}:
                 self._refresh_library(preserve_status=True)
             return
         if operation in {"ask", "voice_question_start", "voice_question"}:

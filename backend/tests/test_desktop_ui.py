@@ -105,6 +105,12 @@ def test_worker_starts_runtime_on_dedicated_asyncio_thread() -> None:
                 memories=(),
             )
 
+        async def list_memory_library(self, **kwargs):
+            return ()
+
+        async def list_recent(self):
+            return ()
+
         async def shutdown(self) -> None:
             await asyncio.sleep(0)
 
@@ -119,7 +125,7 @@ def test_worker_starts_runtime_on_dedicated_asyncio_thread() -> None:
         QTest.qWait(10)
     assert startup_spy.count() == 1
     for _ in range(200):
-        if window.status_label.text() == "Ready":
+        if window.status_label.text() == "Ready" and not window._busy:
             break
         QTest.qWait(10)
     assert window.status_label.text() == "Ready"

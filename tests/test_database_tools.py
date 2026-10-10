@@ -37,6 +37,7 @@ from kulai_memory.database_safety import (
     vector_embedding_dimension_check,
 )
 from scripts import db_backup, db_backup_restore_drill, db_restore_smoke, postgres
+from kulai_memory import backup_service
 
 
 def test_compose_wrapper_always_uses_backend_env_file() -> None:
@@ -223,22 +224,22 @@ def test_failed_backup_removes_only_its_partial_file(
     async def snapshot(*args, **kwargs):
         return DatabaseSnapshot(("head",), MemoryFingerprint(0, "a" * 64),
                                 VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64))
-    monkeypatch.setattr(db_backup, "database_snapshot_url", snapshot)
-    monkeypatch.setattr(db_backup, "run_database_doctor", fake_doctor)
-    monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
-    monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
+    monkeypatch.setattr(backup_service, "database_snapshot_url", snapshot)
+    monkeypatch.setattr(backup_service, "run_database_doctor", fake_doctor)
+    monkeypatch.setattr(backup_service, "find_postgres_tool", lambda name: Path(name))
+    monkeypatch.setattr(backup_service, "postgres_tool_version", lambda path: "18.6")
     monkeypatch.setattr(
         db_backup,
         "database_config",
         lambda: SimpleNamespace(async_url="postgresql+asyncpg://test@localhost/db"),
     )
     monkeypatch.setattr(
-        db_backup,
+        backup_service,
         "postgres_connection",
         lambda config: PostgresConnection("localhost", 5432, "user", "secret", "db"),
     )
     monkeypatch.setattr(
-        db_backup,
+        backup_service,
         "run_postgres_tool",
         lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "failed"),
     )
@@ -281,21 +282,21 @@ def test_successful_backup_is_atomic_and_uses_portable_archive_options(
     async def snapshot(*args, **kwargs):
         return DatabaseSnapshot(("head",), MemoryFingerprint(0, "a" * 64),
                                 VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64))
-    monkeypatch.setattr(db_backup, "database_snapshot_url", snapshot)
-    monkeypatch.setattr(db_backup, "run_database_doctor", fake_doctor)
-    monkeypatch.setattr(db_backup, "find_postgres_tool", lambda name: Path(name))
-    monkeypatch.setattr(db_backup, "postgres_tool_version", lambda path: "18.6")
+    monkeypatch.setattr(backup_service, "database_snapshot_url", snapshot)
+    monkeypatch.setattr(backup_service, "run_database_doctor", fake_doctor)
+    monkeypatch.setattr(backup_service, "find_postgres_tool", lambda name: Path(name))
+    monkeypatch.setattr(backup_service, "postgres_tool_version", lambda path: "18.6")
     monkeypatch.setattr(
         db_backup,
         "database_config",
         lambda: SimpleNamespace(async_url="postgresql+asyncpg://test@localhost/db"),
     )
     monkeypatch.setattr(
-        db_backup,
+        backup_service,
         "postgres_connection",
         lambda config: PostgresConnection("localhost", 5432, "user", "secret", "db"),
     )
-    monkeypatch.setattr(db_backup, "run_postgres_tool", fake_run)
+    monkeypatch.setattr(backup_service, "run_postgres_tool", fake_run)
     output = tmp_path / "backup.dump"
 
     size, digest, version = asyncio.run(db_backup.create_backup(output, force=False))

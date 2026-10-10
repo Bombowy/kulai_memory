@@ -1,289 +1,180 @@
-﻿TASK 6B.1 — Desktop Memory Library + safe Edit / Archive / Restore UI
-Raport końcowy, 2026-10-09
-Repo: C:\Bombowy\Projekty\kulai_memory
-Decyzja: OK DO COMMITA
-Nie wykonano commita ani pusha. Main automated READ ONLY; bez manualnych main mutations.
-Raport nie zawiera real main Memory content, raw audio, wektorów, promptów, payloadów ani credentials.
+TASK 6B.2 safety correction — verified-backup -> delete gap
 
 1. Start commit/status
-HEAD: 98c8d8728076c4b7adaf5eb9aab11b13a2ab53f5
-feat: add Desktop voice questions through existing Memory RAG
-6A.3 był committed/pushed przed zmianami; git ls-remote origin refs/heads/main zwrócił ten sam hash.
-Start git status: working tree clean; main...origin/main. Vendor clean.
-Ostatnie 5 commitów: 98c8d87, 339cd30, 3c0a27b, d060298, 76f7df0.
-Submodule: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Start db_doctor PASS, main revision kulai_memory_0004, complete DatabaseSnapshot BEFORE zapisany.
+HEAD: 8937bc6800e46a93e654e823b8a2b9cb1b74b8ba (TASK 6B.1, committed/pushed).
+main i origin/main pozostają zgodne. Korekta rozpoczęła się na istniejącym, niecommitowanym WIP TASK 6B.2; wcześniejsze zmiany zachowano. Vendor clean, gitlink 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Przed testami korekty wykonano świeży read-only db_doctor i complete DatabaseSnapshot main.
+Nie wykonano commit ani push. Żaden automated test nie wykonuje main DELETE/lifecycle writes ani nie używa real main Memory/audio w LLM/STT.
 
-2. Architecture audit
-Przeczytano application/lifecycle.py, lifecycle_persistence.py, persistence/repository.py, automatic_indexing.py, desktop/controller.py, app.py, models.py oraz istniejące lifecycle/Desktop/RAG testy.
-MemoryLifecycleService jest źródłem reguł edit/archive/restore, revision conflict i atomic vector removal.
-Host change_memory zamyka canonical transaction/session po COMMIT, następnie uruchamia existing indexer.ensure i rozróżnia indexing failure od canonical failure.
-Desktop nadal ma jeden QThread/asyncio loop, operation lock, engine i shared providers. Qt zawiera dialogs/rendering, controller woła istniejące contracts. Nie skopiowano lifecycle/RAG logic ani promptu do Qt.
+2. Dokładny gap
+create_verified_backup sprawdzało dump/source po prawdziwym restore, ale tylko przed zwróceniem VerifiedBackupResult. DesktopController następnie wykonywał wyłącznie cancellation guard i revision-safe delete.
+Zmiana po powrocie fabryki mogła unieważnić complete backup snapshot token. ARCHIVE/RESTORE selected Memory zmienia archived_at/vector bez zmiany revision; zmiana innej Memory, vector/tombstone lub pliku dump również nie jest chroniona expected_revision selected Memory.
+Poprzednie sprawdzenie wewnątrz fabryki nie zastępowało pre-delete revalidation. Korekta dodaje osobną, świeżą kontrolę po jej powrocie.
 
-3. Library read contract
-Nowy neutralny MemoryLibraryRepository.list_library(*, archived: bool, limit: int) -> tuple[Memory, ...].
-To osobny read port; nie zmieniono istniejącego MemoryRepository/list_recent ani jego callerów.
-Nowy host read_memory_library używa jednej krótkiej REPEATABLE READ, READ ONLY snapshot, robi rollback i zamyka session przed zwróceniem wyniku.
-Limit walidowany 1..100, bool i inne typy odrzucone. Filter archived jest jawnym bool w read adapterze.
-Brak model requests, embeddings, vector reads czy transcription diagnostics w Library read.
+3. Reusable host-only helper i miejsce wywołania
+backend/src/kulai_memory/backup_service.py: async revalidate_verified_backup(backup: VerifiedBackupResult, *, config: DbConfig) -> None.
+DesktopController.delete_memory wywołuje helper bezpośrednio po await verified_backup_factory i przed cancellation guard/DELETING/delete_canonical_memory.
+Helper używa istniejącego database_snapshot_url: nowy complete read-only snapshot obejmuje schema revision, Memory, vectors i tombstones. Porównanie jest pełne, nie tylko count lub selected revision.
+File validation reuse: istniejące outside-repo/no-symlink/no-junction/regular-path guards. Odczyt dumpu sprawdza regular file, rozmiar, SHA-256 oraz stabilność tożsamości/rozmiaru/mtime podczas hashowania. force=True dotyczy wyłącznie walidacji istniejącego pliku; nie wykonuje zapisu/overwrite.
+Brak nowego backup/restore/deletion algorithm; existing create_verified_backup i jego wewnętrzne kontrole pozostają.
 
-4. Active/archived query behavior
-ACTIVE: archived_at IS NULL. ARCHIVED: archived_at IS NOT NULL, a nie suma active+archived.
-ORDER BY created_at DESC, id DESC; LIMIT bounded.
-Owned PG test z równymi created_at potwierdza deterministic UUID DESC i limit=2.
-Existing Recent Memory pozostaje active only z dotychczasowym limit=20; production list_recent implementation bez zmian.
-Library REFRESH odczytuje wybrany filter, potem istniejące Recent Memory na workerze. Startup automatycznie ładuje Library po Ready. Voice/RAG questions nadal nie wywołują Recent refresh.
+4. Exact operation order
+Input/path validation -> existing Desktop operation lock -> strict db_doctor PASS -> full pg_dump -> size/SHA-256 -> actual pg_restore do owned temporary DB -> complete restored/source snapshot equality i source unchanged -> VerifiedBackupResult zwrócony -> guard pending shutdown/cancellation -> PRE-DELETE fresh full source snapshot == token.source_snapshot -> retained regular file nadal istnieje, size == token.size_bytes, SHA-256 == token.sha256 -> cancellation/shutdown guard -> DELETING -> existing revision-safe atomic delete.
+W delete transaction pozostaje ingestion advisory lock -> canonical FOR UPDATE -> expected_revision check -> canonical Memory/vector/tombstone mutation -> COMMIT.
+Helper ani controller nie uruchamiają modeli w delete flow.
 
-5. Desktop models
-DesktopMemoryItem: id, created_at, revision, archived, content.
-DesktopMemoryFilter: ACTIVE/ARCHIVED.
-DesktopMemoryChangeStatus: EDITED, UNCHANGED, ARCHIVED, ALREADY_ARCHIVED, RESTORED, ALREADY_ACTIVE.
-DesktopMemoryChangeResult: item, status, indexing_degraded.
-Frozen neutral dataclasses; brak Qt/DB models/vector metadata/transcription diagnostics.
-Dodano fixed safe Desktop errors dla read/input/change/conflict/archived edit. Application core nadal bez Qt i SQLAlchemy imports.
+5. Backup result/token contract
+VerifiedBackupResult pozostaje frozen: path, size_bytes, sha256, source_snapshot. Nie rozszerzono go o content, credentials, vector values ani tombstone identities.
+Mismatch current full snapshot, missing/nonregular dump, unsafe path, size/hash mismatch lub błąd odczytu -> ZERO DELETE. Backup nigdy nie jest automatycznie usuwany.
+Safe Desktop error: Backup verification could not be completed. Memory was not deleted; retain any backup file.
 
-6. Controller methods
-list_memory_library(*, filter=ACTIVE, limit=100)
-edit_memory(*, memory_id, expected_revision, content)
-archive_memory(*, memory_id)
-restore_memory(*, memory_id)
-reconcile_missing_indexes() — existing bounded retry, default max100.
-Library mutations wołają change_memory z istniejącym session factory i tym samym controller._indexer. Nie tworzą nowych providerów/runtime.
-Operation lock + mode/task/pending-save guards serializują library reads/mutations/retry względem Voice Note, Text ASK, Voice ASK i pending note save/indexing retry.
-Current library task jest śledzony; shutdown cancels/drains go przed resource close. CancelledError propaguje.
+6. A — ARCHIVE after verified factory return
+Owned real PostgreSQL + real pg_dump/restore. Mutation jest wstrzyknięta przy wejściu do pre-delete helpera, po pełnym powrocie verified factory (kolejność assertowana).
+Selected Memory pozostaje revision1; archived_at ustawione i vector usunięty. Complete current snapshot != backup token. Produkcyjny helper blokuje delete; spy delete_calls=0.
+Snapshot po blocked attempt == snapshot po wyłącznie intencjonalnym ARCHIVE; Memory archived pozostaje, tombstones=0, retained dump istnieje.
 
-7. UI layout
-Nowy QGroupBox Memory Library w przewijanym Desktop layout, aby dodatkowy panel był dostępny także na mniejszym ekranie.
-Filter Active/Archived, REFRESH, table Created/Revision/Status/Content preview (do160 chars), full read-only content panel.
-Buttons EDIT, ARCHIVE, RESTORE, conditional RETRY INDEXING; status label.
-No selection: action buttons disabled. Active: EDIT+ARCHIVE; Archived: RESTORE. Row selection pokazuje pełną treść.
-Dialog MemoryEditDialog wyświetla canonical content i observed id/revision. Save blank content disabled; Cancel nic nie zapisuje.
-Archive confirmation: Archive this memory?, default No.
-Library controls oraz Ask/Voice controls są disabled podczas konfliktujących operacji. SQL/BGE są wyłącznie na existing worker asyncio thread.
-Qt QVariant zwraca str enum jako tekst; UI jawnie konwertuje go do DesktopMemoryFilter przed wywołaniem neutralnego kontraktu.
-Brak DELETE button.
+7. B — RESTORE after verified factory return
+Fixture jest archived przed backupem. Po powrocie factory controlled writer przywraca Memory i indeksuje przez istniejący shared indexer.
+Selected revision pozostaje1, archived_at znika i vector wraca. Full snapshot mismatch blokuje delete; delete_calls=0, brak nowego tombstone, restored canonical state pozostaje, dump retained.
+Embedding request w tym przypadku pochodzi wyłącznie z intencjonalnego zewnętrznego RESTORE, nie z DELETE/revalidation.
 
-8. Edit flow
-UI zapamiętuje id/expected_revision wybranego row przy otwarciu dialogu i przesyła dokładny nowy content.
-Existing MemoryLifecycleService weryfikuje revision pod lockiem, zmienia content i revision+1 oraz atomically usuwa stary vector.
-Canonical COMMIT/session close następuje przed existing shared BGE indexer.ensure i vector insert z nową revision.
-Wynik i refresh pokazują canonical revision/content. Same identity, ingestion_id, created_at, source/session/metadata pozostają zachowane.
-Owned proof: Venus revision1 -> Jupiter revision2, vector metadata revision2, native1024.
+8. C — different Memory changes after verified factory return
+Owned fixture zawiera również drugą Memory/vector. Po return factory ARCHIVE dotyczy wyłącznie drugiej Memory.
+Wybrana Memory wraz z revision jest identyczna. Complete Memory/vector snapshot różni się, a produkcyjny helper blokuje delete; delete_calls=0.
+Snapshot po próbie dokładnie zachowuje tylko intencjonalną zmianę drugiej Memory; tombstones=0 i backup retained.
 
-9. Unchanged edit
-Identical canonical content -> UNCHANGED, revision bez zmiany, zero vector/canonical mutation i zero reindex/BGE request.
-Minimalna poprawka host helpera: po MemoryLifecycleStatus.UNCHANGED return przed indexer.ensure.
-Nie powstała druga implementacja edit; core pozostaje źródłem porównania/revision checks.
-Owned tests potwierdzają complete snapshot equality i brak embedding także wtedy, gdy vector brakuje po wcześniejszym indexing failure. Missing vector naprawia jawny RETRY INDEXING, nie noop save.
-Niemodyfikowany dialog zachowuje original content, także CRLF, zamiast przypadkowo normalizować go przez Qt.
+9. D — post-verification archive tamper
+Dwa owned deterministic cases po return verified factory:
+- dopisanie danych do retained .dump -> size mismatch -> delete_calls=0;
+- zmiana jednego bajtu przy identycznym rozmiarze -> SHA-256 mismatch -> delete_calls=0.
+Source DatabaseSnapshot jest niezmieniony, Memory/vector pozostają, tombstones=0, zmodyfikowany dump nie jest usuwany i nie jest uznawany za verified recovery archive.
+Unit tests dodatkowo pokrywają missing dump, directory/nonregular path, symlink guard, source revision/Memory/vector/tombstone fingerprint mismatch oraz safe snapshot failure.
 
-10. Revision conflict
-Stale expected_revision -> existing memory.revision_conflict -> DesktopMemoryConflictError.
-Public UI message: Memory changed. Reload it before editing.
-UI automatycznie reloaduje wybrany Memory; editor nie nadpisuje nowszej revision.
-Owned no-write proof: stale revision1 przeciw revision2 pozostawia complete snapshot i BGE count bez zmian.
-Controller/unit UI testy potwierdzają latest content po reload i brak private old/new text w error.
+10. E — normal delete/recovery proof
+Owned control bez zmian po return factory: factory_returned -> pre_delete_revalidation -> revalidation_passed -> production delete.
+Active Memory/vector/tombstone: 1/1/0 -> 0/0/1, dokładne vector_deleted_count=1. Archived normal regression: 1/0/0 -> 0/0/1, vector_deleted_count=0.
+Actual verified retained backup jest ponownie odtwarzany do drugiej owned restore DB po usunięciu source Memory: complete restored snapshot == pre-delete source. Source nie jest automatycznie przywracany.
+Library/Recent refresh, no-context RAG po delete, retired ingestion replay z tą samą i inną treścią oraz fresh ingestion identity nadal PASS.
 
-11. Indexing failure after edit
-Jeśli canonical COMMIT się udał, result status pozostaje EDITED z indexing_degraded=true, a nie edit failed.
-UI: Memory was updated, but semantic indexing needs retry.
-Canonical returned item natychmiast zastępuje stary cached row, potem wykonywany jest read-only refresh. Nowa revision/content nie są udawane jako stara treść.
-RETRY INDEXING wywołuje istniejące bounded reconcile, bez ponownego edit/save.
-Owned failure test: content Jupiter/revision2 durable, vector0; retry zmienia tylko vector0->1, canonical/tombstone fingerprints bez zmian.
-Closing podczas post-commit indexing cancels operation; committed canonical remains, startup reconciliation może naprawić crash gap. Provider close dokładnie raz; brak stale UI success.
+11. Stale-revision second line of defense
+Existing edit-after-backup test pozostaje: revision1 ->2 po verified backup zostaje teraz zatrzymana przez full snapshot token (DesktopBackupError), zero delete mutation.
+Drugi wariant edytuje canonical Memory dopiero po udanym produkcyjnym revalidate_verified_backup: expected_revision=1 jest odrzucone pod canonical lockiem w tej samej delete transaction (DesktopDeleteConflictError).
+W obu przypadkach revision2 i latest vector pozostają, complete snapshot po edit == po próbie delete, tombstones=0, dump retained. Revision protection nie została zastąpiona snapshotem.
 
-12. Archive flow
-ARCHIVE tylko dla active row po confirmation Yes. No/Cancel -> zero mutation.
-Existing archive ustawia archived_at, zostawia canonical Memory, zachowuje revision i atomically usuwa vector w tej samej transaction.
-Archive: zero BGE, zero Qwen, zero tombstone.
-Row znika z Active po success i jest dostępny w Archived. Recent Memory refresh pokazuje active only.
-Archive jest reversible normal removal; hard delete UX pozostaje na osobny TASK6B.2.
+12. Cancellation/shutdown/thread behavior
+Controller sprawdza _closing/task.cancelling zarówno przed nową rewalidacją, jak i tuż przed delete. CancelledError propaguje, nie jest zamieniany na safe failure ani połykany.
+Nowy file/hash read działa w asyncio.to_thread na istniejącym workerze. Shield/drain kończy rozpoczęty odczyt przed propagacją cancellation; nie daje pozwolenia na delete.
+Testy: cancellation podczas revalidation snapshot, cancellation podczas offloaded hash read (drain), pending shutdown/cancellation po udanej revalidation -> zero delete. Existing dump/restore drain, delete rollback przed commit oraz durable committed delete i brak stale UI signal po close nadal PASS.
+Qt nie wykonuje SQL/pg_dump/pg_restore/hash. Existing runtime/providers/resources ownership pozostaje.
 
-13. Restore flow
-RESTORE dla archived row woła existing helper: archived_at -> NULL, canonical COMMIT, potem same shared indexer.ensure latest revision.
-Row wraca do Active i znika z Archived; content/id/revision zachowane.
-Index failure po restore pozostawia canonical active state, UI: Memory was restored, but semantic indexing needs retry.
-Owned restore-failure test potwierdza durable active Memory i retry tylko vector repair, bez drugiego restore/save.
+13. Privacy/model invariants i application boundaries
+Mismatch i internal exception trafiają do jednego safe DesktopBackupError z suppress cause; errors nie zawierają PRIVATE sentinel, query/context/content/path credentials lub provider payload.
+DELETE/revalidation: Whisper requests=0, BGE requests=0, Qwen requests=0. Nie utworzono nowych providerów ani drugiego Desktop RAG runtime.
+Existing controlled/real Desktop deletion fixture: Whisper providers_created=1, BGE clients=1/closed=1/native_dimension=1024/dimensions_override_count=0, Qwen clients=1/closed=1/model=qwen3.5:9b/requests=0. BGE requests=2 to fixture indexing i post-delete query.
+Application core bez Qt/SQLAlchemy/admin backup logic; schema/tombstone/deletion algorithm, Android, WebSocket, BGE/Qwen/Whisper config bez zmian w tej korekcie.
 
-14. RAG interaction proof
-Owned synthetic Memory: The green dragon currently lives on Venus.
-Edit -> The green dragon currently lives on Jupiter., revision2.
-Text ASK -> ANSWERED, Jupiter/Jowisz, exact canonical Memory citation.
-Archive -> Text ASK i Voice ASK INSUFFICIENT_CONTEXT, canonical insufficient answer, zero citations; zero Qwen generation przy braku evidence.
-Restore -> Voice ASK ANSWERED, Jupiter/Jowisz, ten sam exact Memory ID, revision2 vector.
-Existing canonical MemoryRagRuntime/retrieval/prompt/citation validation pozostają bez zmian.
-Pytania są read-only: snapshot before ask == after ask, no commits/writes. Nie zapisano questions jako Memory ani conversation history.
+14. Focused controller/UI/backup/deletion regressions
+230 PASS, 1 SKIP (4.58s), exit0. W tym: controller delete30, delete UI9, backup/revalidation21 (razem60 PASS); new actual-gap cases, cancellation, backup/restore CLI, pre-migration safeguards, deletion/tombstone, snapshot fingerprints i application boundaries.
+Początkowy focused run przed dodaniem dodatkowego cancellation-during-revalidation case: 59 PASS (3.83s); końcowy większy suite obejmuje wszystkie60.
+SKIP: platformowy test real symlink creation na Windows bez wymaganych uprawnień. Deterministic symlink guard tests PASS.
+Evidence: .venv/task6b2_gap/regression.xml i regression.log.
 
-15. Provider reuse counters
-Real owned Library scenario:
-Whisper providers_created=1, inference_requests=3 (fixture Voice Note + archived Voice ASK + restored Voice ASK).
-BGE clients=1, requests=7, closed=1, native_dimension=1024, dimensions_override_count=0.
-Requests: note indexing, edit indexing, edited text query, archived text query, archived voice query, restore indexing, restored voice query.
-Qwen clients=1, requests=2, closed=1, model=qwen3.5:9b; archived asks nie uruchamiają LLM.
-Engine=1. indexer.provider == controller shared BGE == RAG retrieval provider.
-Library reads, archive, noop i conflict nie zwiększają model counters.
-Controlled owned wariant ma te same BGE7/Qwen2 counts i exactly-once close. Unit shutdown tests sprawdzają reused indexer/BGE/Qwen i single resource cleanup.
-Real Whisper regression nadal providers=1/models_loaded=1/inference=2 dla note+voice question.
+15. Owned PostgreSQL delete/gap integrations
+19 PASS (101.32s), exit0; flags PostgreSQL/Ollama/LLM=1. Wyłącznie owned synthetic source/restore DB.
+Cases obejmują actual gap archive/restore/other Memory, size/hash tamper, control, oba stale edit warianty, Active/Archived/real-BGE delete+retained recovery, restore/source failure, vector/commit/cancel rollback i shutdown dump/verification/committed.
+W nowym gap suite intencjonalna mutation następuje po pełnym powrocie verified factory, przed produkcyjnym helperem i przed produkcyjnym delete, nie tylko podczas backup/restore.
+Evidence: .venv/task6b2_gap/owned_delete.xml i owned_delete.log.
 
-16. Controller tests
-21 nowych controller cases PASS; razem z UI32 PASS w focused run (2.20s).
-Active/archived list, deterministic timestamp/UUID ties, bounded limits przed IO, neutral model privacy, changed revision, noop, shared indexer only when needed, archive no embedding, restore indexing.
-Durable edit/restore po index failure i retry bez ponownego save; revision conflict; input/generic errors safe; serialization note/question/pending/textASK.
-Shutdown during post-commit indexing propaguje cancellation, zachowuje canonical revision2 i zamyka resources raz.
-Dotychczasowy focused Desktop/voice/text/voice-question/lifecycle/boundaries run: 100 PASS.
-Shared fake infrastructure rozszerzono o Library read i short read-only session, zachowując active-only Recent semantics.
+16. Backend full
+510 PASS, 107 SKIP opt-in, 1 existing Starlette/AnyIO deprecation warning (13.77s), exit0.
+Evidence: .venv/task6b2_gap/backend_full.xml i backend_full.log.
 
-17. UI tests
-11 nowych UI cases PASS; oddzielny final UI run także11 PASS.
-Widgets/filter/table/full content/selection actions; edit dialog exact content/observed revision i cancel; CRLF noop/blank Save; archive confirmation; restore row removal.
-Degraded canonical rendering/retry; conflict reload; safe read failure clears stale selection/content; controls disabled i ponownie enabled.
-Real AsyncDesktopThread path ładuje Library, wykonuje edit i close podczas indexing; zero stale success/unhandled pending task errors.
-Qt optional dependency guard i offscreen environment zgodne z istniejącymi testami. Bez real network/microphone/model i bez pixel assertions.
-Existing Voice Note/Text ASK/Ask by Voice UI/controller tests PASS w backend/root.
+17. Root full with existing opt-ins
+865 PASS, 2 SKIP, 1 existing Starlette/AnyIO deprecation warning (359.31s / 0:05:59), exit0; 867 collected.
+Backend integration cases w root run: 106 PASS, 1 SKIP (107 total). Nowa korekta dodaje21 unit i7 owned cases względem wcześniejszego root run TASK 6B.2 (837 ->865 PASS).
+SKIP1: optional external real speech test — KULAI_WHISPER_AUDIO is not set; controlled Whisper/model reuse tests PASS.
+SKIP2: Windows real symlink creation — Symlinks are unavailable to this process; deterministic guard tests PASS.
+KULAI_RUN_POSTGRES_INTEGRATION=1, KULAI_RUN_OLLAMA_INTEGRATION=1, KULAI_RUN_LLM_INTEGRATION=1, KULAI_RUN_WHISPER_INTEGRATION=1.
+Controlled/generated/local synthetic Whisper fixtures; KULAI_WHISPER_AUDIO celowo unset, bez mikrofonu/main user audio.
+Root obejmuje deletion/tombstone/index concurrency, lifecycle, Desktop Library/Voice Note/Text ASK/Ask by Voice, RAG, indexing/retrieval, backup/restore, websocket, application boundaries, real BGE/Qwen/controlled Whisper i frozen golden.
+Evidence: .venv/task6b2_gap/root_full.xml i root_full.log.
 
-18. Owned PG lifecycle
-Nowy integration file: 5 PASS standalone /24.25s, ponownie PASS w full root.
-Controlled i real BGE+Qwen pełny lifecycle; durable index failures edit/restore + retry; raw read adapter partition/order/limit/read-only proof.
-Oczekiwane zmiany tylko w canonical lifecycle fields i vectorach. Same id/ingestion/source/session/created_at/metadata preserved; tombstones unchanged.
-Noop/conflict i wszystkie Library reads/ASK są snapshot-stable. Restore canonical fingerprint wraca dokładnie do stanu edited.
-Complete snapshots final root run: revision=[kulai_memory_0004]; tombstone count=0/hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 we wszystkich stanach.
-Controlled:
-BEFORE Memory1/hash=dca2b6e3ce3a2b8428246e018b8ec8993b67f9bbce15419dccbdb7cc5e718cb4; Vector1/hash=aa3d79b5c62fb8ed63e8981e7a3be69627913800e0f598d184692c28f7f5735e
-EDITED Memory1/hash=ad13662d4343528dcd35b35cff9977f9518ce02e1b118b8f11ab39f9d6090d2d; Vector1/hash=407f0e9da8eb42daa091e4aa20d6f47634aa27cf5b2602160c7d270910999b09
-ARCHIVED Memory1/hash=a35f569a1b392e43b61cdba4fa74ddad148eeff31bfe04f768af9488b5b4330a; Vector0/hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-RESTORED Memory1/hash=ad13662d4343528dcd35b35cff9977f9518ce02e1b118b8f11ab39f9d6090d2d; Vector1/hash=0e9239c6c358f0824a59676f42dcff1c8bed7f2e34a0086fecfc1765e9e35562
-Real:
-BEFORE Memory1/hash=7fbeeb88e9f46d02ec21de2128bbc38315281b0c9fce60821937395505373dbb; Vector1/hash=5cae00aee3346f3c1bf2951e101147d9c0157fdadc8efe9685a55d928be17d6d
-EDITED Memory1/hash=b839ac912094508a179c9a1530bccd7335150af8e0bb442067e72232668bb921; Vector1/hash=2bbbe28ce70154641e91b282fdbf64db926a35c31e9f21cf8e2a326adbdec08d
-ARCHIVED Memory1/hash=3f2203c2582a50d3798c11f5a5ded277cb86605386d70d16c7ff68d074b0c9f3; Vector0/hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-RESTORED Memory1/hash=b839ac912094508a179c9a1530bccd7335150af8e0bb442067e72232668bb921; Vector1/hash=a7323cbbc9ce6f2a2f5e7c69ef43dfed5ae530dcb6d8f067351ffdc0dee9e2be
-Owned databases są usuwane przez istniejący process-owned helper. Nie wykonywano main mutations.
+18. Golden/real model regressions
+Golden SHA-256: 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7;16 documents/16 queries.
+Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0, zarówno PL i EN. Frozen thresholds pozostają0.60/0.80/0.90. Fingerprints unchanged=true.
+Golden BGE: clients=1, requests=32, closed=1, native_1024=32, overrides=0.
+Real Library edit/archive/restore RAG regresja PASS: BGE clients=1/requests=7/closed=1, Qwen clients=1/requests=2/closed=1, checkout during Qwen=[0,0].
+Real Desktop voice RAG checkout=[0,0,0]; real canonical RAG PL/unsupported/injection checkout=[0,0,0,0]. Wszystkie checks PASS na synthetic owned data.
+Dataset/baseline/hash/thresholds nie zostały zmienione. Bez score cutoff/reranker, zmian retrieval, nowych migracji ani model config.
+Real-model calls dotyczą wyłącznie owned synthetic fixtures; revalidation/delete nie używają modeli.
 
-19. Real BGE result
-bge-m3:567m-fp16/native1024 PASS.
-Edit embedding wyłącznie current revision2/Jupiter; restore embedding również revision2. Actual vector metadata revision2 i vector_dims1024 sprawdzone w owned DB.
-Same BGE client1 dla note indexing, edit/restore oraz retrieval; closed1, no dimensions override.
-Archive/noop/conflict zero embedding. Existing automatic-indexing/retrieval/frozen golden BGE regressions PASS.
+19. Complete main snapshot BEFORE/AFTER
+Before == After EXACTLY, potwierdzone assertionem complete DatabaseSnapshot oraz identycznymi plikami JSON/fingerprints.
+Revision before/after: kulai_memory_0004.
+Memory before/after: count8; sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e.
+Vector before/after: count8; sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f.
+Tombstone before/after: count1; sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147.
+Zero automated main mutation; zero main user Memory/audio model use.
+Snapshot zawiera complete durable Memory/vector/tombstone fingerprints i schema revision; output/report nie zawiera real Memory content ani raw row/vector/tombstone data.
+Evidence: .venv/task6b2_gap/main_before.json i main_after.json, read-only safety.py.
 
-20. Real Qwen result
-qwen3.5:9b PASS, local reusable Ollama provider.
-Po edit odpowiedź mentions Jupiter/Jowisz i exact Memory ID; po restore również Jupiter/Jowisz, bez invented citations.
-Po archive zarówno text jak voice question mają zero evidence -> insufficient, zero citations, zero Qwen calls.
-Nie wymagano exact wording. Full root potwierdza istniejące grounded-only/unsupported/injection/citation regressions.
-Żadne real main Memory nie trafiło do LLM.
+20. Pozostałe checks
+pip check: PASS — No broken requirements found.
+git diff --check: PASS, exit0, także po zapisie raportu.
+db_doctor: PASS na starcie i po wszystkich testach; JSON doctor16/16 checks,0 failed. PostgreSQL18.6, pgvector0.8.6, configured/actual vector1024, transaction_read_only=on.
+Vendor: clean, git status --porcelain empty; gitlink720d0f26c75ba4af24d395f98f15a37e4bd5067e unchanged.
+Retained synthetic root dumpy:3 pliki nadal istnieją poza repo; świeży filesystem size/SHA-256 check zgodny z results integracji, PASS.
+Android/WebSocket contract/generated files niezmienione, bez Android rebuild. Nie dodano TTS/schema/migration ani main automated writes.
 
-21. DB checkout proof
-Real Qwen request observations=[0,0], assert engine.pool.checkedout()==0 wewnątrz AsyncClient.chat.
-Controlled Qwen observations również[0,0]. BGE embed wszystkie requests także checkedout=0.
-Canonical edit/restore session zamknięta po COMMIT przed embedding; RAG read snapshot rollback/session close przed Qwen.
-Library reads READ ONLY, finally rollback, zero commits. Qt thread nie wykonuje PostgreSQL/BGE/provider calls.
-
-22. Main snapshot BEFORE/AFTER
-Complete DatabaseSnapshot IDENTICAL; automatyczna asercja porównania PASS.
-Revision BEFORE=AFTER=[kulai_memory_0004].
-Memories BEFORE=AFTER count8 sha256=45fc3a827058bfcf3b71fca5e88bb6a660d1cc9c8422aee29f116cc39fa6e47f
-Vectors BEFORE=AFTER count8 sha256=21e0ffd67dc551f59cfbcabca3d3e797a16100e8d727c6c193d84e71ee162f11
-Tombstones BEFORE=AFTER count1 sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Main był READ ONLY podczas automated tests; zero main lifecycle writes i zero main data use w LLM/STT.
-Safe snapshots zapisane w .venv/task6b1/main_before.json i main_after.json (ignored local artifacts).
-Nie wykonano manualnego main Library/edit/archive/restore/microphone smoke.
-
-23. Backend tests
-.venv\Scripts\python.exe -m pytest backend/tests -q
-441 PASS, 88 skipped opt-in, 1 existing Starlette/anyio deprecation warning;10.02s; exit0.
-Opt-in PG/BGE/Qwen/Whisper wykonane następnie w root full.
-Desktop/controller/UI, Voice Note, text RAG, voice question, lifecycle, indexing, retrieval, deletion/tombstones, backup/restore, websocket i boundaries PASS.
-
-24. Root tests
-.venv\Scripts\python.exe -m pytest -q -s -ra
-Flags=1: KULAI_RUN_POSTGRES_INTEGRATION, KULAI_RUN_OLLAMA_INTEGRATION, KULAI_RUN_LLM_INTEGRATION, KULAI_RUN_WHISPER_INTEGRATION.
-KULAI_WHISPER_AUDIO unset; tylko controlled/generated/silence audio, bez user audio. Host CUDA DLL dir użyty wyłącznie w PATH procesu testowego.
-777 PASS, 2 skipped, 1 existing Starlette/anyio warning;272.60s; exit0.
-Skips: optional external speech audio nie podano; symlinks niedostępne dla Windows procesu.
-Nowe Library tests plus wszystkie existing regressions PASS. Real controlled Whisper large-v3/cuda/int8_float16/VAD także PASS.
-Strict backup/restore0004 fingerprints match, source unchanged, tombstone replay protection i cleanup owned DB PASS.
-Expected negative CLI/provider testy emitują safe FAIL messages; nie są pytest failures, native root exit0.
-Android/protocol/mobile/generated files bez zmian; Android rebuild nie był wymagany.
-
-25. Golden
-Frozen dataset SHA256=73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7, bez zmian.
-16 documents/16 queries; Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0; PL i EN również1.0.
-Provider clients1/requests32/closed1/native1024=32/overrides0; fingerprints_unchanged=true.
-Dataset/evaluation thresholds bez zmian; nie dodano runtime score cutoff ani rerankera.
-
-26. pip check
-.venv\Scripts\python.exe -m pip check -> No broken requirements found.;exit0.
-Interpreter przez PyCharm SDK preflight: C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe, Python3.13.15/pip.
-
-27. git diff --check
-PASS, brak whitespace errors. Informacyjne istniejące LF->CRLF notices.
-Final working tree zawiera wyłącznie zakres tego taska i tracked wynik.txt.
-
-28. db_doctor
-Start i final PASS; scripts/db_doctor.py --json exit0, wszystkie16 checks ok=true.
-Expected/current head kulai_memory_0004, transaction_read_only=on, PostgreSQL18.6, pgvector0.8.6, vector(1024), canonical schema/revision/tombstone constraints PASS.
-Nie zmieniono schema i nie dodano migration0005.
-
-29. Vendor status
-git -C vendor/kulai_modules status --porcelain: empty.
-Gitlink nadal720d0f26c75ba4af24d395f98f15a37e4bd5067e, reusable modules bez zmian.
-HEAD nadal98c8d87, nie utworzono nowego commita ani pusha.
-
-30. Exact changed files
+21. Exact changed files w tej safety correction
 README.md
 backend/README.md
+backend/src/kulai_memory/backup_service.py
+backend/src/kulai_memory/desktop/controller.py
+backend/tests/test_desktop_delete.py
+backend/tests/test_verified_backup.py
+backend/tests/integration/test_desktop_delete_postgres.py
+wynik.txt
+Pozostałe już istniejące WIP TASK 6B.2 pozostawiono; pełna lista diff względem HEAD:
+backend/README.md
 backend/src/kulai_memory/application/__init__.py
+backend/src/kulai_memory/application/deletion.py
 backend/src/kulai_memory/application/ports.py
+backend/src/kulai_memory/backup_service.py
+backend/src/kulai_memory/database_safety.py
+backend/src/kulai_memory/deletion_persistence.py
 backend/src/kulai_memory/desktop/__init__.py
 backend/src/kulai_memory/desktop/app.py
 backend/src/kulai_memory/desktop/controller.py
 backend/src/kulai_memory/desktop/models.py
-backend/src/kulai_memory/library_persistence.py (new)
-backend/src/kulai_memory/lifecycle_persistence.py
 backend/src/kulai_memory/persistence/repository.py
-backend/tests/test_desktop_controller.py (shared fake read infrastructure)
-backend/tests/test_desktop_library.py (new)
-backend/tests/test_desktop_library_ui.py (new)
-backend/tests/integration/test_desktop_library_postgres.py (new)
-wynik.txt (ten raport, tracked)
-Brak zmian schema/migrations, retrieval/RAG prompt/vector namespace/BGE dimension/model, automatic indexer/provider implementation, Androida i WebSocket protocol.
+backend/tests/integration/test_desktop_delete_postgres.py
+backend/tests/integration/test_memory_deletion_postgres.py
+backend/tests/integration/test_pre_migration_backup_postgres.py
+backend/tests/integration/test_tombstone_backup_postgres.py
+backend/tests/test_desktop_delete.py
+backend/tests/test_desktop_delete_ui.py
+backend/tests/test_desktop_ui.py
+backend/tests/test_memory_deletion.py
+backend/tests/test_memory_persistence.py
+backend/tests/test_memory_tombstones.py
+backend/tests/test_verified_backup.py
+README.md
+scripts/db_backup.py
+scripts/db_restore_smoke.py
+tests/test_database_tools.py
+tests/test_pre_migration_backup.py
+wynik.txt
 
-31. Known limitations
-Library pokazuje maksymalnie100 ostatnich Memories per Active/Archived filter; brak pagination/search w tym tasku.
-Retry jest bounded reconciliation do100 missing indexes, nie osobnym ponownym edit/restore. Missing index po noop wymaga jawnego retry/startup reconciliation.
-Hard delete UI i verified-backup deletion UX pozostają na6B.2. Nie dodano TTS, Android/WebSocket RAG ani multi-turn conversation/score cutoff/rerankera.
-Istniejące thread-backed Whisper shutdown czeka na zakończenie odczytu przed cleanup; Qwen cancellation nadal bounded. Library post-commit cancellation może pozostawić durable missing-index gap, naprawiany przez existing reconciliation.
-Manualne sprawdzenie real main Library/mutations pozostaje po review; automated mutating fixtures wyłącznie owned DB.
+22. Known limitations
+Full-source revalidation jest świeżym read-only token check tuż przed delete transaction; nie wprowadza globalnej blokady wszystkich external DB writers. Selected revision nadal jest chroniona atomowo w delete transaction. Jest to requested minimum contract, bez zmiany deletion/tombstone algorithm.
+Partial/tampered dump pozostaje na dysku po failure, lecz nie stanowi verified recovery backup. Cancellation administracyjnego subprocessu/file read drainuje rozpoczętą pracę; delete po cancellation nie zaczyna się.
+Manual expendable main green-dragon DELETE/microphone smoke pozostaje po review; nie wykonano go automatycznie. Brak TTS, Android/WebSocket RAG, multi-turn i reviewed score cutoff/reranker.
 
-32. Proposed commit message
-feat: add revision-safe Desktop Memory Library with archive and restore
+23. Proposed commit message
+feat: add Desktop hard delete with verified backup token and revision protection
 
-33. Decyzja
+24. Decyzja
 OK DO COMMITA
-Active/Archived Library/full content działa. Edit revision-safe, noop zero reindex, stale editor cannot overwrite.
-Archive usuwa vector bez usuwania canonical Memory/tombstone; archived excluded z text/voice RAG; restore reindexes current revision i przywraca RAG.
-One shared BGE/Qwen/Whisper/engine, UI/model/DB work na existing worker, safe durable-indexing failure/retry, existing Voice/RAG bez regresji.
-Real owned BGE+Qwen PASS, full regressions PASS, main snapshot unchanged, frozen golden unchanged, vendor clean.
-Nie commitowano. Nie pushowano.
-
-KOREKTA DOKUMENTACJI PO TASK 6B.1
-
-Zakres
-Poprawiono wyłącznie nieaktualne zdanie w root README.md, w sekcji Memory edit/archive/restore (linie 594-596).
-Usunięto stwierdzenie, że lifecycle operations nie mają żadnego client action UI.
-Aktualny tekst:
-"Desktop Memory Library provides EDIT, ARCHIVE, and RESTORE controls. There is no public HTTP/WebSocket lifecycle endpoint yet, and hard DELETE has no Desktop UI."
-Treść wskazuje istniejące Desktop EDIT/ARCHIVE/RESTORE oraz nadal brak publicznego HTTP/WebSocket lifecycle endpointu i Desktop hard DELETE UI.
-Pozostała dokumentacja, kod i testy nie były zmieniane w ramach tej korekty.
-Wcześniejsze, niecommitowane zmiany TASK 6B.1 pozostawiono bez zmian; ich raport powyżej zachowano.
-Pliki zmienione w ramach korekty: README.md oraz wynik.txt (niniejszy raport).
-
-Weryfikacja
-git diff --check: PASS, exit code 0. Git zgłasza wyłącznie ostrzeżenia normalizacji LF/CRLF; brak błędów whitespace.
-git status --short: uruchomiono. Status nadal obejmuje wcześniejsze 16 plików TASK 6B.1, w tym README.md i wynik.txt; nie dodano kolejnych plików.
-Nie uruchamiano testów ani modeli: zmiana dotyczy wyłącznie dokumentacji.
-Nie wykonywano operacji na DB, nie odczytywano ani nie raportowano real Memory content.
-
-Wynik
-Wskazane stale wording jest zgodne z aktualnym stanem Desktop Memory Library.
-Nie commitowano. Nie pushowano.
+Blocker wskazany w safety correction został usunięty i udowodniony actual-gap tests. Snapshot token i revision protection działają jako osobne kontrole; regressions PASS, main unchanged, vendor clean.
+Nie commitowano. Nie pushowano. HEAD nadal 8937bc6800e46a93e654e823b8a2b9cb1b74b8ba.

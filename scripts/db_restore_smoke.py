@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from kulai_db import DbConfig
@@ -17,22 +16,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from kulai_memory.database_safety import (
-    DatabaseSafetyError,
-    DatabaseSnapshot,
-    OwnedTemporaryDatabase,
-    async_database_url,
-    create_owned_temporary_database,
-    database_config,
-    database_config_for_database,
-    database_snapshot_url,
-    drop_owned_temporary_database,
-    require_owned_database,
-    restore_archive_to_owned_database,
-    run_database_doctor,
-    safe_error_message,
-    validate_backup_doctor,
-    validate_restore_source,
+    DatabaseSafetyError, OwnedTemporaryDatabase, database_config, database_config_for_database,
+    require_owned_database, safe_error_message, validate_restore_source,
 )
+from kulai_memory.backup_service import RestoreVerificationResult, fingerprint_url, _restore_verified_source
 from kulai_memory.settings import get_settings
 
 
@@ -41,18 +28,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("backup", type=Path)
     result.add_argument("--pre-migration-from", metavar="REVISION")
     return result
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreVerificationResult:
-    database: str
-    snapshot: DatabaseSnapshot
-
-
-async def fingerprint_url(
-    url: str, *, pre_migration_from: str | None = None,
-) -> DatabaseSnapshot:
-    return await database_snapshot_url(url, pre_migration_from=pre_migration_from)
 
 
 async def restore_smoke(
@@ -77,55 +52,6 @@ async def restore_owned_database_backup(
     return await _restore_verified_source(
         backup, config=target, pre_migration_from=pre_migration_from,
     )
-
-
-async def _restore_verified_source(
-    backup: Path, *, config: DbConfig, pre_migration_from: str | None = None,
-) -> RestoreVerificationResult:
-    archive = backup.expanduser().resolve()
-    if not archive.is_file():
-        raise FileNotFoundError("Backup file does not exist.")
-
-    validate_backup_doctor(
-        await run_database_doctor(async_url=config.async_url),
-        pre_migration_from=pre_migration_from,
-    )
-
-    source_before = await fingerprint_url(config.async_url, pre_migration_from=pre_migration_from)
-    owned: OwnedTemporaryDatabase | None = None
-    verified = False
-    cleanup_error: Exception | None = None
-    try:
-        owned = await create_owned_temporary_database(kind="restore", config=config)
-        await restore_archive_to_owned_database(archive, owned, config=config)
-
-        restored_url = async_database_url(database=owned.name, config=config)
-        doctor = await run_database_doctor(async_url=restored_url)
-        validate_backup_doctor(doctor, pre_migration_from=pre_migration_from)
-        restored = await fingerprint_url(restored_url, pre_migration_from=pre_migration_from)
-        source_after = await fingerprint_url(config.async_url, pre_migration_from=pre_migration_from)
-        validate_backup_doctor(
-            await run_database_doctor(async_url=config.async_url),
-            pre_migration_from=pre_migration_from,
-        )
-        if source_before != source_after:
-            raise DatabaseSafetyError("Source database changed during restore verification.")
-        if restored != source_before:
-            raise DatabaseSafetyError("Restored database fingerprints do not match source.")
-        verified = True
-        return RestoreVerificationResult(database=owned.name, snapshot=restored)
-    finally:
-        if owned is not None:
-            try:
-                await drop_owned_temporary_database(owned, config=config)
-            except Exception as exc:
-                cleanup_error = exc
-        if cleanup_error is not None:
-            action = "after verification" if verified else "after failure"
-            raise DatabaseSafetyError(
-                f"Safe cleanup failed {action} for {owned.name}: "
-                f"{type(cleanup_error).__name__}."
-            ) from cleanup_error
 
 
 async def run(backup: Path, *, pre_migration_from: str | None = None) -> int:
