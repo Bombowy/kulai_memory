@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     kulai_whisper_compute_type: str = "int8_float16"
     kulai_whisper_vad_filter: bool = True
     kulai_cuda_dll_dir: Path | None = None
+    kulai_tts_enabled: bool = False
+    kulai_tts_pl_voice: str = ""
+    kulai_tts_en_voice: str = ""
 
     @field_validator("kulai_cuda_dll_dir", mode="before")
     @classmethod

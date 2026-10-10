@@ -50,6 +50,18 @@ class DesktopVoiceQuestionProgressState(str, Enum):
     TRANSCRIPT_READY = "transcript_ready"
 
 
+class DesktopSpeechProgressState(str, Enum):
+    PREPARING = "preparing_speech"
+    SYNTHESIZING = "synthesizing_speech"
+    SPEAKING = "speaking"
+    FINISHED = "speech_finished"
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopSpeechProgress:
+    state: DesktopSpeechProgressState
+
+
 @dataclass(frozen=True, slots=True)
 class DesktopVoiceQuestionProgress:
     state: DesktopVoiceQuestionProgressState
@@ -168,6 +180,7 @@ class DesktopStartupResult:
     devices: tuple[MicrophoneDevice, ...]
     memories: tuple[MemorySummary, ...]
     indexing: IndexReconciliationReport = IndexReconciliationReport()
+    tts_available: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,3 +279,11 @@ class DesktopDeleteError(DesktopPublicError):
 
 class DesktopDeleteConflictError(DesktopPublicError):
     safe_message = "Memory changed. Reload it before deleting."
+
+
+class DesktopSpeechError(DesktopPublicError):
+    safe_message = "Could not speak answer."
+
+
+class DesktopSpeechUnavailableError(DesktopPublicError):
+    safe_message = "TTS unavailable."

@@ -222,10 +222,78 @@ Voice questions allocate no ingestion identity, never become Memory and never
 trigger indexing writes or refresh Recent Memory.
 
 The local `scripts/ask_memory.py` CLI remains available for diagnostics. There
-is no reviewed semantic score cutoff or reranker yet. Desktop has no TTS,
+is no reviewed semantic score cutoff or reranker yet. Desktop has no
 conversational multi-turn or partial STT; Android has no RAG UI, and WebSocket
 has no voice RAG flow. The existing voice-note save/index/Recent Memory flow is
 unchanged.
+
+Desktop supports optional **local PL/EN speech** on Windows using installed
+Microsoft **Desktop** voices through `System.Speech`, with the existing
+`sounddevice` audio output. No cloud inference, additional model download or
+voice binaries in the repo are required. This host has **Microsoft Paulina
+Desktop** (`pl-PL`) and **Microsoft Zira Desktop** (`en-US`). Voices are Windows
+components under their installed Microsoft licensing terms; no weights are
+redistributed. Other configured voices must be installed, enabled Microsoft
+Desktop voices with the matching language. See the
+[System.Speech API](https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer?view=netframework-4.8.1).
+
+Set these values in `backend/.env` to enable speech:
+
+```dotenv
+KULAI_TTS_ENABLED=true
+KULAI_TTS_PL_VOICE=Microsoft Paulina Desktop
+KULAI_TTS_EN_VOICE=Microsoft Zira Desktop
+```
+
+The example defaults to disabled. Missing settings or unavailable voices show
+**TTS unavailable.** while Voice Note, RAG and Library remain usable. Startup
+checks installed voices without synthesizing speech or requesting Qwen.
+One long-lived local TTS process owns one synthesizer and switches its installed
+PL/EN voices; it does not reload a model for each segment.
+
+After text **ASK**, click **SPEAK** to read only the final answer. **Speak voice
+answers automatically** is checked by default: **ASK BY VOICE** renders its
+answer and validated sources first, then speaks if the option is enabled.
+UUIDs, citations, scores and source content are never sent to TTS. A separate
+speech status shows **Preparing speech...**, **Synthesizing speech...**,
+**Speaking...** and **Speech finished**. A failure shows **Could not speak answer.**
+without changing the answer, sources or RAG status.
+
+The existing Qwen client partitions only the final answer into exact fragments
+labelled `pl` or `en`, treating that text as untrusted data. The neutral speech
+contract accepts 1–64 nonempty segments and at most 6,000 characters. Their
+concatenation must equal the answer character for character, including whitespace
+and punctuation. Translation, rewriting, missing or duplicated characters fail
+safely; the app does not repair them or fall back to reading everything in PL.
+Adjacent fragments with the same language are merged after validation. A fixed
+insufficient-context answer uses one PL segment without another Qwen request.
+Language labels come from Qwen; exact-text validation cannot prove arbitrary
+language classification, so mixed-language pronunciation still needs manual review.
+
+Each PL fragment uses the configured Polish voice, each EN fragment the English
+voice. PCM16 WAVs play in order through separate private output streams, preserving
+each file's sample rate/channels. The app never concatenates WAV headers or plays
+two answers together. Audio lives only in unique private temporary files outside
+the repo. **STOP AUDIO** cancels planning/synthesis or stops playback and cleans
+the artifacts; it preserves text and lets you **SPEAK** again. New ASK, voice
+question or Voice Note stops previous playback before starting.
+
+Planning, synthesis, file IO and playback run on the existing worker; they perform
+no database writes and hold no DB checkout. Planning/synthesis use the operation
+lock. During playback, a new question/Voice Note can stop it; Library operations
+remain disabled until speech ends. Limits are 180 seconds for planning, 90 seconds
+per synthesis, 600 seconds for the whole speech operation, 16 MiB per WAV and
+64 MiB total audio. Cancellation drains native synthesis before cleanup, bounded
+by its synthesis timeout; shutdown closes TTS once and then existing providers.
+Completed playback, STOP, failure, cancellation, replacement and shutdown remove
+owned audio. There is no permanent audio cache or TTS history.
+
+Speech is Desktop-only. Android/WebSocket TTS, multi-turn conversation, streaming
+partial STT/TTS and a reviewed score cutoff/reranker are not implemented.
+`KULAI_RUN_TTS_INTEGRATION=1` enables real installed-voice tests with synthetic
+PL/EN/mixed text. Automated tests validate PCM/WAV and cleanup through a fake
+audio-device boundary; listening quality and the physical output device are
+checked manually after review.
 
 The Desktop **Memory Library** shows **Active** and **Archived** Memories in
 created-at/UUID descending order, with a bounded limit of 100 rows. Select a row
@@ -258,7 +326,7 @@ during indexing cancels the work; a committed change remains durable and startup
 reconciliation can repair its missing index. Public errors do not include Memory
 content. Archive is the reversible removal flow; permanent DELETE is also available
 for both Active and Archived Memories.
-Voice/RAG functionality remains available, and TTS is still outside the Desktop.
+Voice/RAG functionality remains available alongside optional Desktop speech.
 
 Desktop **DELETE** shows the selected UUID, revision and Active/Archived status
 without displaying content. Cancel is the default; type exactly `DELETE` to enable

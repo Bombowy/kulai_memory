@@ -114,9 +114,41 @@ not wait for its generation timeout. In the CLI, the runtime owns both providers
 Canonical retrieval closes its short read-only snapshot before structured Qwen
 generation. Bounded untrusted JSON evidence contains only IDs, ranks and content;
 answers require validated citations or return canonical insufficient context.
-Zero evidence skips the LLM. There is no reviewed score cutoff/reranker, TTS,
+Zero evidence skips the LLM. There is no reviewed score cutoff/reranker,
 Android RAG UI, WebSocket voice RAG, or multi-turn conversation yet. Tests use
 only owned DBs with synthetic evidence and controlled audio.
+
+Optional Desktop TTS uses the host-local Windows `System.Speech` adapter and
+installed Microsoft Desktop voices, with `sounddevice` PCM output. Enable
+`KULAI_TTS_ENABLED=true` and configure `KULAI_TTS_PL_VOICE` /
+`KULAI_TTS_EN_VOICE` (this host has Microsoft Paulina Desktop / Microsoft Zira
+Desktop). No cloud inference, model download or committed voice weights are
+required. Missing/invalid voices leave Desktop ready with **TTS unavailable.**
+The provider is owned once by the controller; startup only verifies installed
+voices, with no synthesis or Qwen request.
+
+Text answers offer **SPEAK** / **STOP AUDIO**. The default-enabled **Speak voice
+answers automatically** option speaks a voice-question result after rendering
+its grounded text and validated citations. `application.speech` uses the same
+long-lived Qwen through `MemoryRagRuntime.plan_speech`, receiving only the final
+answer as untrusted data. Strict PL/EN segments must concatenate to the exact
+answer, preserving all whitespace/punctuation; invalid plans fail without text
+repair. Bounds: 6,000 characters, 64 segments, planner 180s, synthesis 90s/segment,
+whole operation 600s. Canonical insufficient context is spoken directly in PL.
+The configured PL and EN voices synthesize their respective fragments only;
+citations/UUIDs/scores and Memory context are never spoken.
+
+Private temporary WAVs outside the repo are played sequentially at their own
+PCM16 sample rate/channels. Worker-side IO/synthesis/playback keeps Qt responsive.
+STOP and new ASK/Voice Note cancel previous speech; cancellation drains native
+work before deleting resources. All owned audio is cleaned on completion, STOP,
+failure, replacement and shutdown; providers close once. TTS failures preserve
+answer/citations and primary RAG status. Speech has no DB writes, checkout,
+history or permanent audio cache. Exact text is validated; arbitrary language
+labels still depend on Qwen. TTS is Desktop-only: no Android/WebSocket TTS,
+multi-turn or streaming partial STT/TTS. See root docs for setup/manual listening.
+Opt-in `KULAI_RUN_TTS_INTEGRATION=1` tests real installed PL/EN voices only with
+synthetic text and a fake audio-device boundary; no main answer/audio is used.
 
 Desktop **Memory Library** provides bounded Active/Archived views, full content,
 revision-safe EDIT, confirmed reversible ARCHIVE and RESTORE. Its neutral read
@@ -130,7 +162,7 @@ another save. Archive creates no tombstone, performs no embedding and excludes
 the Memory from both text and voice RAG; restore indexes the current revision.
 Library DB/model work stays on the existing worker and is serialized with Voice
 Note/Text ASK/Ask by Voice. No schema change is required. Lifecycle/RAG tests use
-owned synthetic DBs, never main mutations. TTS remains outside Desktop.
+owned synthetic DBs, never main mutations. Optional Desktop speech is described below.
 
 Desktop **DELETE** works for Active and Archived Memories. Its confirmation shows
 UUID/revision/status, defaults to Cancel and requires exactly `DELETE`. Archive

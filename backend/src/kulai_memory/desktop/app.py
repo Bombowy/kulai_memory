@@ -16,6 +16,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QCheckBox,
     QDialog, QDialogButtonBox, QMessageBox, QScrollArea, QFileDialog,
     QGridLayout,
     QGroupBox,
@@ -44,6 +45,7 @@ from .models import (
     DesktopVoiceQuestionProgress, DesktopVoiceQuestionProgressState, DesktopVoiceQuestionResult,
     DesktopMemoryFilter, DesktopMemoryItem, DesktopMemoryChangeResult, DesktopMemoryChangeStatus,
     DesktopMemoryDeleteResult, DesktopDeleteProgress, DesktopDeleteProgressState,
+    DesktopSpeechProgress, DesktopSpeechProgressState,
 )
 from .recorder import DEFAULT_MAX_DURATION_SECONDS
 
@@ -67,6 +69,7 @@ class AsyncDesktopThread(QThread):
     library_changed = Signal(object)
     library_indexing_finished = Signal(object)
     memory_deleted = Signal(object)
+    speech_stopped = Signal()
     operation_failed = Signal(str, str)
     shutdown_finished = Signal()
 
@@ -201,6 +204,12 @@ class AsyncDesktopThread(QThread):
     def request_delete_memory(self, item: DesktopMemoryItem, backup_output: Path) -> None:
         self._submit("library_delete", lambda c: c.delete_memory(memory_id=item.id,
             expected_revision=item.revision, backup_output=backup_output), self.memory_deleted.emit)
+
+    def request_speak_answer(self, result: DesktopRagResult) -> None:
+        self._submit("speech", lambda c: c.speak_answer(result=result), lambda ignored: None)
+
+    def request_stop_audio(self) -> None:
+        self._submit("speech_stop", lambda c: c.stop_audio(), lambda ignored: self.speech_stopped.emit())
 
     def request_shutdown(self) -> None:
         if self._shutdown_requested.is_set():
@@ -349,6 +358,11 @@ class MainWindow(QMainWindow):
         self._rag_active = False
         self._voice_question_active = False
         self._question_recording = False
+        self._tts_available = False
+        self._speech_active = False
+        self._speech_preparing = False
+        self._speech_stopping = False
+        self._last_rag_result: DesktopRagResult | None = None
         self._library_items: tuple[DesktopMemoryItem, ...] = ()
         self._library_active = False
         self._library_selection_id = None
@@ -423,6 +437,17 @@ class MainWindow(QMainWindow):
         self.answer.setReadOnly(True)
         self.answer.setPlaceholderText("An answer grounded in your memories will appear here.")
         ask_layout.addWidget(self.answer)
+        speech_row = QHBoxLayout()
+        self.speak_button = QPushButton("SPEAK", self.ask_group)
+        self.stop_audio_button = QPushButton("STOP AUDIO", self.ask_group)
+        self.auto_speak_checkbox = QCheckBox("Speak voice answers automatically", self.ask_group)
+        self.auto_speak_checkbox.setChecked(True)
+        speech_row.addWidget(self.speak_button)
+        speech_row.addWidget(self.stop_audio_button)
+        speech_row.addWidget(self.auto_speak_checkbox)
+        ask_layout.addLayout(speech_row)
+        self.speech_status = QLabel("TTS unavailable.", self.ask_group)
+        ask_layout.addWidget(self.speech_status)
         ask_layout.addWidget(QLabel("Sources", self.ask_group))
         self.sources_table = QTableWidget(0, 3, self.ask_group)
         self.sources_table.setHorizontalHeaderLabels(["Rank", "Memory ID", "Score"])
@@ -502,6 +527,8 @@ class MainWindow(QMainWindow):
         self.query_input.returnPressed.connect(self._ask_memory)
         self.ask_button.clicked.connect(self._ask_memory)
         self.voice_ask_button.clicked.connect(self._toggle_voice_question)
+        self.speak_button.clicked.connect(self._speak_answer)
+        self.stop_audio_button.clicked.connect(self._stop_audio)
         self.library_filter.currentIndexChanged.connect(self._refresh_library)
         self.library_refresh_button.clicked.connect(self._refresh_library)
         self.library_table.itemSelectionChanged.connect(self._library_selection_changed)
@@ -526,6 +553,7 @@ class MainWindow(QMainWindow):
         self._worker.library_changed.connect(self._on_library_changed)
         self._worker.library_indexing_finished.connect(self._on_library_indexing_finished)
         self._worker.memory_deleted.connect(self._on_memory_deleted)
+        self._worker.speech_stopped.connect(self._on_speech_stopped)
         self._worker.operation_failed.connect(self._on_operation_failed)
         self._worker.shutdown_finished.connect(self._on_shutdown_finished)
         self._worker.finished.connect(self._on_shutdown_finished)
@@ -533,7 +561,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_controls(self) -> None:
         blocked = (self._busy or self._recording or self._voice_question_active
-                   or self._save_pending or self._closing)
+                   or self._save_pending or self._closing or self._speech_preparing or self._speech_stopping)
         self.record_button.setEnabled(self._ready and not blocked)
         self.query_input.setEnabled(self._rag_ready and not blocked)
         self.ask_button.setEnabled(self._rag_ready and not blocked and bool(self.query_input.text().strip()))
@@ -542,9 +570,9 @@ class MainWindow(QMainWindow):
             (self._question_recording and not self._busy and not self._closing)
             or (self._ready and self._rag_ready and not blocked))
         self.refresh_button.setEnabled(self._rag_ready and not self._busy and not self._recording
-                                       and not self._voice_question_active and not self._closing)
+                                       and not self._voice_question_active and not self._closing and not self._speech_active)
         self.device_selector.setEnabled(not blocked)
-        library_ready = self._rag_ready and not blocked
+        library_ready = self._rag_ready and not blocked and not self._speech_active
         item = self._selected_library_item()
         self.library_filter.setEnabled(library_ready)
         self.library_refresh_button.setEnabled(library_ready)
@@ -555,6 +583,42 @@ class MainWindow(QMainWindow):
         self.library_delete_button.setEnabled(library_ready and item is not None)
         self.library_retry_button.setVisible(self._library_indexing_degraded)
         self.library_retry_button.setEnabled(library_ready and self._library_indexing_degraded)
+        self.speak_button.setEnabled(self._tts_available and self._last_rag_result is not None
+                                     and not blocked and not self._speech_active)
+        self.stop_audio_button.setEnabled(self._speech_active and not self._closing and not self._speech_stopping)
+        self.auto_speak_checkbox.setEnabled(self._tts_available and not self._closing)
+
+    @Slot()
+    def _speak_answer(self) -> None:
+        if not self.speak_button.isEnabled() or self._last_rag_result is None:
+            return
+        self._speech_active = self._speech_preparing = True
+        self.speech_status.setText("Preparing speech...")
+        self._update_controls()
+        self._worker.request_speak_answer(self._last_rag_result)
+
+    @Slot()
+    def _stop_audio(self) -> None:
+        if not self._speech_active or self._closing or self._speech_stopping:
+            return
+        self._speech_stopping = True
+        self.speech_status.setText("Stopping speech...")
+        self._update_controls()
+        self._worker.request_stop_audio()
+
+    @Slot()
+    def _on_speech_stopped(self) -> None:
+        if self._closing or not self._speech_stopping:
+            return
+        self._speech_active = self._speech_preparing = self._speech_stopping = False
+        self.speech_status.setText("Speech stopped")
+        self._update_controls()
+
+    def _stop_speech_for_new_operation(self) -> None:
+        if self._speech_active:
+            self._worker.request_stop_audio()
+            self._speech_active = self._speech_preparing = False
+            self.speech_status.setText("Speech stopped")
 
     def _selected_library_item(self) -> DesktopMemoryItem | None:
         row = self.library_table.currentRow()
@@ -724,6 +788,8 @@ class MainWindow(QMainWindow):
     def _ask_memory(self) -> None:
         if not self.ask_button.isEnabled():
             return
+        self._stop_speech_for_new_operation()
+        self._last_rag_result = None
         self._busy = self._rag_active = True
         self.answer.clear()
         self.sources_table.setRowCount(0)
@@ -746,6 +812,8 @@ class MainWindow(QMainWindow):
         device_id = self.device_selector.currentData()
         if device_id is None:
             return
+        self._stop_speech_for_new_operation()
+        self._last_rag_result = None
         self._busy = self._voice_question_active = self._rag_active = True
         self.answer.clear()
         self.sources_table.setRowCount(0)
@@ -773,6 +841,8 @@ class MainWindow(QMainWindow):
         self.query_input.setText(result.transcript)
         if result.rag_result is not None:
             self._on_rag_finished(result.rag_result)
+            if self.auto_speak_checkbox.isChecked() and self._tts_available:
+                self._speak_answer()
         else:
             self._busy = self._rag_active = False
             self.answer.clear()
@@ -785,6 +855,7 @@ class MainWindow(QMainWindow):
         if self._closing or not self._rag_active:
             return
         self._busy = self._rag_active = False
+        self._last_rag_result = result if result.status is not DesktopRagStatus.FAILED else None
         self.answer.setPlainText(result.answer)
         self.sources_table.setRowCount(0)
         if result.status is DesktopRagStatus.ANSWERED:
@@ -817,6 +888,8 @@ class MainWindow(QMainWindow):
         self._set_recent(result.memories)
         self._ready = bool(result.devices)
         self._rag_ready = True
+        self._tts_available = result.tts_available
+        self.speech_status.setText("Speech ready" if self._tts_available else "TTS unavailable.")
         self._library_indexing_degraded = result.indexing.degraded
         self.rag_status.setText("Ready")
         self.library_status.setText("Click REFRESH to load memories (limit 100)")
@@ -844,11 +917,12 @@ class MainWindow(QMainWindow):
     @Slot()
     def _start_recording(self) -> None:
         if (self._busy or self._recording or self._voice_question_active
-                or self._save_pending or self._closing):
+                or self._save_pending or self._closing or self._speech_preparing):
             return
         device_id = self.device_selector.currentData()
         if device_id is None:
             return
+        self._stop_speech_for_new_operation()
         self._busy = True
         self._update_controls()
         self.record_button.setEnabled(False)
@@ -888,6 +962,18 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_progress(self, progress: DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress | DesktopDeleteProgress) -> None:
         if self._closing:
+            return
+        if isinstance(progress, DesktopSpeechProgress):
+            if self._speech_active and not self._speech_stopping:
+                self.speech_status.setText({DesktopSpeechProgressState.PREPARING: "Preparing speech...",
+                    DesktopSpeechProgressState.SYNTHESIZING: "Synthesizing speech...",
+                    DesktopSpeechProgressState.SPEAKING: "Speaking...",
+                    DesktopSpeechProgressState.FINISHED: "Speech finished"}[progress.state])
+                if progress.state is DesktopSpeechProgressState.SPEAKING:
+                    self._speech_preparing = False
+                elif progress.state is DesktopSpeechProgressState.FINISHED:
+                    self._speech_active = self._speech_preparing = False
+                self._update_controls()
             return
         if isinstance(progress, DesktopDeleteProgress):
             if self._library_active:
@@ -989,6 +1075,11 @@ class MainWindow(QMainWindow):
     def _on_operation_failed(self, operation: str, message: str) -> None:
         if self._closing:
             return
+        if operation in {"speech", "speech_stop"}:
+            self._speech_active = self._speech_preparing = self._speech_stopping = False
+            self.speech_status.setText(message)
+            self._update_controls()
+            return
         self._busy = False
         if operation.startswith("library_"):
             self._library_active = False
@@ -1003,6 +1094,7 @@ class MainWindow(QMainWindow):
                 self._refresh_library(preserve_status=True)
             return
         if operation in {"ask", "voice_question_start", "voice_question"}:
+            self._last_rag_result = None
             self._rag_active = False
             self._voice_question_active = self._question_recording = False
             self._question_timer.stop()

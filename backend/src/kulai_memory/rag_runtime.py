@@ -12,6 +12,7 @@ from .application.rag import (
     MemoryContext, MemoryRagError, MemoryRagResult, answer_memory, build_memory_context,
 )
 from .application.retrieval import MemoryRetrievalService
+from .application.speech import SpeechError, SpeechPlan, plan_speech
 from .backfill import EMBEDDING_MODEL, VECTOR_DIMENSION
 from .embedding_provider import create_embedding_provider
 from .llm_provider import create_llm_provider
@@ -73,6 +74,12 @@ class MemoryRagRuntime:
     ) -> MemoryRagResult:
         result, _ = await self.ask_with_context(query=query, top_k=top_k, on_generating=on_generating)
         return result
+
+    async def plan_speech(self, *, answer: str) -> SpeechPlan:
+        """Reuse the owned Qwen; planner receives only final answer, with no DB work."""
+        if self._stack is None:
+            raise SpeechError()
+        return await plan_speech(answer=answer, provider=self._llm)
 
     async def ask_with_context(
         self, *, query: str, top_k: int = 5, on_generating: Callable[[], None] | None = None,

@@ -1,180 +1,449 @@
-TASK 6B.2 safety correction — verified-backup -> delete gap
+TASK 6A.4 — Desktop local TTS with validated PL/EN speech segments and safe playback
+Data: 2026-10-10
+Repo: C:\Bombowy\Projekty\kulai_memory
+
+Decyzja: OK DO COMMITA
+Nie wykonano commit ani push. Nie wykonano automated main query/STT/TTS ani main mutation.
+Raport zawiera wyłącznie metadata, counts/fingerprints oraz syntetyczne przykłady.
 
 1. Start commit/status
-HEAD: 8937bc6800e46a93e654e823b8a2b9cb1b74b8ba (TASK 6B.1, committed/pushed).
-main i origin/main pozostają zgodne. Korekta rozpoczęła się na istniejącym, niecommitowanym WIP TASK 6B.2; wcześniejsze zmiany zachowano. Vendor clean, gitlink 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Przed testami korekty wykonano świeży read-only db_doctor i complete DatabaseSnapshot main.
-Nie wykonano commit ani push. Żaden automated test nie wykonuje main DELETE/lifecycle writes ani nie używa real main Memory/audio w LLM/STT.
+HEAD = 5ac04ca64c7134c93720944d6c7006f97976cd97
+origin/main = ten sam commit.
+TASK 6B.2: feat: add Desktop hard delete with verified backup token and revision protection.
+Na starcie working tree clean; git status / status -sb, log -5, submodule status i vendor porcelain sprawdzone.
+Historia: 8937bc6 (Library), 98c8d87 (voice questions), 339cd30 (Desktop RAG), 3c0a27b (canonical text RAG).
+Vendor pin: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; clean.
+Local expected head i main current = kulai_memory_0004; strict db_doctor PASS.
 
-2. Dokładny gap
-create_verified_backup sprawdzało dump/source po prawdziwym restore, ale tylko przed zwróceniem VerifiedBackupResult. DesktopController następnie wykonywał wyłącznie cancellation guard i revision-safe delete.
-Zmiana po powrocie fabryki mogła unieważnić complete backup snapshot token. ARCHIVE/RESTORE selected Memory zmienia archived_at/vector bez zmiany revision; zmiana innej Memory, vector/tombstone lub pliku dump również nie jest chroniona expected_revision selected Memory.
-Poprzednie sprawdzenie wewnątrz fabryki nie zastępowało pre-delete revalidation. Korekta dodaje osobną, świeżą kontrolę po jej powrocie.
+2. Main complete DatabaseSnapshot BEFORE
+revision = ["kulai_memory_0004"]
+memories.count = 8
+memories.sha256 = 57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
+vectors.count = 8
+vectors.sha256 = 2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
+tombstones.count = 1
+tombstones.sha256 = 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Complete snapshot zapisany w ignored .venv/task6a4/main_before.json.
+Snapshot helper używa existing read-only database_snapshot_url; do raportu nie trafia content ani vector values.
 
-3. Reusable host-only helper i miejsce wywołania
-backend/src/kulai_memory/backup_service.py: async revalidate_verified_backup(backup: VerifiedBackupResult, *, config: DbConfig) -> None.
-DesktopController.delete_memory wywołuje helper bezpośrednio po await verified_backup_factory i przed cancellation guard/DELETING/delete_canonical_memory.
-Helper używa istniejącego database_snapshot_url: nowy complete read-only snapshot obejmuje schema revision, Memory, vectors i tombstones. Porównanie jest pełne, nie tylko count lub selected revision.
-File validation reuse: istniejące outside-repo/no-symlink/no-junction/regular-path guards. Odczyt dumpu sprawdza regular file, rozmiar, SHA-256 oraz stabilność tożsamości/rozmiaru/mtime podczas hashowania. force=True dotyczy wyłącznie walidacji istniejącego pliku; nie wykonuje zapisu/overwrite.
-Brak nowego backup/restore/deletion algorithm; existing create_verified_backup i jego wewnętrzne kontrole pozostają.
+3. TTS module/provider audit
+Przeczytano rzeczywiste vendor APIs i host Desktop/RAG/provider/recorder contracts.
+Przeszukano aktualne vendor modules, backend pyproject, imports, project venv i lokalne Windows tooling.
+Pinned vendor NIE zawiera importowalnego kulai_tts ani kulai_provider_kokoro.
+Duży vendor kod_do_analizy.txt zawiera stare wzmianki TTS/Kokoro, ale nie stanowi aktualnego API.
+Nie wykorzystano tych wzmiankowanych, nieobecnych modułów i nie zmieniono vendor.
+Reusable kulai_llm generate_structured oraz OllamaLLMProvider istnieją i zostały użyte.
+generate_structured przekazuje native JSON schema, następnie model_validate(parsed, strict=True).
+Speech schema używa Literal["pl", "en"], dopiero potem neutralnego SpeechLanguage enum.
 
-4. Exact operation order
-Input/path validation -> existing Desktop operation lock -> strict db_doctor PASS -> full pg_dump -> size/SHA-256 -> actual pg_restore do owned temporary DB -> complete restored/source snapshot equality i source unchanged -> VerifiedBackupResult zwrócony -> guard pending shutdown/cancellation -> PRE-DELETE fresh full source snapshot == token.source_snapshot -> retained regular file nadal istnieje, size == token.size_bytes, SHA-256 == token.sha256 -> cancellation/shutdown guard -> DELETING -> existing revision-safe atomic delete.
-W delete transaction pozostaje ingestion advisory lock -> canonical FOR UPDATE -> expected_revision check -> canonical Memory/vector/tombstone mutation -> COMMIT.
-Helper ani controller nie uruchamiają modeli w delete flow.
+4. Dostępne local engines
+Venv: brak piper, kokoro, pyttsx3, win32com, kulai_tts, kulai_provider_kokoro, torch i torchaudio.
+Dostępne: sounddevice 0.5.6 (MIT), PySide6 6.11.2 (metadata LGPL/GPL), onnxruntime 1.30 (MIT).
+System.Speech jest rzeczywiście dostępny w zainstalowanym Windows/.NET/PowerShell.
+Installed enabled voices:
+Microsoft Paulina Desktop — pl-PL — Vendor Microsoft — Version 11.0.
+Microsoft Zira Desktop — en-US — Vendor Microsoft — Version 11.0.
+Realne metody zweryfikowane introspekcją: SelectVoice(string), Speak(string), SetOutputToWaveStream(Stream), SetOutputToNull(), Dispose().
+Metadata głosów: ignored .venv/task6a4/installed_voices.json.
+Głosy są lokalnymi komponentami Windows; mają własne warunki licencyjne Microsoft. Nie przypisujemy im licencji Piper/Kokoro ani nie redystrybuujemy weights/binaries.
+API reference:
+https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer?view=netframework-4.8.1
 
-5. Backup result/token contract
-VerifiedBackupResult pozostaje frozen: path, size_bytes, sha256, source_snapshot. Nie rozszerzono go o content, credentials, vector values ani tombstone identities.
-Mismatch current full snapshot, missing/nonregular dump, unsafe path, size/hash mismatch lub błąd odczytu -> ZERO DELETE. Backup nigdy nie jest automatycznie usuwany.
-Safe Desktop error: Backup verification could not be completed. Memory was not deleted; retain any backup file.
+5. Wybrany provider i dlaczego
+Minimalny host-local WindowsSpeechProvider nad realnym System.Speech.
+Wykorzystuje już zainstalowane PL/EN voices, działa bez instalacji paczek/modeli, ma jawne przełączanie języka/głosu i zwraca PCM16 WAV.
+Jeden persistent hidden PowerShell process posiada jeden SpeechSynthesizer przez cały lifecycle.
+Nie dodano fake production TTS. Fake provider/player występują wyłącznie w testach.
+Piper/Kokoro nie wybrano: brak installed runtime/verified local weights; wymagałyby dodatkowego wyboru/downloadu.
+Backend dependency manifests pozostają bez zmian: subprocess/stdlibrary oraz istniejący desktop sounddevice wystarczają.
 
-6. A — ARCHIVE after verified factory return
-Owned real PostgreSQL + real pg_dump/restore. Mutation jest wstrzyknięta przy wejściu do pre-delete helpera, po pełnym powrocie verified factory (kolejność assertowana).
-Selected Memory pozostaje revision1; archived_at ustawione i vector usunięty. Complete current snapshot != backup token. Produkcyjny helper blokuje delete; spy delete_calls=0.
-Snapshot po blocked attempt == snapshot po wyłącznie intencjonalnym ARCHIVE; Memory archived pozostaje, tombstones=0, retained dump istnieje.
+6. Proof local/offline
+Host adapter nie tworzy HTTP/cloud clienta i nie pobiera model weights.
+Wybiera tylko enabled Microsoft voices z suffix " Desktop" i zgodnym culture PL/EN.
+Synthesis = native Speak(string) → MemoryStream → WAV bytes, wewnątrz lokalnego procesu.
+Wszystkie real TTS tests używają wyłącznie synthetic text.
+Qwen planner pozostaje na existing loopback Ollama.
+Existing Whisper regression może sprawdzać Hugging Face metadata istniejącego model cache; to nie jest TTS/cloud inference.
+Nie instalowano paczek ani nie pobierano TTS models.
 
-7. B — RESTORE after verified factory return
-Fixture jest archived przed backupem. Po powrocie factory controlled writer przywraca Memory i indeksuje przez istniejący shared indexer.
-Selected revision pozostaje1, archived_at znika i vector wraca. Full snapshot mismatch blokuje delete; delete_calls=0, brak nowego tombstone, restored canonical state pozostaje, dump retained.
-Embedding request w tym przypadku pochodzi wyłącznie z intencjonalnego zewnętrznego RESTORE, nie z DELETE/revalidation.
+7. PL support proof
+Zainstalowany Paulina Desktop culture pl-PL zweryfikowany przed synthesis.
+Real PL synthetic request: "Zielony smok mieszka na Wenus."
+WAV RIFF/WAVE, PCM16, duration 2.579 s > 0, nonempty audio.
+clients=1, PL requests=1, EN requests=0, closed=1; wszystkie temp artifacts usunięte.
 
-8. C — different Memory changes after verified factory return
-Owned fixture zawiera również drugą Memory/vector. Po return factory ARCHIVE dotyczy wyłącznie drugiej Memory.
-Wybrana Memory wraz z revision jest identyczna. Complete Memory/vector snapshot różni się, a produkcyjny helper blokuje delete; delete_calls=0.
-Snapshot po próbie dokładnie zachowuje tylko intencjonalną zmianę drugiej Memory; tombstones=0 i backup retained.
+8. EN support proof
+Zainstalowany Zira Desktop culture en-US zweryfikowany przed synthesis.
+Real EN synthetic request: "The green dragon lives on Venus."
+WAV RIFF/WAVE, PCM16, duration 2.559 s > 0.
+clients=1, PL requests=0, EN requests=1, closed=1; artifacts usunięte.
 
-9. D — post-verification archive tamper
-Dwa owned deterministic cases po return verified factory:
-- dopisanie danych do retained .dump -> size mismatch -> delete_calls=0;
-- zmiana jednego bajtu przy identycznym rozmiarze -> SHA-256 mismatch -> delete_calls=0.
-Source DatabaseSnapshot jest niezmieniony, Memory/vector pozostają, tombstones=0, zmodyfikowany dump nie jest usuwany i nie jest uznawany za verified recovery archive.
-Unit tests dodatkowo pokrywają missing dump, directory/nonregular path, symlink guard, source revision/Memory/vector/tombstone fingerprint mismatch oraz safe snapshot failure.
+9. Provider lifecycle
+Controller owns one optional SpeechRuntime; runtime owns one TTS provider and private player.
+WindowsSpeechProvider constructor nie uruchamia procesu. prepare() sprawdza głosy, bez synthesis.
+Startup nie wykonuje Qwen planning, generation ani synthesis.
+Jeden synthesizer/process jest współdzielony przez wszystkie segmenty i kolejne SPEAK.
+aclose idempotent; controlled/real tests potwierdzają close exactly once.
+Po STOP provider pozostaje dostępny; następny SPEAK działa.
+Po bounded native failure adapter kończy uszkodzony child process; ten sam provider może przygotować native runtime przy kolejnej próbie. Nie tworzy providerów per segment.
+Whisper lifecycle pozostaje istniejący: vendor nie posiada aclose; controller zwalnia references i existing CUDA scope. Nie wymyślono metody close dla Whisper.
 
-10. E — normal delete/recovery proof
-Owned control bez zmian po return factory: factory_returned -> pre_delete_revalidation -> revalidation_passed -> production delete.
-Active Memory/vector/tombstone: 1/1/0 -> 0/0/1, dokładne vector_deleted_count=1. Archived normal regression: 1/0/0 -> 0/0/1, vector_deleted_count=0.
-Actual verified retained backup jest ponownie odtwarzany do drugiej owned restore DB po usunięciu source Memory: complete restored snapshot == pre-delete source. Source nie jest automatycznie przywracany.
-Library/Recent refresh, no-context RAG po delete, retired ingestion replay z tą samą i inną treścią oraz fresh ingestion identity nadal PASS.
+10. Config
+backend/.env.example:
+KULAI_TTS_ENABLED=false
+KULAI_TTS_PL_VOICE=Microsoft Paulina Desktop
+KULAI_TTS_EN_VOICE=Microsoft Zira Desktop
+Settings default: disabled; voice strings empty, wymagane przy enable.
+Nazwy example odpowiadają realnym audited installed voices, bez user-specific paths.
+Nie zmieniono backend/.env. Użytkownik włącza TTS przez te ustawienia po review.
+Brak/nieprawidłowa konfiguracja/głosy → controlled "TTS unavailable."; Voice/RAG/Library nadal Ready.
+Brak API keys, remote providerów, committed audio lub voice binaries.
 
-11. Stale-revision second line of defense
-Existing edit-after-backup test pozostaje: revision1 ->2 po verified backup zostaje teraz zatrzymana przez full snapshot token (DesktopBackupError), zero delete mutation.
-Drugi wariant edytuje canonical Memory dopiero po udanym produkcyjnym revalidate_verified_backup: expected_revision=1 jest odrzucone pod canonical lockiem w tej samej delete transaction (DesktopDeleteConflictError).
-W obu przypadkach revision2 i latest vector pozostają, complete snapshot po edit == po próbie delete, tombstones=0, dump retained. Revision protection nie została zastąpiona snapshotem.
+11. Speech contract
+Nowy neutralny application/speech.py:
+SpeechLanguage.PL="pl", EN="en".
+Frozen SpeechSegment(text, language); nonempty text, typed PL/EN only.
+Frozen SpeechPlan(original_answer, tuple[segments]).
+1..64 segmentów, nonblank answer, max 6000 znaków.
+"".join(segment.text) MUSI być dokładnie original_answer.
+Whitespace i punctuation zachowane 1:1. Whitespace-only fragment jest nonempty data i może zostać scalony z sąsiadem.
+SynthesizedSpeech(audio bytes, language, voice_id) oraz neutralny async SpeechProvider Protocol.
+Brak Qt/SQLAlchemy/concrete Ollama/SAPI w application core. Sensitive dataclass repr wyłączone.
+Speech plan/audio = derived ephemeral data, bez persistence.
 
-12. Cancellation/shutdown/thread behavior
-Controller sprawdza _closing/task.cancelling zarówno przed nową rewalidacją, jak i tuż przed delete. CancelledError propaguje, nie jest zamieniany na safe failure ani połykany.
-Nowy file/hash read działa w asyncio.to_thread na istniejącym workerze. Shield/drain kończy rozpoczęty odczyt przed propagacją cancellation; nie daje pozwolenia na delete.
-Testy: cancellation podczas revalidation snapshot, cancellation podczas offloaded hash read (drain), pending shutdown/cancellation po udanej revalidation -> zero delete. Existing dump/restore drain, delete rollback przed commit oraz durable committed delete i brak stale UI signal po close nadal PASS.
-Qt nie wykonuje SQL/pg_dump/pg_restore/hash. Existing runtime/providers/resources ownership pozostaje.
+12. Speech planner design
+MemoryRagRuntime.plan_speech(answer=...) wywołuje neutralny application planner przez już istniejący self._llm.
+Stable system policy: partition exact text, label pl/en, preserve characters/spaces, no translation/rewrite/question answering/commands/system disclosure.
+Final answer trafia tylko do osobnego user JSON {"answer": ...}.
+Planner NIE dostaje query, Memory context, citations, UUID list, DB, vector metadata, embeddings ani audio.
+Native strict structured output: {"segments": [{"text": "...", "language": "pl|en"}]}.
+Extra fields zakazane. Temperature=0, max_output_tokens=8192, timeout=180 s.
+Canonical insufficient answer → jeden PL segment, bez Qwen planner requestu.
 
-13. Privacy/model invariants i application boundaries
-Mismatch i internal exception trafiają do jednego safe DesktopBackupError z suppress cause; errors nie zawierają PRIVATE sentinel, query/context/content/path credentials lub provider payload.
-DELETE/revalidation: Whisper requests=0, BGE requests=0, Qwen requests=0. Nie utworzono nowych providerów ani drugiego Desktop RAG runtime.
-Existing controlled/real Desktop deletion fixture: Whisper providers_created=1, BGE clients=1/closed=1/native_dimension=1024/dimensions_override_count=0, Qwen clients=1/closed=1/model=qwen3.5:9b/requests=0. BGE requests=2 to fixture indexing i post-delete query.
-Application core bez Qt/SQLAlchemy/admin backup logic; schema/tombstone/deletion algorithm, Android, WebSocket, BGE/Qwen/Whisper config bez zmian w tej korekcie.
+13. Exact-text validation
+Najpierw raw structured segments/count/languages i exact concatenation; potem deterministyczne scalenie adjacent same-language.
+Nie ma fuzzy matching, naprawiania spacji, tłumaczenia ani fallbacku do jednego PL głosu.
+Rewrite, translation, missing/duplicated characters i unknown language → safe speech error.
+Podczas pierwszej próby real Qwen pominął spacje; walidacja zatrzymała speech i zachowała tekst.
+Stały prompt doprecyzowano o generic exact-space examples i zasadę split only at language changes.
+Final focused i pełne real regressions PASS. Nie osłabiono exact validation.
 
-14. Focused controller/UI/backup/deletion regressions
-230 PASS, 1 SKIP (4.58s), exit0. W tym: controller delete30, delete UI9, backup/revalidation21 (razem60 PASS); new actual-gap cases, cancellation, backup/restore CLI, pre-migration safeguards, deletion/tombstone, snapshot fingerprints i application boundaries.
-Początkowy focused run przed dodaniem dodatkowego cancellation-during-revalidation case: 59 PASS (3.83s); końcowy większy suite obejmuje wszystkie60.
-SKIP: platformowy test real symlink creation na Windows bez wymaganych uprawnień. Deterministic symlink guard tests PASS.
-Evidence: .venv/task6b2_gap/regression.xml i regression.log.
+14. Mixed PL/EN example
+Synthetic:
+"Smok mieszka na Venus. The dragon is happy. Potem wraca do domu."
+Validated segments:
+PL "Smok mieszka na "
+EN "Venus. The dragon is happy. "
+PL "Potem wraca do domu."
+Exact concatenation, spaces i punctuation bez zmiany.
+Real Qwen test z "Zielony smok mieszka na Wenus. The dragon is happy. Potem wraca do domu." → PL, EN, PL; exact text PASS.
+Nie stosowano heurystyki "polskie znaki → PL".
 
-15. Owned PostgreSQL delete/gap integrations
-19 PASS (101.32s), exit0; flags PostgreSQL/Ollama/LLM=1. Wyłącznie owned synthetic source/restore DB.
-Cases obejmują actual gap archive/restore/other Memory, size/hash tamper, control, oba stale edit warianty, Active/Archived/real-BGE delete+retained recovery, restore/source failure, vector/commit/cancel rollback i shutdown dump/verification/committed.
-W nowym gap suite intencjonalna mutation następuje po pełnym powrocie verified factory, przed produkcyjnym helperem i przed produkcyjnym delete, nie tylko podczas backup/restore.
-Evidence: .venv/task6b2_gap/owned_delete.xml i owned_delete.log.
+15. Qwen reuse proof
+W Desktop nie ma nowej LLM factory ani drugiego Qwen clienta.
+RAG runtime nadal owns one Qwen, a speech planner używa tej samej instancji.
+Real owned Desktop: Qwen clients=1, requests=5 = RAG 3 + speech-plan 2, closed=1.
+Real planner-only: clients=1, requests=3 (PL, EN, mixed), closed=1; DB sessions=0.
+Controlled owned failure/STOP/shutdown coverage: one Qwen, RAG requests=3, speech-plan=6, closed=1.
 
-16. Backend full
-510 PASS, 107 SKIP opt-in, 1 existing Starlette/AnyIO deprecation warning (13.77s), exit0.
-Evidence: .venv/task6b2_gap/backend_full.xml i backend_full.log.
+16. TTS routing
+PL segment → exact configured PL voice/culture.
+EN segment → exact configured EN voice/culture.
+Provider odpowiedź musi potwierdzić exact voice + language; unexpected values są odrzucane.
+Native engine dostaje plain Speak(string), nie SpeakSsml ani shell interpolation.
+Answer data jest JSON na stdin; PowerShell command zawiera tylko static EncodedCommand.
+No UUID/source/score concatenation. Synthesis czyta tylko final answer segments.
+Ordered fake routing i real PL→EN→PL requests PASS.
 
-17. Root full with existing opt-ins
-865 PASS, 2 SKIP, 1 existing Starlette/AnyIO deprecation warning (359.31s / 0:05:59), exit0; 867 collected.
-Backend integration cases w root run: 106 PASS, 1 SKIP (107 total). Nowa korekta dodaje21 unit i7 owned cases względem wcześniejszego root run TASK 6B.2 (837 ->865 PASS).
-SKIP1: optional external real speech test — KULAI_WHISPER_AUDIO is not set; controlled Whisper/model reuse tests PASS.
-SKIP2: Windows real symlink creation — Symlinks are unavailable to this process; deterministic guard tests PASS.
-KULAI_RUN_POSTGRES_INTEGRATION=1, KULAI_RUN_OLLAMA_INTEGRATION=1, KULAI_RUN_LLM_INTEGRATION=1, KULAI_RUN_WHISPER_INTEGRATION=1.
-Controlled/generated/local synthetic Whisper fixtures; KULAI_WHISPER_AUDIO celowo unset, bez mikrofonu/main user audio.
-Root obejmuje deletion/tombstone/index concurrency, lifecycle, Desktop Library/Voice Note/Text ASK/Ask by Voice, RAG, indexing/retrieval, backup/restore, websocket, application boundaries, real BGE/Qwen/controlled Whisper i frozen golden.
-Evidence: .venv/task6b2_gap/root_full.xml i root_full.log.
+17. Audio artifact ownership
+Private unique tempfile directory w user temporary location, outside resolved project root.
+Każdy WAV jest exclusive-created i śledzony przed rozpoczęciem zapisu.
+Directory ownership zapisane także wewnątrz thread-backed creation, aby cancellation nie zgubiła path.
+Cleanup używa wyłącznie owned file unlink i własnego directory.rmdir; nie ma recursive delete.
+Provider MemoryStream jest dispose; player zamyka read przed rozpoczęciem output.
+Normal finish, STOP, provider/player failure, new operation, cancellation i shutdown usuwają owned paths.
+Testy cancellation podczas directory creation/write drenują thread przed cleanup; PASS.
+No permanent cache/history/audio files w repo.
 
-18. Golden/real model regressions
-Golden SHA-256: 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7;16 documents/16 queries.
-Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0, zarówno PL i EN. Frozen thresholds pozostają0.60/0.80/0.90. Fingerprints unchanged=true.
-Golden BGE: clients=1, requests=32, closed=1, native_1024=32, overrides=0.
-Real Library edit/archive/restore RAG regresja PASS: BGE clients=1/requests=7/closed=1, Qwen clients=1/requests=2/closed=1, checkout during Qwen=[0,0].
-Real Desktop voice RAG checkout=[0,0,0]; real canonical RAG PL/unsupported/injection checkout=[0,0,0,0]. Wszystkie checks PASS na synthetic owned data.
-Dataset/baseline/hash/thresholds nie zostały zmienione. Bez score cutoff/reranker, zmian retrieval, nowych migracji ani model config.
-Real-model calls dotyczą wyłącznie owned synthetic fixtures; revalidation/delete nie używają modeli.
+18. Playback design
+Host SoundDevicePlayback, private RawOutputStream per WAV.
+Validowane RIFF/WAVE PCM16, 1/2 kanały, sample rate 8000..96000, complete frames, bounded duration/size.
+Każdy segment używa swojego sample rate/channels; nie sklejamy WAV ani nie resamplujemy naiwnie.
+Sequential playback, bez globals sd.play/sd.stop i bez równoległych odpowiedzi.
+File read/parse/open/start/abort/close offloaded; callback kopiuje PCM i kończy na EOF.
+Native completion/abort+close poprzedza unlink.
+Fake native stream tests sprawdzają PCM/padding, metadata, completion, stop/cancel/replay oraz safe device failure.
+Real synthesis tests używają fake audio-device boundary; fizyczny odsłuch nie jest oceniany automatycznie.
 
-19. Complete main snapshot BEFORE/AFTER
-Before == After EXACTLY, potwierdzone assertionem complete DatabaseSnapshot oraz identycznymi plikami JSON/fingerprints.
-Revision before/after: kulai_memory_0004.
-Memory before/after: count8; sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e.
-Vector before/after: count8; sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f.
-Tombstone before/after: count1; sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147.
-Zero automated main mutation; zero main user Memory/audio model use.
-Snapshot zawiera complete durable Memory/vector/tombstone fingerprints i schema revision; output/report nie zawiera real Memory content ani raw row/vector/tombstone data.
-Evidence: .venv/task6b2_gap/main_before.json i main_after.json, read-only safety.py.
+19. UI changes
+Ask Memory: SPEAK, STOP AUDIO, default-checked "Speak voice answers automatically".
+Separate speech_status obok existing answer/sources.
+SPEAK enabled tylko dla gotowego nonfailed result, available TTS, idle i nieclosing.
+STOP available podczas planning/synthesis/playback; podczas draining drugi STOP jest disabled.
+Statuses: Preparing speech... → Synthesizing speech... → Speaking... → Speech finished.
+Speech stopped / controlled speech error nie nadpisują głównego RAG statusu.
+Existing Library/Delete/Voice Note widgets i semantics bez zmian.
 
-20. Pozostałe checks
-pip check: PASS — No broken requirements found.
-git diff --check: PASS, exit0, także po zapisie raportu.
-db_doctor: PASS na starcie i po wszystkich testach; JSON doctor16/16 checks,0 failed. PostgreSQL18.6, pgvector0.8.6, configured/actual vector1024, transaction_read_only=on.
-Vendor: clean, git status --porcelain empty; gitlink720d0f26c75ba4af24d395f98f15a37e4bd5067e unchanged.
-Retained synthetic root dumpy:3 pliki nadal istnieją poza repo; świeży filesystem size/SHA-256 check zgodny z results integracji, PASS.
-Android/WebSocket contract/generated files niezmienione, bez Android rebuild. Nie dodano TTS/schema/migration ani main automated writes.
+20. Auto-speak behavior
+Text ASK pokazuje normalny answer/citations; SPEAK uruchamia użytkownik.
+Voice ASK najpierw renderuje existing DesktopVoiceQuestionResult.rag_result; Qt-side checkbox następnie zleca ten sam worker speak_answer.
+Checkbox disabled → zero auto speech.
+Unavailable TTS → RAG nadal działa, brak auto speech.
+Empty speech/failed RAG nie uruchamia TTS.
+Insufficient context może być spoken jako canonical PL bez dodatkowego planowania.
 
-21. Exact changed files w tej safety correction
+21. STOP behavior
+Controller.stop_audio cancels/drains active speech task, nie zamyka providerów.
+Playback abort/close przed file cleanup.
+Text answer i citations pozostają; next SPEAK ponownie używa runtime/provider.
+New ASK, Voice ASK lub Voice Note stopuje poprzedni playback przed nową operacją.
+Queued progress podczas STOP nie przywraca Speaking/STOP enabled.
+Library mutations/refresh/retry zablokowane podczas active speech.
+
+22. Failure behavior
+Public speech error = "Could not speak answer."
+Unavailable = "TTS unavailable."
+Nie pokazujemy answer/context/prompt/DB credentials/native payload/paths/stacktrace w public errors.
+TTS/planner failure nie modyfikuje frozen DesktopRagResult i nie czyści answer/sources.
+UI korzysta z osobnego speech status; RAG Answered/Not enough information pozostaje.
+Failure in segment N zatrzymuje synthesis queue i usuwa wcześniejsze WAVs; playback failure usuwa remaining artifacts.
+No DB transaction/persistence w TTS.
+
+23. Cancellation/shutdown
+Existing operation lock serializuje Qwen RAG, planning i synthesis.
+Track controller._speech_task oraz runtime._task; shutdown cancels/gathers przed close.
+Qwen CancelledError propaguje; stale UI success jest blokowany przez closing/shutdown guards.
+Native System.Speech request shield/drain przed resource cleanup; timeout 90 s + bounded process close (3 s, potem kill).
+Whole controller/runtime speech operation 600 s; total audio <=64 MiB /600 s, single WAV <=16 MiB.
+Player wait <=duration+10 s; native abort/close przed cleanup.
+Thread-backed work nie jest udawane jako natychmiast cancellable.
+Tests close podczas planner/synthesis/playback: Qt responsive, provider close once, files gone, no pending-task errors/stale signals.
+Existing Whisper drain-before-unlink i CUDA/engine teardown pozostają.
+
+24. Controller tests
+test_desktop_speech.py: 19 PASS.
+Immutable answer/citations, two SPEAK reuse, zero DB/Whisper/BGE/index calls.
+Canonical insufficient PL zero planner calls.
+Unconfigured/factory/prepare failure leaves Ready/RAG/voice operational.
+Planner invalid/rewritten, synthesis/playback failures safe and secondary.
+Serialization recording/pending/locked operation.
+STOP/new ASK/new Voice Note/new voice question cancel+cleanup, next SPEAK works.
+Shutdown planner/native synthesis/playback drains and closes resources once.
+
+25. UI tests
+test_desktop_speech_ui.py: 10 PASS.
+Widgets/initial states, answer enables SPEAK, transitions/finish/failure preserve answer+sources.
+Auto checkbox true/false, exact validated RAG result submitted.
+New text/voice/note request stops playback first.
+Unavailable keeps Library/Voice/RAG ready.
+Real worker QThread tests close during planner/synthesis/playback; timer proves Qt responsiveness.
+No pixel layout or real device/network in UI tests.
+
+26. Speech-plan tests
+test_speech_plan.py: 27 PASS.
+Pure PL/EN, mixed PL→EN→PL, exact concatenation, whitespace/newline/tab/punctuation.
+Adjacent same-language merge; empty/overlength/unknown language/>64 rejected.
+Rewrite/translation/missing/duplicate characters rejected.
+Malicious text remains user data; generated policy disclosure rejected by exactness.
+Errors safe, CancelledError propagates, original answer never repaired.
+Application boundaries: all existing checks PASS.
+
+27. TTS runtime/adapter/playback tests
+test_speech_runtime.py: 15 PASS.
+test_windows_speech_provider.py: 7 PASS.
+test_audio_playback.py: 3 PASS.
+Ordered routing/reuse, safe failure in N, wrong format/language rejected, temp cleanup.
+Stop then next speak; close active task; cancellation during directory/write ownership; whole timeout.
+Hidden static command + plain JSON stdin; data containing shell/SSML-like text is not code.
+Native voice/language/base64/exception rejection; native timeout and drain-before-close.
+Private native playback stream EOF/padding/metadata/stop/cancel/failure verified.
+New units = 81 PASS; focused 85 PASS includes 4 existing boundary tests.
+
+28. Real TTS PL result
+KULAI_RUN_TTS_INTEGRATION=1; installed Paulina → WAV PCM16/nonempty/duration2.579s; PASS.
+No user content/audio, fake physical output; artifacts cleaned; one client, close once.
+
+29. Real TTS EN result
+Installed Zira → WAV PCM16/nonempty/duration2.559s; PASS.
+PL requests0, EN requests1; artifacts cleaned; one client, close once.
+
+30. Real mixed result
+Synthetic: "Zielony smok mieszka na Venus. The dragon is happy. Potem zasypia."
+Explicit validated PL→EN→PL routing.
+Durations = [2.1892, 3.4241, 1.7643] s, each >0.
+TTS clients=1, PL requests2, EN requests1, closed1; all artifacts removed.
+test_local_tts.py integration = 3 PASS.
+Automatic waveform check nie ocenia brzmienia; manual odsłuch po review.
+
+31. Real Qwen speech-plan result
+test_speech_planner.py integration = 1 PASS covering 3 real requests.
+Pure PL→PL, EN→EN, mixed→PL/EN/PL; exact concatenation.
+One Qwen client closed once; no DB/session access permitted, no Memory context supplied.
+Uses production MemoryRagRuntime.plan_speech and reusable structured-output API.
+
+32. Owned full Desktop flow
+test_desktop_speech_postgres.py: controlled + real BGE/Qwen/TTS = 2 PASS.
+Owned migrated temporary PostgreSQL only; synthetic dragon fixture created/indexed via existing Voice Note path.
+Text ASK+SPEAK and voice-question RAG+speech: Answered, Venus/Wenus, exact fixture Memory ID citation.
+Speech only final answer; planner request exact {"answer": final_answer}.
+Unsupported instrument question → INSUFFICIENT_CONTEXT, zero citations, canonical PL speech without Qwen planner.
+Controlled invalid plan/TTS failure/STOP/shutdown each preserves complete owned snapshot.
+Physical player is fake; native real synthesis validated through real WAV output.
+
+33. Provider counters
+Real owned full Desktop:
+Whisper providers_created=1, inference_requests=2 (fixture note + synthetic voice question; controlled STT).
+BGE clients=1, requests=4 (fixture index +3 queries), closed=1, native_dimension=1024, dimensions_override_count=0.
+Qwen clients=1, RAG requests=3, speech-plan requests=2, total5, closed=1; qwen3.5:9b.
+TTS clients=1, PL requests=3, EN requests=0, closed=1 (these real grounded answers were PL).
+Separate real mixed synthesis proves EN routing: same TTS client, PL2/EN1, closed1.
+Separate real planner proves same Qwen reuse across PL/EN/mixed: clients1, requests3, closed1.
+Controlled failure flow: one BGE/LLM/TTS, BGE4, RAG3/plan6, TTS PL6, all closed1.
+Existing real Whisper regression: providers_created=1, models_loaded=1, inference_requests=2; large-v3/cuda/int8_float16/VAD.
+No second Whisper/BGE/Qwen runtime/provider created for speech.
+
+34. DB checkout proof
+Real owned client instrumentation checks engine.pool.checkedout()==0 during every Qwen RAG/planner request (five zeros).
+TTS wrapper and planner entry also assert checkedout()==0.
+Canonical retrieval session is closed before generation, unchanged from 6A.1.
+SPEAK uses no session_factory; standalone planner test has forbidden DB factory.
+Observe_reads reports no commits/DB writes in question/speech section.
+TTS provider/player have no database dependency.
+
+35. Owned snapshot BEFORE/AFTER
+Real owned full Desktop run (root suite):
+revision ["kulai_memory_0004"]
+memories count1, sha256 2a0940cbfe1533d5558d57e72419329b1c764321ef822963bd9253a260735a56
+vectors count1, sha256 34aac4eabfc7a958330ece78906295f9c11f71db1df6882ab523528d316a00e0
+tombstones count0, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+BEFORE == AFTER exactly.
+Controlled owned flow (all success/failure/STOP/cancel outcomes):
+memories count1, sha256 cb7b2be26e72dccb70b8a91ac4f8aad7c596aa3843e2f835dfea4f0dd615f273
+vectors count1, sha256 e80f167cd960902dba6eaae7cef549a9a0556a89a04782e81de1c6c6196791f2
+tombstones count0, empty sha256 as above.
+BEFORE == AFTER exactly. Only fixture setup writes occurred before snapshot/observe block.
+
+36. Main snapshot BEFORE/AFTER
+Complete equality asserted by safety.py after full root regressions.
+AFTER revision/counts/fingerprints exactly those in point2:
+Memory8 / Vector8 / Tombstone1; all three SHA unchanged.
+Ignored evidence: main_before.json, main_after.json, main_after.log.
+No automated main answer, content or audio sent to planner/TTS/LLM/STT.
+Manual real main smoke not executed.
+
+37. Backend tests
+.venv\Scripts\python.exe -m pytest -q backend/tests --junitxml=.venv/task6a4/backend_full.xml
+591 PASS, 113 SKIP, 1 existing Starlette/anyio deprecation warning; 15.13 s.
+Without integration opt-ins; all applicable integrations run by full root command below.
+Initial collection basename collision between new unit/integration test_local_tts fixed by naming unit test_windows_speech_provider.
+Final backend full is clean.
+
+38. Root tests
+All existing opt-ins:
+KULAI_RUN_POSTGRES_INTEGRATION=1
+KULAI_RUN_OLLAMA_INTEGRATION=1
+KULAI_RUN_LLM_INTEGRATION=1
+KULAI_RUN_WHISPER_INTEGRATION=1
+KULAI_RUN_TTS_INTEGRATION=1
+KULAI_WHISPER_AUDIO unset: no real user audio.
+.venv\Scripts\python.exe -m pytest -q -s --junitxml=.venv/task6a4/root_full.xml
+952 PASS, 2 SKIP, 1 existing deprecation warning; 386.24 s.
+113 backend integration cases: 112 PASS, 1 optional user-audio SKIP.
+Second root SKIP: existing output/parent symlink test, Windows symlink creation unavailable to this process.
+Owned backup/restore/delete concurrency/tombstone/lifecycle/Library/Voice Note/text RAG/Voice ASK/indexing/retrieval/WebSocket/boundaries regressions PASS.
+New 81 unit +6 integration cases =87 PASS.
+Android/mobile/protocol/generated shared contracts unchanged; no rebuild required.
+
+39. Golden hash/metrics
+Frozen v1 unchanged:
+dataset_sha256 = 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
+16 synthetic documents, 16 PL/EN queries.
+Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0.
+PL and EN separately all1.0.
+Existing thresholds 0.60/0.80/0.90 unchanged.
+Provider clients1/requests32/closed1/native1024=32/overrides0; fingerprints unchanged.
+No score cutoff/reranker, retrieval semantics, namespace or BGE change.
+
+40. pip check
+PASS — No broken requirements found.
+All Python commands used configured PyCharm SDK:
+C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe, Python3.13.15, pip.
+No package installations.
+
+41. git diff --check
+PASS. Final check repeated after writing this report.
+Only normal Windows LF→CRLF advisories; no whitespace errors.
+No staged changes/commit/push performed.
+
+42. db_doctor
+PASS before and after; final explicit CLI JSON all16 checks OK.
+PostgreSQL18.6, pgvector0.8.6, READ ONLY on.
+Expected/current revision kulai_memory_0004, configured/actual vector dimension1024.
+Existing schema/tombstone/revision constraints allvalid.
+No migration/schema changes.
+
+43. Vendor status
+git -C vendor/kulai_modules status --porcelain empty.
+Pin unchanged 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+No vendor modifications and no submodule update.
+
+44. Exact changed files
 README.md
+backend/.env.example
 backend/README.md
-backend/src/kulai_memory/backup_service.py
-backend/src/kulai_memory/desktop/controller.py
-backend/tests/test_desktop_delete.py
-backend/tests/test_verified_backup.py
-backend/tests/integration/test_desktop_delete_postgres.py
-wynik.txt
-Pozostałe już istniejące WIP TASK 6B.2 pozostawiono; pełna lista diff względem HEAD:
-backend/README.md
-backend/src/kulai_memory/application/__init__.py
-backend/src/kulai_memory/application/deletion.py
-backend/src/kulai_memory/application/ports.py
-backend/src/kulai_memory/backup_service.py
-backend/src/kulai_memory/database_safety.py
-backend/src/kulai_memory/deletion_persistence.py
+backend/src/kulai_memory/application/speech.py (new)
+backend/src/kulai_memory/audio_playback.py (new)
+backend/src/kulai_memory/local_tts.py (new)
+backend/src/kulai_memory/speech_runtime.py (new)
 backend/src/kulai_memory/desktop/__init__.py
 backend/src/kulai_memory/desktop/app.py
 backend/src/kulai_memory/desktop/controller.py
 backend/src/kulai_memory/desktop/models.py
-backend/src/kulai_memory/persistence/repository.py
-backend/tests/integration/test_desktop_delete_postgres.py
-backend/tests/integration/test_memory_deletion_postgres.py
-backend/tests/integration/test_pre_migration_backup_postgres.py
-backend/tests/integration/test_tombstone_backup_postgres.py
-backend/tests/test_desktop_delete.py
-backend/tests/test_desktop_delete_ui.py
-backend/tests/test_desktop_ui.py
-backend/tests/test_memory_deletion.py
-backend/tests/test_memory_persistence.py
-backend/tests/test_memory_tombstones.py
-backend/tests/test_verified_backup.py
-README.md
-scripts/db_backup.py
-scripts/db_restore_smoke.py
-tests/test_database_tools.py
-tests/test_pre_migration_backup.py
+backend/src/kulai_memory/rag_runtime.py
+backend/src/kulai_memory/settings.py
+backend/tests/integration/test_desktop_speech_postgres.py (new)
+backend/tests/integration/test_local_tts.py (new)
+backend/tests/integration/test_speech_planner.py (new)
+backend/tests/speech_fakes.py (new)
+backend/tests/test_audio_playback.py (new)
+backend/tests/test_desktop_speech.py (new)
+backend/tests/test_desktop_speech_ui.py (new)
+backend/tests/test_speech_plan.py (new)
+backend/tests/test_speech_runtime.py (new)
+backend/tests/test_windows_speech_provider.py (new)
 wynik.txt
+Ignored .venv/task6a4 contains audit/safety/test logs/XML/diagnostics only; not proposed repository artifacts.
+scripts/export_repo.py unchanged.
 
-22. Known limitations
-Full-source revalidation jest świeżym read-only token check tuż przed delete transaction; nie wprowadza globalnej blokady wszystkich external DB writers. Selected revision nadal jest chroniona atomowo w delete transaction. Jest to requested minimum contract, bez zmiany deletion/tombstone algorithm.
-Partial/tampered dump pozostaje na dysku po failure, lecz nie stanowi verified recovery backup. Cancellation administracyjnego subprocessu/file read drainuje rozpoczętą pracę; delete po cancellation nie zaczyna się.
-Manual expendable main green-dragon DELETE/microphone smoke pozostaje po review; nie wykonano go automatycznie. Brak TTS, Android/WebSocket RAG, multi-turn i reviewed score cutoff/reranker.
+45. Known limitations
+Production TTS adapter currently Windows-only; requires two matching installed Microsoft Desktop voices and working output device.
+TTS defaults disabled; configure backend/.env after review to enable it.
+Exact text/types/count validated, but arbitrary language correctness depends on Qwen; known synthetic PL/EN/mixed cases pass.
+Invalid/rephrased/mis-spaced plan fails safely; no fallback reading mixed answer through one Polish voice.
+Native inference is drained before resource cleanup; STOP/close during synthesis may wait up to synthesis bound rather than instantly abort.
+Audio quality and physical playback require manual listening; automated tests use controlled device boundary.
+No Android/WebSocket TTS, multi-turn, streaming partial STT/TTS, permanent audio cache/history.
+No reviewed semantic cutoff/reranker. Existing grounding/citations/insufficient behavior unchanged.
+Existing optional external-audio/symlink skips and deprecation warning noted in point38.
 
-23. Proposed commit message
-feat: add Desktop hard delete with verified backup token and revision protection
+46. Manual smoke instructions — REPORT ONLY
+After review:
+Enable the three TTS settings from point10; run existing scripts/desktop.py with project venv and local Ollama.
+A. Text ASK: "Gdzie teraz mieszka mój zielony smok?" → inspect grounded answer/citations → SPEAK.
+B. ASK BY VOICE: same question → STOP QUESTION → inspect transcript/result → automatic speech with checkbox enabled.
+Disable checkbox and repeat to check text-only result.
+C. Controlled mixed final answer: review PL→EN→PL pronunciation, e.g. synthetic example from point14.
+D. STOP AUDIO during playback; text/sources remain; SPEAK again.
+E. Close while Speaking and during preparing/synthesis; confirm clean shutdown/no retained owned WAV.
+No automated real main query/audio or manual microphone/main smoke was performed in this task.
 
-24. Decyzja
+47. Proposed commit message
+feat: add local Desktop PL/EN speech with exact plans and safe playback
+
+48. Decyzja
 OK DO COMMITA
-Blocker wskazany w safety correction został usunięty i udowodniony actual-gap tests. Snapshot token i revision protection działają jako osobne kontrole; regressions PASS, main unchanged, vendor clean.
-Nie commitowano. Nie pushowano. HEAD nadal 8937bc6800e46a93e654e823b8a2b9cb1b74b8ba.
+Real offline installed TTS PL/EN/mixed PASS; exact speech plans PASS; single reused Qwen/TTS clients.
+SPEAK/auto voice/STOP/cancellation and temp cleanup PASS; answer/citations survive speech failure.
+Zero TTS/question DB writes, checkout during Qwen/TTS0; main complete snapshot unchanged.
+Full regressions PASS with two documented environment/optional skips; golden unchanged; vendor clean.
+Commit i push NIE wykonane.

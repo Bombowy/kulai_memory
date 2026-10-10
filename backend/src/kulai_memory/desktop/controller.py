@@ -55,6 +55,8 @@ from kulai_memory.deletion_persistence import delete_memory as delete_canonical_
 from kulai_memory.application.deletion import MemoryDeletionRevisionConflictError
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER, MemoryRagError, MemoryRagResult
 from kulai_memory.application.retrieval import MemoryRetrievalError, MemoryRetrievalService
+from kulai_memory.application.speech import SpeechPlan, validate_speech_text
+from kulai_memory.speech_runtime import SpeechRuntime, create_speech_runtime, SPEECH_OPERATION_TIMEOUT_SECONDS
 from kulai_memory.automatic_indexing import (
     AutomaticMemoryIndexer, RuntimeMemoryIndexer, RuntimeIndexerFactory,
     EmbeddingProviderFactory, OwnedEmbeddingProvider,
@@ -95,6 +97,7 @@ from .models import (
     DesktopMemoryEditInputError, DesktopMemoryConflictError, DesktopMemoryArchivedError,
     DesktopDeleteInputError, DesktopBackupError, DesktopDeleteError, DesktopDeleteConflictError,
     DesktopDeleteProgress, DesktopDeleteProgressState, DesktopMemoryDeleteResult,
+    DesktopSpeechProgress, DesktopSpeechProgressState, DesktopSpeechError, DesktopSpeechUnavailableError,
 )
 from .recorder import MicrophoneRecorder
 
@@ -123,7 +126,7 @@ Doctor = Callable[[str], Awaitable[DoctorReport]]
 EngineFactory = Callable[[DbConfig], _Engine]
 SessionFactoryBuilder = Callable[[_Engine], _SessionFactory]
 RepositoryFactory = Callable[[AsyncSession], MemoryRepository]
-ProgressCallback = Callable[[DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress | DesktopDeleteProgress], None]
+ProgressCallback = Callable[[DesktopProgress | DesktopRagProgress | DesktopVoiceQuestionProgress | DesktopDeleteProgress | DesktopSpeechProgress], None]
 
 
 class DesktopMemoryRag(Protocol):
@@ -131,6 +134,7 @@ class DesktopMemoryRag(Protocol):
     async def ask(self, *, query: str, top_k: int = 5,
                   on_generating: Callable[[], None] | None = None) -> MemoryRagResult: ...
     async def aclose(self) -> None: ...
+    async def plan_speech(self, *, answer: str) -> SpeechPlan: ...
 
 
 RagRuntimeFactory = Callable[..., DesktopMemoryRag]
@@ -208,6 +212,7 @@ class DesktopController:
         embedding_provider_factory: EmbeddingProviderFactory = create_embedding_provider,
         rag_runtime_factory: RagRuntimeFactory = MemoryRagRuntime,
         verified_backup_factory: Callable[..., Awaitable[VerifiedBackupResult]] | None = None,
+        speech_runtime_factory: Callable[..., SpeechRuntime | None] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._recorder = recorder or MicrophoneRecorder()
@@ -222,6 +227,9 @@ class DesktopController:
         self._embedding_provider_factory = embedding_provider_factory
         self._rag_runtime_factory = rag_runtime_factory
         self._verified_backup_factory = verified_backup_factory or create_verified_backup
+        self._speech_runtime_factory = speech_runtime_factory or create_speech_runtime
+        self._speech: SpeechRuntime | None = None
+        self._speech_task: asyncio.Task[Any] | None = None
         self._db_config: DbConfig | None = None
         self._delete_task: asyncio.Task[Any] | None = None
         self._embedding_provider: OwnedEmbeddingProvider | None = None
@@ -264,6 +272,7 @@ class DesktopController:
                     devices=await asyncio.to_thread(self._recorder.list_devices),
                     memories=await self._list_recent_unlocked(RECENT_MEMORY_LIMIT),
                     indexing=self._indexing_report,
+                    tts_available=self._speech is not None,
                 )
 
             self._validate_canonical_stt()
@@ -306,13 +315,27 @@ class DesktopController:
                     embedding_provider=self._embedding_provider,
                 )
                 await self._rag.__aenter__()
+                # Optional presentation must not prevent voice/RAG/Library startup.
+                # Construction is lazy: no Qwen planning, synthesis or playback here.
+                try:
+                    self._speech = self._speech_runtime_factory(settings=self._settings)
+                    if self._speech is not None:
+                        await self._speech.prepare()
+                except Exception:
+                    speech, self._speech = self._speech, None
+                    if speech is not None:
+                        try:
+                            await speech.aclose()
+                        except Exception:
+                            pass
                 unexpected_error = DesktopPublicError
                 devices = await asyncio.to_thread(self._recorder.list_devices)
                 self._transcription_service = TranscriptionService(provider=provider)
                 self._indexing_report = await self._indexer.reconcile()
                 self._started = True
                 memories = await self._list_recent_unlocked(RECENT_MEMORY_LIMIT)
-                return DesktopStartupResult(devices=devices, memories=memories, indexing=self._indexing_report)
+                return DesktopStartupResult(devices=devices, memories=memories, indexing=self._indexing_report,
+                                            tts_available=self._speech is not None)
             except asyncio.CancelledError:
                 await self._shutdown_resources_unlocked()
                 raise
@@ -324,6 +347,7 @@ class DesktopController:
                 raise unexpected_error() from exc
 
     async def start_recording(self, *, device_id: int) -> UUID:
+        await self.stop_audio()
         if self._operation_lock.locked():
             raise DesktopStateError
         async with self._operation_lock:
@@ -402,7 +426,7 @@ class DesktopController:
             raise
 
     async def _shutdown(self) -> None:
-        tasks = {task for task in (self._rag_task, self._voice_question_task, self._library_task, self._delete_task)
+        tasks = {task for task in (self._rag_task, self._voice_question_task, self._library_task, self._delete_task, self._speech_task)
                  if task is not None and not task.done()}
         for task in tasks:
             task.cancel()
@@ -424,6 +448,7 @@ class DesktopController:
             MemoryRetrievalService.validate_input(query=query, top_k=top_k)
         except MemoryRetrievalError:
             raise DesktopRagInputError from None
+        await self.stop_audio()
         if self._operation_lock.locked():
             raise DesktopStateError
         async with self._operation_lock:
@@ -453,9 +478,50 @@ class DesktopController:
             finally:
                 self._rag_task = None
 
+    async def speak_answer(self, *, result: DesktopRagResult) -> None:
+        """Secondary read-only presentation; never modifies the RAG answer/citations."""
+        try:
+            if not isinstance(result, DesktopRagResult) or result.status is DesktopRagStatus.FAILED:
+                raise ValueError
+            validate_speech_text(result.answer)
+        except Exception:
+            raise DesktopSpeechError from None
+        await self.stop_audio()
+        if self._operation_lock.locked():
+            raise DesktopStateError
+        async with self._operation_lock:
+            self._require_library_idle()
+            if self._speech is None:
+                raise DesktopSpeechUnavailableError
+            self._speech_task = asyncio.current_task()
+            try:
+                async with asyncio.timeout(SPEECH_OPERATION_TIMEOUT_SECONDS):
+                    self._progress_callback(DesktopSpeechProgress(DesktopSpeechProgressState.PREPARING))
+                    plan = await self._rag.plan_speech(answer=result.answer)
+                    if not isinstance(plan, SpeechPlan) or plan.original_answer != result.answer:
+                        raise ValueError
+                    self._progress_callback(DesktopSpeechProgress(DesktopSpeechProgressState.SYNTHESIZING))
+                    await self._speech.speak(plan, on_speaking=lambda: self._progress_callback(
+                        DesktopSpeechProgress(DesktopSpeechProgressState.SPEAKING)))
+                if self._closing or asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError
+                self._progress_callback(DesktopSpeechProgress(DesktopSpeechProgressState.FINISHED))
+            except Exception:
+                raise DesktopSpeechError from None
+            finally:
+                self._speech_task = None
+
+    async def stop_audio(self) -> None:
+        """Cancel/drain the current presentation without closing its reusable provider."""
+        task = self._speech_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await _finish_audio_before_cancellation(asyncio.create_task(_wait_for_speech(task)))
+
     async def start_voice_question(self, *, device_id: int) -> None:
         """Explicit question capture: no ingestion identity, no new provider."""
 
+        await self.stop_audio()
         if self._operation_lock.locked():
             raise DesktopStateError
         async with self._operation_lock:
@@ -788,6 +854,14 @@ class DesktopController:
 
     async def _shutdown_resources_unlocked(self) -> None:
         cancellation = None
+        speech, self._speech = self._speech, None
+        if speech is not None:
+            try:
+                await speech.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+            except Exception:
+                pass
         rag, self._rag = self._rag, None
         if rag is not None:
             try:
@@ -863,3 +937,7 @@ async def _finish_audio_before_cancellation(task: asyncio.Task[Any]) -> Any:
         if not task.cancelled():
             task.exception()
         raise
+
+
+async def _wait_for_speech(task: asyncio.Task) -> None:
+    await asyncio.gather(task, return_exceptions=True)
