@@ -438,9 +438,10 @@ class MainWindow(QMainWindow):
         self.answer.setPlaceholderText("An answer grounded in your memories will appear here.")
         ask_layout.addWidget(self.answer)
         speech_row = QHBoxLayout()
+        speech_row.addWidget(QLabel("Polish / English speech", self.ask_group))
         self.speak_button = QPushButton("SPEAK", self.ask_group)
         self.stop_audio_button = QPushButton("STOP AUDIO", self.ask_group)
-        self.auto_speak_checkbox = QCheckBox("Speak voice answers automatically", self.ask_group)
+        self.auto_speak_checkbox = QCheckBox("Speak answers automatically", self.ask_group)
         self.auto_speak_checkbox.setChecked(True)
         speech_row.addWidget(self.speak_button)
         speech_row.addWidget(self.stop_audio_button)
@@ -614,11 +615,12 @@ class MainWindow(QMainWindow):
         self.speech_status.setText("Speech stopped")
         self._update_controls()
 
-    def _stop_speech_for_new_operation(self) -> None:
+    def _retire_speech_for_new_operation(self) -> None:
         if self._speech_active:
-            self._worker.request_stop_audio()
+            # The requested controller operation awaits stop_audio itself. Sending
+            # a separate STOP future races its cancellation against the new task.
             self._speech_active = self._speech_preparing = False
-            self.speech_status.setText("Speech stopped")
+            self.speech_status.setText("Stopping speech...")
 
     def _selected_library_item(self) -> DesktopMemoryItem | None:
         row = self.library_table.currentRow()
@@ -788,7 +790,7 @@ class MainWindow(QMainWindow):
     def _ask_memory(self) -> None:
         if not self.ask_button.isEnabled():
             return
-        self._stop_speech_for_new_operation()
+        self._retire_speech_for_new_operation()
         self._last_rag_result = None
         self._busy = self._rag_active = True
         self.answer.clear()
@@ -812,7 +814,7 @@ class MainWindow(QMainWindow):
         device_id = self.device_selector.currentData()
         if device_id is None:
             return
-        self._stop_speech_for_new_operation()
+        self._retire_speech_for_new_operation()
         self._last_rag_result = None
         self._busy = self._voice_question_active = self._rag_active = True
         self.answer.clear()
@@ -841,8 +843,6 @@ class MainWindow(QMainWindow):
         self.query_input.setText(result.transcript)
         if result.rag_result is not None:
             self._on_rag_finished(result.rag_result)
-            if self.auto_speak_checkbox.isChecked() and self._tts_available:
-                self._speak_answer()
         else:
             self._busy = self._rag_active = False
             self.answer.clear()
@@ -872,6 +872,10 @@ class MainWindow(QMainWindow):
             self.answer.clear()
             self.rag_status.setText(result.error_message or "An answer could not be generated.")
         self._update_controls()
+
+        if (result.status in {DesktopRagStatus.ANSWERED, DesktopRagStatus.INSUFFICIENT_CONTEXT}
+                and self.auto_speak_checkbox.isChecked() and self._tts_available):
+            self._speak_answer()
 
     @Slot(object)
     def _on_startup_ready(self, result: DesktopStartupResult) -> None:
@@ -917,12 +921,12 @@ class MainWindow(QMainWindow):
     @Slot()
     def _start_recording(self) -> None:
         if (self._busy or self._recording or self._voice_question_active
-                or self._save_pending or self._closing or self._speech_preparing):
+                or self._save_pending or self._closing or self._speech_preparing or self._speech_stopping):
             return
         device_id = self.device_selector.currentData()
         if device_id is None:
             return
-        self._stop_speech_for_new_operation()
+        self._retire_speech_for_new_operation()
         self._busy = True
         self._update_controls()
         self.record_button.setEnabled(False)

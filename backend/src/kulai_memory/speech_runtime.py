@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .application.speech import SpeechError, SpeechPlan, SpeechProvider, SynthesizedSpeech
+from .application.speech import SpeechError, SpeechLanguage, SpeechPlan, SpeechProvider, SynthesizedSpeech
 from .audio_playback import SoundDevicePlayback, read_wave
 from .local_tts import WindowsSpeechProvider, SYNTHESIS_TIMEOUT_SECONDS, drain_audio_work
 from .settings import Settings
@@ -20,6 +21,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 class AudioPlayback(Protocol):
     async def play(self, path: Path) -> None: ...
     async def stop(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechSegmentInfo:
+    """Optional diagnostic metadata, containing neither answer nor audio."""
+    number: int
+    language: SpeechLanguage
+    character_count: int
+    voice_id: str
 
 
 class SpeechRuntime:
@@ -39,14 +49,16 @@ class SpeechRuntime:
     async def prepare(self) -> None:
         await self.provider.prepare()
 
-    async def speak(self, plan: SpeechPlan, *, on_speaking: Callable[[], None] | None = None):
+    async def speak(self, plan: SpeechPlan, *, on_speaking: Callable[[], None] | None = None,
+                    on_segment: Callable[[SpeechSegmentInfo], None] | None = None):
         try:
             async with asyncio.timeout(SPEECH_OPERATION_TIMEOUT_SECONDS):
-                await self._speak(plan, on_speaking=on_speaking)
+                await self._speak(plan, on_speaking=on_speaking, on_segment=on_segment)
         except Exception:
             raise SpeechError() from None
 
-    async def _speak(self, plan: SpeechPlan, *, on_speaking: Callable[[], None] | None):
+    async def _speak(self, plan: SpeechPlan, *, on_speaking: Callable[[], None] | None,
+                     on_segment: Callable[[SpeechSegmentInfo], None] | None):
         if self._closed or self._active or not isinstance(plan, SpeechPlan):
             raise SpeechError()
         self._active = True
@@ -59,7 +71,7 @@ class SpeechRuntime:
                 self._directory = Path(tempfile.mkdtemp(prefix="kulai_speech_", dir=root))
             await drain_audio_work(asyncio.create_task(asyncio.to_thread(create_directory)))
             total_bytes = total_duration = 0
-            for segment in plan.segments:
+            for number, segment in enumerate(plan.segments, 1):
                 speech = await asyncio.wait_for(self.provider.synthesize(segment), SYNTHESIS_TIMEOUT_SECONDS)
                 if not isinstance(speech, SynthesizedSpeech) or speech.language is not segment.language or not speech.voice_id:
                     raise SpeechError()
@@ -68,6 +80,8 @@ class SpeechRuntime:
                 total_duration += wave.duration
                 if total_bytes > MAX_OPERATION_AUDIO_BYTES or total_duration > 600:
                     raise SpeechError()
+                if on_segment is not None:
+                    on_segment(SpeechSegmentInfo(number, segment.language, len(segment.text), speech.voice_id))
                 path = self._directory / f"segment_{len(self._artifacts):02d}.wav"
                 self._artifacts.append(path)  # Track ownership before starting the write.
                 def write_audio():

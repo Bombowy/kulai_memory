@@ -45,7 +45,9 @@ def test_widgets_states_stop_finish_and_secondary_failure_keep_answer(monkeypatc
     try:
         assert w.speak_button.text() == 'SPEAK' and w.stop_audio_button.text() == 'STOP AUDIO'
         assert w.auto_speak_checkbox.isChecked()
+        assert w.auto_speak_checkbox.text() == 'Speak answers automatically'
         assert not w.speak_button.isEnabled() and not w.stop_audio_button.isEnabled()
+        w.auto_speak_checkbox.setChecked(False)
         result = show_answer(w)
         assert w.speak_button.isEnabled() and not spoken
         w.speak_button.click()
@@ -84,6 +86,7 @@ def test_widgets_states_stop_finish_and_secondary_failure_keep_answer(monkeypatc
 def test_voice_auto_speak_checkbox_uses_rendered_validated_result(monkeypatch, enabled):
     app, w, _, _, spoken, _ = speech_window(monkeypatch)
     try:
+        w.auto_speak_checkbox.setChecked(False)
         result = show_answer(w)
         w.auto_speak_checkbox.setChecked(enabled)
         w._rag_active = w._voice_question_active = True
@@ -108,13 +111,14 @@ def test_new_request_stops_existing_playback_first(monkeypatch, operation):
     monkeypatch.setattr(w._worker, 'request_start_voice_question', lambda *a: calls.append('voice_question'))
     monkeypatch.setattr(w._worker, 'request_start_recording', lambda *a: calls.append('note'))
     try:
+        w.auto_speak_checkbox.setChecked(False)
         show_answer(w)
         w.query_input.setText('controlled question')
         w.speak_button.click()
         w._on_progress(DesktopSpeechProgress(DesktopSpeechProgressState.SPEAKING))
         {'ask': w.ask_button, 'voice_question': w.voice_ask_button, 'note': w.record_button}[operation].click()
-        assert calls == ['stop', operation]
-        assert not w._speech_active and w.speech_status.text() == 'Speech stopped'
+        assert calls == [operation]  # Its controller coroutine owns stop-and-drain.
+        assert not w._speech_active and w.speech_status.text() == 'Stopping speech...'
     finally:
         w.close()
         app.processEvents()

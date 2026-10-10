@@ -29,6 +29,25 @@ def test_routes_in_order_reuses_one_provider_and_cleans_all_waves():
     asyncio.run(scenario())
 
 
+def test_optional_diagnostics_contain_only_segment_routing_metadata():
+    from dataclasses import asdict
+    async def scenario():
+        provider, player = FakeSpeechProvider(), FakePlayback()
+        runtime = SpeechRuntime(provider=provider, playback=player)
+        infos = []
+        plan = speech_plan()
+        try:
+            await runtime.speak(plan, on_segment=infos.append)
+            assert [asdict(info) for info in infos] == [dict(number=i, language=segment.language,
+                character_count=len(segment.text), voice_id='voice-' + segment.language.value)
+                for i, segment in enumerate(plan.segments, 1)]
+            assert plan.original_answer not in repr(infos)
+            assert not runtime.artifacts
+        finally:
+            await runtime.aclose()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('failure', ['segment2', 'playback', 'format', 'language'])
 def test_failures_stop_queue_clean_prior_artifacts_and_are_safe(failure):
     async def scenario():

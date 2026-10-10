@@ -227,7 +227,7 @@ conversational multi-turn or partial STT; Android has no RAG UI, and WebSocket
 has no voice RAG flow. The existing voice-note save/index/Recent Memory flow is
 unchanged.
 
-Desktop supports optional **local PL/EN speech** on Windows using installed
+Desktop supports optional **local Polish / English speech** on Windows using installed
 Microsoft **Desktop** voices through `System.Speech`, with the existing
 `sounddevice` audio output. No cloud inference, additional model download or
 voice binaries in the repo are required. This host has **Microsoft Paulina
@@ -249,11 +249,14 @@ The example defaults to disabled. Missing settings or unavailable voices show
 **TTS unavailable.** while Voice Note, RAG and Library remain usable. Startup
 checks installed voices without synthesizing speech or requesting Qwen.
 One long-lived local TTS process owns one synthesizer and switches its installed
-PL/EN voices; it does not reload a model for each segment.
+PL/EN voices; it does not reload a model for each segment. Each synthesis selects
+the exact configured voice and verifies the active voice before speaking; Python
+also rejects returned voice IDs that do not match the segment's PL/EN routing.
 
-After text **ASK**, click **SPEAK** to read only the final answer. **Speak voice
-answers automatically** is checked by default: **ASK BY VOICE** renders its
-answer and validated sources first, then speaks if the option is enabled.
+**Speak answers automatically** is checked by default and applies to both text
+**ASK** and **ASK BY VOICE**. Each successful or insufficient-context result
+renders its answer and validated sources first, then starts speech exactly once
+if TTS is available. Uncheck it to use **SPEAK** manually for either kind of answer.
 UUIDs, citations, scores and source content are never sent to TTS. A separate
 speech status shows **Preparing speech...**, **Synthesizing speech...**,
 **Speaking...** and **Speech finished**. A failure shows **Could not speak answer.**
@@ -267,8 +270,12 @@ and punctuation. Translation, rewriting, missing or duplicated characters fail
 safely; the app does not repair them or fall back to reading everything in PL.
 Adjacent fragments with the same language are merged after validation. A fixed
 insufficient-context answer uses one PL segment without another Qwen request.
-Language labels come from Qwen; exact-text validation cannot prove arbitrary
-language classification, so mixed-language pronunciation still needs manual review.
+The planner partitions phrases within sentences as well as complete sentences;
+full English clauses use EN even after a Polish opening. Names/acronyms alone
+may stay with the surrounding phrase. Only Polish and English are supported;
+other languages require a separate design. Labels come from Qwen; exact-text
+validation cannot prove classification for every possible answer, so pronunciation
+still needs manual review.
 
 Each PL fragment uses the configured Polish voice, each EN fragment the English
 voice. PCM16 WAVs play in order through separate private output streams, preserving
@@ -276,7 +283,9 @@ each file's sample rate/channels. The app never concatenates WAV headers or play
 two answers together. Audio lives only in unique private temporary files outside
 the repo. **STOP AUDIO** cancels planning/synthesis or stops playback and cleans
 the artifacts; it preserves text and lets you **SPEAK** again. New ASK, voice
-question or Voice Note stops previous playback before starting.
+question or Voice Note waits for previous speech to stop and drain completely
+before starting. The UI submits one new operation; that controller operation
+owns the stop-and-drain sequence, avoiding competing STOP/request futures.
 
 Planning, synthesis, file IO and playback run on the existing worker; they perform
 no database writes and hold no DB checkout. Planning/synthesis use the operation
@@ -294,6 +303,18 @@ partial STT/TTS and a reviewed score cutoff/reranker are not implemented.
 PL/EN/mixed text. Automated tests validate PCM/WAV and cleanup through a fake
 audio-device boundary; listening quality and the physical output device are
 checked manually after review.
+
+For a local synthetic mixed-answer listening test without Memory or PostgreSQL:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\tts_smoke.py --text "To jest część po polsku. This is the English part. I znowu po polsku."
+.\.venv\Scripts\python.exe scripts\tts_smoke.py --text "This starts in English. Potem przechodzimy na polski. English again."
+```
+
+This uses the production planner, local voices and playback, prints only segment
+count/language/character count/voice, and removes every temporary audio file.
+`--no-play` runs synthesis/WAV validation without playback. It requires the same
+TTS configuration and local Qwen model as Desktop; it never downloads voices.
 
 The Desktop **Memory Library** shows **Active** and **Archived** Memories in
 created-at/UUID descending order, with a bounded limit of 100 rows. Select a row

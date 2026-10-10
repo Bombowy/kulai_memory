@@ -127,28 +127,39 @@ required. Missing/invalid voices leave Desktop ready with **TTS unavailable.**
 The provider is owned once by the controller; startup only verifies installed
 voices, with no synthesis or Qwen request.
 
-Text answers offer **SPEAK** / **STOP AUDIO**. The default-enabled **Speak voice
-answers automatically** option speaks a voice-question result after rendering
-its grounded text and validated citations. `application.speech` uses the same
+Text and voice answers offer **SPEAK** / **STOP AUDIO**. The default-enabled
+**Speak answers automatically** option applies to both Text ASK and ASK BY VOICE.
+One shared result handler starts speech exactly once after rendering successful
+or insufficient-context answers and their validated sources. Failed results and
+unavailable TTS do not auto-speak. `application.speech` uses the same
 long-lived Qwen through `MemoryRagRuntime.plan_speech`, receiving only the final
 answer as untrusted data. Strict PL/EN segments must concatenate to the exact
 answer, preserving all whitespace/punctuation; invalid plans fail without text
-repair. Bounds: 6,000 characters, 64 segments, planner 180s, synthesis 90s/segment,
+repair or a fallback to one PL voice. The planner handles English clauses within
+Polish sentences too. This is **Polish / English speech**, not arbitrary-language
+support. Bounds: 6,000 characters, 64 segments, planner 180s, synthesis 90s/segment,
 whole operation 600s. Canonical insufficient context is spoken directly in PL.
 The configured PL and EN voices synthesize their respective fragments only;
-citations/UUIDs/scores and Memory context are never spoken.
+each native request verifies the selected active voice before Speak, and Python
+checks the returned voice ID against the configured PL/EN voice. Citations/UUIDs/
+scores and Memory context are never spoken.
 
 Private temporary WAVs outside the repo are played sequentially at their own
 PCM16 sample rate/channels. Worker-side IO/synthesis/playback keeps Qt responsive.
-STOP and new ASK/Voice Note cancel previous speech; cancellation drains native
+New ASK/Voice ASK/Voice Note awaits full speech stop/drain in its controller
+coroutine before starting; the UI does not enqueue a competing STOP request.
+STOP cancels previous speech; cancellation drains native
 work before deleting resources. All owned audio is cleaned on completion, STOP,
 failure, replacement and shutdown; providers close once. TTS failures preserve
 answer/citations and primary RAG status. Speech has no DB writes, checkout,
-history or permanent audio cache. Exact text is validated; arbitrary language
-labels still depend on Qwen. TTS is Desktop-only: no Android/WebSocket TTS,
+history or permanent audio cache. Exact text is validated; PL/EN classification
+still depends on Qwen. TTS is Desktop-only: no Android/WebSocket TTS,
 multi-turn or streaming partial STT/TTS. See root docs for setup/manual listening.
 Opt-in `KULAI_RUN_TTS_INTEGRATION=1` tests real installed PL/EN voices only with
 synthetic text and a fake audio-device boundary; no main answer/audio is used.
+`scripts/tts_smoke.py --text "To jest test. This is a test."` uses the production
+planner, voices and playback without DB/Memory. It prints only segment metadata,
+always cleans owned audio, and supports `--no-play` for synthesis validation.
 
 Desktop **Memory Library** provides bounded Active/Archived views, full content,
 revision-safe EDIT, confirmed reversible ARCHIVE and RESTORE. Its neutral read

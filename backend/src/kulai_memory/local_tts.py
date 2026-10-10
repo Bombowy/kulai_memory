@@ -50,6 +50,7 @@ try {
                 $stream = [System.IO.MemoryStream]::new()
                 try {
                     $synth.SelectVoice($voices[$request.language])
+                    if ($synth.Voice.Name -cne $voices[$request.language]) { throw 'voice_mismatch' }
                     $synth.SetOutputToWaveStream($stream)
                     $synth.Speak([string]$request.text)
                     $synth.SetOutputToNull()

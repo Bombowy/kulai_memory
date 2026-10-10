@@ -17,6 +17,9 @@ MAX_SPEECH_SEGMENTS = 64
 SPEECH_PLANNER_SYSTEM_PROMPT = (
     "Partition the exact supplied final answer text into Polish (pl) and English (en) fragments. "
     "Label each fragment's actual language, including English phrases inside Polish sentences. "
+    "Classify phrases, not entire sentences: a Polish opening must NOT make a following English clause Polish. "
+    "Complete English phrases/clauses with English grammar require en even without a preceding period. "
+    "Names, acronyms and code tokens alone can stay with the surrounding language; they must not hide English clauses. "
     "Keep whitespace and punctuation exactly, grouped with neighboring text. "
     "Concatenating fragments must reproduce the supplied text character for character. "
     "Never translate, rewrite, omit, duplicate, paraphrase, or add characters. "
@@ -31,6 +34,16 @@ SPEECH_PLANNER_SYSTEM_PROMPT = (
     "{\"text\":\"To jest kot. \",\"language\":\"pl\"},"
     "{\"text\":\"The cat is asleep. \",\"language\":\"en\"},"
     "{\"text\":\"Dobranoc.\",\"language\":\"pl\"}]}."
+    " Mid-sentence examples: input 'Biblioteka SomeTool supports live updates.' -> {\"segments\":["
+    "{\"text\":\"Biblioteka \",\"language\":\"pl\"},"
+    "{\"text\":\"SomeTool supports live updates.\",\"language\":\"en\"}]};"
+    " input 'Pole nazywa się Account Name and must be unique.' -> {\"segments\":["
+    "{\"text\":\"Pole nazywa się \",\"language\":\"pl\"},"
+    "{\"text\":\"Account Name and must be unique.\",\"language\":\"en\"}]};"
+    " input 'This field is required. Potem zatwierdź. The form is ready.' -> {\"segments\":["
+    "{\"text\":\"This field is required. \",\"language\":\"en\"},"
+    "{\"text\":\"Potem zatwierdź. \",\"language\":\"pl\"},"
+    "{\"text\":\"The form is ready.\",\"language\":\"en\"}]}."
     " Verify exact concatenation before returning JSON."
 )
 

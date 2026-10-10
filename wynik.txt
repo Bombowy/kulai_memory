@@ -1,449 +1,303 @@
-TASK 6A.4 — Desktop local TTS with validated PL/EN speech segments and safe playback
-Data: 2026-10-10
+TASK 6A.4 CORRECTION — POLISH / ENGLISH SWITCHING + AUTO-SPEAK
 Repo: C:\Bombowy\Projekty\kulai_memory
+Data: 2026-10-10
+Status raportu: finalny; OK DO COMMITA (manual user smoke po review).
+Nie wykonano commit ani push. Automatyzacja nie używa prywatnego main answer/audio.
 
-Decyzja: OK DO COMMITA
-Nie wykonano commit ani push. Nie wykonano automated main query/STT/TTS ani main mutation.
-Raport zawiera wyłącznie metadata, counts/fingerprints oraz syntetyczne przykłady.
-
-1. Start commit/status
-HEAD = 5ac04ca64c7134c93720944d6c7006f97976cd97
-origin/main = ten sam commit.
-TASK 6B.2: feat: add Desktop hard delete with verified backup token and revision protection.
-Na starcie working tree clean; git status / status -sb, log -5, submodule status i vendor porcelain sprawdzone.
-Historia: 8937bc6 (Library), 98c8d87 (voice questions), 339cd30 (Desktop RAG), 3c0a27b (canonical text RAG).
-Vendor pin: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; clean.
-Local expected head i main current = kulai_memory_0004; strict db_doctor PASS.
-
-2. Main complete DatabaseSnapshot BEFORE
-revision = ["kulai_memory_0004"]
-memories.count = 8
-memories.sha256 = 57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
-vectors.count = 8
-vectors.sha256 = 2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
-tombstones.count = 1
-tombstones.sha256 = 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Complete snapshot zapisany w ignored .venv/task6a4/main_before.json.
-Snapshot helper używa existing read-only database_snapshot_url; do raportu nie trafia content ani vector values.
-
-3. TTS module/provider audit
-Przeczytano rzeczywiste vendor APIs i host Desktop/RAG/provider/recorder contracts.
-Przeszukano aktualne vendor modules, backend pyproject, imports, project venv i lokalne Windows tooling.
-Pinned vendor NIE zawiera importowalnego kulai_tts ani kulai_provider_kokoro.
-Duży vendor kod_do_analizy.txt zawiera stare wzmianki TTS/Kokoro, ale nie stanowi aktualnego API.
-Nie wykorzystano tych wzmiankowanych, nieobecnych modułów i nie zmieniono vendor.
-Reusable kulai_llm generate_structured oraz OllamaLLMProvider istnieją i zostały użyte.
-generate_structured przekazuje native JSON schema, następnie model_validate(parsed, strict=True).
-Speech schema używa Literal["pl", "en"], dopiero potem neutralnego SpeechLanguage enum.
-
-4. Dostępne local engines
-Venv: brak piper, kokoro, pyttsx3, win32com, kulai_tts, kulai_provider_kokoro, torch i torchaudio.
-Dostępne: sounddevice 0.5.6 (MIT), PySide6 6.11.2 (metadata LGPL/GPL), onnxruntime 1.30 (MIT).
-System.Speech jest rzeczywiście dostępny w zainstalowanym Windows/.NET/PowerShell.
-Installed enabled voices:
-Microsoft Paulina Desktop — pl-PL — Vendor Microsoft — Version 11.0.
-Microsoft Zira Desktop — en-US — Vendor Microsoft — Version 11.0.
-Realne metody zweryfikowane introspekcją: SelectVoice(string), Speak(string), SetOutputToWaveStream(Stream), SetOutputToNull(), Dispose().
-Metadata głosów: ignored .venv/task6a4/installed_voices.json.
-Głosy są lokalnymi komponentami Windows; mają własne warunki licencyjne Microsoft. Nie przypisujemy im licencji Piper/Kokoro ani nie redystrybuujemy weights/binaries.
-API reference:
-https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer?view=netframework-4.8.1
-
-5. Wybrany provider i dlaczego
-Minimalny host-local WindowsSpeechProvider nad realnym System.Speech.
-Wykorzystuje już zainstalowane PL/EN voices, działa bez instalacji paczek/modeli, ma jawne przełączanie języka/głosu i zwraca PCM16 WAV.
-Jeden persistent hidden PowerShell process posiada jeden SpeechSynthesizer przez cały lifecycle.
-Nie dodano fake production TTS. Fake provider/player występują wyłącznie w testach.
-Piper/Kokoro nie wybrano: brak installed runtime/verified local weights; wymagałyby dodatkowego wyboru/downloadu.
-Backend dependency manifests pozostają bez zmian: subprocess/stdlibrary oraz istniejący desktop sounddevice wystarczają.
-
-6. Proof local/offline
-Host adapter nie tworzy HTTP/cloud clienta i nie pobiera model weights.
-Wybiera tylko enabled Microsoft voices z suffix " Desktop" i zgodnym culture PL/EN.
-Synthesis = native Speak(string) → MemoryStream → WAV bytes, wewnątrz lokalnego procesu.
-Wszystkie real TTS tests używają wyłącznie synthetic text.
-Qwen planner pozostaje na existing loopback Ollama.
-Existing Whisper regression może sprawdzać Hugging Face metadata istniejącego model cache; to nie jest TTS/cloud inference.
-Nie instalowano paczek ani nie pobierano TTS models.
-
-7. PL support proof
-Zainstalowany Paulina Desktop culture pl-PL zweryfikowany przed synthesis.
-Real PL synthetic request: "Zielony smok mieszka na Wenus."
-WAV RIFF/WAVE, PCM16, duration 2.579 s > 0, nonempty audio.
-clients=1, PL requests=1, EN requests=0, closed=1; wszystkie temp artifacts usunięte.
-
-8. EN support proof
-Zainstalowany Zira Desktop culture en-US zweryfikowany przed synthesis.
-Real EN synthetic request: "The green dragon lives on Venus."
-WAV RIFF/WAVE, PCM16, duration 2.559 s > 0.
-clients=1, PL requests=0, EN requests=1, closed=1; artifacts usunięte.
-
-9. Provider lifecycle
-Controller owns one optional SpeechRuntime; runtime owns one TTS provider and private player.
-WindowsSpeechProvider constructor nie uruchamia procesu. prepare() sprawdza głosy, bez synthesis.
-Startup nie wykonuje Qwen planning, generation ani synthesis.
-Jeden synthesizer/process jest współdzielony przez wszystkie segmenty i kolejne SPEAK.
-aclose idempotent; controlled/real tests potwierdzają close exactly once.
-Po STOP provider pozostaje dostępny; następny SPEAK działa.
-Po bounded native failure adapter kończy uszkodzony child process; ten sam provider może przygotować native runtime przy kolejnej próbie. Nie tworzy providerów per segment.
-Whisper lifecycle pozostaje istniejący: vendor nie posiada aclose; controller zwalnia references i existing CUDA scope. Nie wymyślono metody close dla Whisper.
-
-10. Config
-backend/.env.example:
-KULAI_TTS_ENABLED=false
-KULAI_TTS_PL_VOICE=Microsoft Paulina Desktop
-KULAI_TTS_EN_VOICE=Microsoft Zira Desktop
-Settings default: disabled; voice strings empty, wymagane przy enable.
-Nazwy example odpowiadają realnym audited installed voices, bez user-specific paths.
-Nie zmieniono backend/.env. Użytkownik włącza TTS przez te ustawienia po review.
-Brak/nieprawidłowa konfiguracja/głosy → controlled "TTS unavailable."; Voice/RAG/Library nadal Ready.
-Brak API keys, remote providerów, committed audio lub voice binaries.
-
-11. Speech contract
-Nowy neutralny application/speech.py:
-SpeechLanguage.PL="pl", EN="en".
-Frozen SpeechSegment(text, language); nonempty text, typed PL/EN only.
-Frozen SpeechPlan(original_answer, tuple[segments]).
-1..64 segmentów, nonblank answer, max 6000 znaków.
-"".join(segment.text) MUSI być dokładnie original_answer.
-Whitespace i punctuation zachowane 1:1. Whitespace-only fragment jest nonempty data i może zostać scalony z sąsiadem.
-SynthesizedSpeech(audio bytes, language, voice_id) oraz neutralny async SpeechProvider Protocol.
-Brak Qt/SQLAlchemy/concrete Ollama/SAPI w application core. Sensitive dataclass repr wyłączone.
-Speech plan/audio = derived ephemeral data, bez persistence.
-
-12. Speech planner design
-MemoryRagRuntime.plan_speech(answer=...) wywołuje neutralny application planner przez już istniejący self._llm.
-Stable system policy: partition exact text, label pl/en, preserve characters/spaces, no translation/rewrite/question answering/commands/system disclosure.
-Final answer trafia tylko do osobnego user JSON {"answer": ...}.
-Planner NIE dostaje query, Memory context, citations, UUID list, DB, vector metadata, embeddings ani audio.
-Native strict structured output: {"segments": [{"text": "...", "language": "pl|en"}]}.
-Extra fields zakazane. Temperature=0, max_output_tokens=8192, timeout=180 s.
-Canonical insufficient answer → jeden PL segment, bez Qwen planner requestu.
-
-13. Exact-text validation
-Najpierw raw structured segments/count/languages i exact concatenation; potem deterministyczne scalenie adjacent same-language.
-Nie ma fuzzy matching, naprawiania spacji, tłumaczenia ani fallbacku do jednego PL głosu.
-Rewrite, translation, missing/duplicated characters i unknown language → safe speech error.
-Podczas pierwszej próby real Qwen pominął spacje; walidacja zatrzymała speech i zachowała tekst.
-Stały prompt doprecyzowano o generic exact-space examples i zasadę split only at language changes.
-Final focused i pełne real regressions PASS. Nie osłabiono exact validation.
-
-14. Mixed PL/EN example
-Synthetic:
-"Smok mieszka na Venus. The dragon is happy. Potem wraca do domu."
-Validated segments:
-PL "Smok mieszka na "
-EN "Venus. The dragon is happy. "
-PL "Potem wraca do domu."
-Exact concatenation, spaces i punctuation bez zmiany.
-Real Qwen test z "Zielony smok mieszka na Wenus. The dragon is happy. Potem wraca do domu." → PL, EN, PL; exact text PASS.
-Nie stosowano heurystyki "polskie znaki → PL".
-
-15. Qwen reuse proof
-W Desktop nie ma nowej LLM factory ani drugiego Qwen clienta.
-RAG runtime nadal owns one Qwen, a speech planner używa tej samej instancji.
-Real owned Desktop: Qwen clients=1, requests=5 = RAG 3 + speech-plan 2, closed=1.
-Real planner-only: clients=1, requests=3 (PL, EN, mixed), closed=1; DB sessions=0.
-Controlled owned failure/STOP/shutdown coverage: one Qwen, RAG requests=3, speech-plan=6, closed=1.
-
-16. TTS routing
-PL segment → exact configured PL voice/culture.
-EN segment → exact configured EN voice/culture.
-Provider odpowiedź musi potwierdzić exact voice + language; unexpected values są odrzucane.
-Native engine dostaje plain Speak(string), nie SpeakSsml ani shell interpolation.
-Answer data jest JSON na stdin; PowerShell command zawiera tylko static EncodedCommand.
-No UUID/source/score concatenation. Synthesis czyta tylko final answer segments.
-Ordered fake routing i real PL→EN→PL requests PASS.
-
-17. Audio artifact ownership
-Private unique tempfile directory w user temporary location, outside resolved project root.
-Każdy WAV jest exclusive-created i śledzony przed rozpoczęciem zapisu.
-Directory ownership zapisane także wewnątrz thread-backed creation, aby cancellation nie zgubiła path.
-Cleanup używa wyłącznie owned file unlink i własnego directory.rmdir; nie ma recursive delete.
-Provider MemoryStream jest dispose; player zamyka read przed rozpoczęciem output.
-Normal finish, STOP, provider/player failure, new operation, cancellation i shutdown usuwają owned paths.
-Testy cancellation podczas directory creation/write drenują thread przed cleanup; PASS.
-No permanent cache/history/audio files w repo.
-
-18. Playback design
-Host SoundDevicePlayback, private RawOutputStream per WAV.
-Validowane RIFF/WAVE PCM16, 1/2 kanały, sample rate 8000..96000, complete frames, bounded duration/size.
-Każdy segment używa swojego sample rate/channels; nie sklejamy WAV ani nie resamplujemy naiwnie.
-Sequential playback, bez globals sd.play/sd.stop i bez równoległych odpowiedzi.
-File read/parse/open/start/abort/close offloaded; callback kopiuje PCM i kończy na EOF.
-Native completion/abort+close poprzedza unlink.
-Fake native stream tests sprawdzają PCM/padding, metadata, completion, stop/cancel/replay oraz safe device failure.
-Real synthesis tests używają fake audio-device boundary; fizyczny odsłuch nie jest oceniany automatycznie.
-
-19. UI changes
-Ask Memory: SPEAK, STOP AUDIO, default-checked "Speak voice answers automatically".
-Separate speech_status obok existing answer/sources.
-SPEAK enabled tylko dla gotowego nonfailed result, available TTS, idle i nieclosing.
-STOP available podczas planning/synthesis/playback; podczas draining drugi STOP jest disabled.
-Statuses: Preparing speech... → Synthesizing speech... → Speaking... → Speech finished.
-Speech stopped / controlled speech error nie nadpisują głównego RAG statusu.
-Existing Library/Delete/Voice Note widgets i semantics bez zmian.
-
-20. Auto-speak behavior
-Text ASK pokazuje normalny answer/citations; SPEAK uruchamia użytkownik.
-Voice ASK najpierw renderuje existing DesktopVoiceQuestionResult.rag_result; Qt-side checkbox następnie zleca ten sam worker speak_answer.
-Checkbox disabled → zero auto speech.
-Unavailable TTS → RAG nadal działa, brak auto speech.
-Empty speech/failed RAG nie uruchamia TTS.
-Insufficient context może być spoken jako canonical PL bez dodatkowego planowania.
-
-21. STOP behavior
-Controller.stop_audio cancels/drains active speech task, nie zamyka providerów.
-Playback abort/close przed file cleanup.
-Text answer i citations pozostają; next SPEAK ponownie używa runtime/provider.
-New ASK, Voice ASK lub Voice Note stopuje poprzedni playback przed nową operacją.
-Queued progress podczas STOP nie przywraca Speaking/STOP enabled.
-Library mutations/refresh/retry zablokowane podczas active speech.
-
-22. Failure behavior
-Public speech error = "Could not speak answer."
-Unavailable = "TTS unavailable."
-Nie pokazujemy answer/context/prompt/DB credentials/native payload/paths/stacktrace w public errors.
-TTS/planner failure nie modyfikuje frozen DesktopRagResult i nie czyści answer/sources.
-UI korzysta z osobnego speech status; RAG Answered/Not enough information pozostaje.
-Failure in segment N zatrzymuje synthesis queue i usuwa wcześniejsze WAVs; playback failure usuwa remaining artifacts.
-No DB transaction/persistence w TTS.
-
-23. Cancellation/shutdown
-Existing operation lock serializuje Qwen RAG, planning i synthesis.
-Track controller._speech_task oraz runtime._task; shutdown cancels/gathers przed close.
-Qwen CancelledError propaguje; stale UI success jest blokowany przez closing/shutdown guards.
-Native System.Speech request shield/drain przed resource cleanup; timeout 90 s + bounded process close (3 s, potem kill).
-Whole controller/runtime speech operation 600 s; total audio <=64 MiB /600 s, single WAV <=16 MiB.
-Player wait <=duration+10 s; native abort/close przed cleanup.
-Thread-backed work nie jest udawane jako natychmiast cancellable.
-Tests close podczas planner/synthesis/playback: Qt responsive, provider close once, files gone, no pending-task errors/stale signals.
-Existing Whisper drain-before-unlink i CUDA/engine teardown pozostają.
-
-24. Controller tests
-test_desktop_speech.py: 19 PASS.
-Immutable answer/citations, two SPEAK reuse, zero DB/Whisper/BGE/index calls.
-Canonical insufficient PL zero planner calls.
-Unconfigured/factory/prepare failure leaves Ready/RAG/voice operational.
-Planner invalid/rewritten, synthesis/playback failures safe and secondary.
-Serialization recording/pending/locked operation.
-STOP/new ASK/new Voice Note/new voice question cancel+cleanup, next SPEAK works.
-Shutdown planner/native synthesis/playback drains and closes resources once.
-
-25. UI tests
-test_desktop_speech_ui.py: 10 PASS.
-Widgets/initial states, answer enables SPEAK, transitions/finish/failure preserve answer+sources.
-Auto checkbox true/false, exact validated RAG result submitted.
-New text/voice/note request stops playback first.
-Unavailable keeps Library/Voice/RAG ready.
-Real worker QThread tests close during planner/synthesis/playback; timer proves Qt responsiveness.
-No pixel layout or real device/network in UI tests.
-
-26. Speech-plan tests
-test_speech_plan.py: 27 PASS.
-Pure PL/EN, mixed PL→EN→PL, exact concatenation, whitespace/newline/tab/punctuation.
-Adjacent same-language merge; empty/overlength/unknown language/>64 rejected.
-Rewrite/translation/missing/duplicate characters rejected.
-Malicious text remains user data; generated policy disclosure rejected by exactness.
-Errors safe, CancelledError propagates, original answer never repaired.
-Application boundaries: all existing checks PASS.
-
-27. TTS runtime/adapter/playback tests
-test_speech_runtime.py: 15 PASS.
-test_windows_speech_provider.py: 7 PASS.
-test_audio_playback.py: 3 PASS.
-Ordered routing/reuse, safe failure in N, wrong format/language rejected, temp cleanup.
-Stop then next speak; close active task; cancellation during directory/write ownership; whole timeout.
-Hidden static command + plain JSON stdin; data containing shell/SSML-like text is not code.
-Native voice/language/base64/exception rejection; native timeout and drain-before-close.
-Private native playback stream EOF/padding/metadata/stop/cancel/failure verified.
-New units = 81 PASS; focused 85 PASS includes 4 existing boundary tests.
-
-28. Real TTS PL result
-KULAI_RUN_TTS_INTEGRATION=1; installed Paulina → WAV PCM16/nonempty/duration2.579s; PASS.
-No user content/audio, fake physical output; artifacts cleaned; one client, close once.
-
-29. Real TTS EN result
-Installed Zira → WAV PCM16/nonempty/duration2.559s; PASS.
-PL requests0, EN requests1; artifacts cleaned; one client, close once.
-
-30. Real mixed result
-Synthetic: "Zielony smok mieszka na Venus. The dragon is happy. Potem zasypia."
-Explicit validated PL→EN→PL routing.
-Durations = [2.1892, 3.4241, 1.7643] s, each >0.
-TTS clients=1, PL requests2, EN requests1, closed1; all artifacts removed.
-test_local_tts.py integration = 3 PASS.
-Automatic waveform check nie ocenia brzmienia; manual odsłuch po review.
-
-31. Real Qwen speech-plan result
-test_speech_planner.py integration = 1 PASS covering 3 real requests.
-Pure PL→PL, EN→EN, mixed→PL/EN/PL; exact concatenation.
-One Qwen client closed once; no DB/session access permitted, no Memory context supplied.
-Uses production MemoryRagRuntime.plan_speech and reusable structured-output API.
-
-32. Owned full Desktop flow
-test_desktop_speech_postgres.py: controlled + real BGE/Qwen/TTS = 2 PASS.
-Owned migrated temporary PostgreSQL only; synthetic dragon fixture created/indexed via existing Voice Note path.
-Text ASK+SPEAK and voice-question RAG+speech: Answered, Venus/Wenus, exact fixture Memory ID citation.
-Speech only final answer; planner request exact {"answer": final_answer}.
-Unsupported instrument question → INSUFFICIENT_CONTEXT, zero citations, canonical PL speech without Qwen planner.
-Controlled invalid plan/TTS failure/STOP/shutdown each preserves complete owned snapshot.
-Physical player is fake; native real synthesis validated through real WAV output.
-
-33. Provider counters
-Real owned full Desktop:
-Whisper providers_created=1, inference_requests=2 (fixture note + synthetic voice question; controlled STT).
-BGE clients=1, requests=4 (fixture index +3 queries), closed=1, native_dimension=1024, dimensions_override_count=0.
-Qwen clients=1, RAG requests=3, speech-plan requests=2, total5, closed=1; qwen3.5:9b.
-TTS clients=1, PL requests=3, EN requests=0, closed=1 (these real grounded answers were PL).
-Separate real mixed synthesis proves EN routing: same TTS client, PL2/EN1, closed1.
-Separate real planner proves same Qwen reuse across PL/EN/mixed: clients1, requests3, closed1.
-Controlled failure flow: one BGE/LLM/TTS, BGE4, RAG3/plan6, TTS PL6, all closed1.
-Existing real Whisper regression: providers_created=1, models_loaded=1, inference_requests=2; large-v3/cuda/int8_float16/VAD.
-No second Whisper/BGE/Qwen runtime/provider created for speech.
-
-34. DB checkout proof
-Real owned client instrumentation checks engine.pool.checkedout()==0 during every Qwen RAG/planner request (five zeros).
-TTS wrapper and planner entry also assert checkedout()==0.
-Canonical retrieval session is closed before generation, unchanged from 6A.1.
-SPEAK uses no session_factory; standalone planner test has forbidden DB factory.
-Observe_reads reports no commits/DB writes in question/speech section.
-TTS provider/player have no database dependency.
-
-35. Owned snapshot BEFORE/AFTER
-Real owned full Desktop run (root suite):
-revision ["kulai_memory_0004"]
-memories count1, sha256 2a0940cbfe1533d5558d57e72419329b1c764321ef822963bd9253a260735a56
-vectors count1, sha256 34aac4eabfc7a958330ece78906295f9c11f71db1df6882ab523528d316a00e0
-tombstones count0, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-BEFORE == AFTER exactly.
-Controlled owned flow (all success/failure/STOP/cancel outcomes):
-memories count1, sha256 cb7b2be26e72dccb70b8a91ac4f8aad7c596aa3843e2f835dfea4f0dd615f273
-vectors count1, sha256 e80f167cd960902dba6eaae7cef549a9a0556a89a04782e81de1c6c6196791f2
-tombstones count0, empty sha256 as above.
-BEFORE == AFTER exactly. Only fixture setup writes occurred before snapshot/observe block.
-
-36. Main snapshot BEFORE/AFTER
-Complete equality asserted by safety.py after full root regressions.
-AFTER revision/counts/fingerprints exactly those in point2:
-Memory8 / Vector8 / Tombstone1; all three SHA unchanged.
-Ignored evidence: main_before.json, main_after.json, main_after.log.
-No automated main answer, content or audio sent to planner/TTS/LLM/STT.
-Manual real main smoke not executed.
-
-37. Backend tests
-.venv\Scripts\python.exe -m pytest -q backend/tests --junitxml=.venv/task6a4/backend_full.xml
-591 PASS, 113 SKIP, 1 existing Starlette/anyio deprecation warning; 15.13 s.
-Without integration opt-ins; all applicable integrations run by full root command below.
-Initial collection basename collision between new unit/integration test_local_tts fixed by naming unit test_windows_speech_provider.
-Final backend full is clean.
-
-38. Root tests
-All existing opt-ins:
-KULAI_RUN_POSTGRES_INTEGRATION=1
-KULAI_RUN_OLLAMA_INTEGRATION=1
-KULAI_RUN_LLM_INTEGRATION=1
-KULAI_RUN_WHISPER_INTEGRATION=1
-KULAI_RUN_TTS_INTEGRATION=1
-KULAI_WHISPER_AUDIO unset: no real user audio.
-.venv\Scripts\python.exe -m pytest -q -s --junitxml=.venv/task6a4/root_full.xml
-952 PASS, 2 SKIP, 1 existing deprecation warning; 386.24 s.
-113 backend integration cases: 112 PASS, 1 optional user-audio SKIP.
-Second root SKIP: existing output/parent symlink test, Windows symlink creation unavailable to this process.
-Owned backup/restore/delete concurrency/tombstone/lifecycle/Library/Voice Note/text RAG/Voice ASK/indexing/retrieval/WebSocket/boundaries regressions PASS.
-New 81 unit +6 integration cases =87 PASS.
-Android/mobile/protocol/generated shared contracts unchanged; no rebuild required.
-
-39. Golden hash/metrics
-Frozen v1 unchanged:
-dataset_sha256 = 73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
-16 synthetic documents, 16 PL/EN queries.
-Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0.
-PL and EN separately all1.0.
-Existing thresholds 0.60/0.80/0.90 unchanged.
-Provider clients1/requests32/closed1/native1024=32/overrides0; fingerprints unchanged.
-No score cutoff/reranker, retrieval semantics, namespace or BGE change.
-
-40. pip check
-PASS — No broken requirements found.
-All Python commands used configured PyCharm SDK:
-C:\Bombowy\Projekty\kulai_memory\.venv\Scripts\python.exe, Python3.13.15, pip.
-No package installations.
-
-41. git diff --check
-PASS. Final check repeated after writing this report.
-Only normal Windows LF→CRLF advisories; no whitespace errors.
-No staged changes/commit/push performed.
-
-42. db_doctor
-PASS before and after; final explicit CLI JSON all16 checks OK.
-PostgreSQL18.6, pgvector0.8.6, READ ONLY on.
-Expected/current revision kulai_memory_0004, configured/actual vector dimension1024.
-Existing schema/tombstone/revision constraints allvalid.
-No migration/schema changes.
-
-43. Vendor status
-git -C vendor/kulai_modules status --porcelain empty.
-Pin unchanged 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-No vendor modifications and no submodule update.
-
-44. Exact changed files
-README.md
-backend/.env.example
-backend/README.md
-backend/src/kulai_memory/application/speech.py (new)
-backend/src/kulai_memory/audio_playback.py (new)
-backend/src/kulai_memory/local_tts.py (new)
-backend/src/kulai_memory/speech_runtime.py (new)
-backend/src/kulai_memory/desktop/__init__.py
-backend/src/kulai_memory/desktop/app.py
-backend/src/kulai_memory/desktop/controller.py
-backend/src/kulai_memory/desktop/models.py
-backend/src/kulai_memory/rag_runtime.py
-backend/src/kulai_memory/settings.py
-backend/tests/integration/test_desktop_speech_postgres.py (new)
-backend/tests/integration/test_local_tts.py (new)
-backend/tests/integration/test_speech_planner.py (new)
-backend/tests/speech_fakes.py (new)
-backend/tests/test_audio_playback.py (new)
-backend/tests/test_desktop_speech.py (new)
-backend/tests/test_desktop_speech_ui.py (new)
-backend/tests/test_speech_plan.py (new)
-backend/tests/test_speech_runtime.py (new)
-backend/tests/test_windows_speech_provider.py (new)
-wynik.txt
-Ignored .venv/task6a4 contains audit/safety/test logs/XML/diagnostics only; not proposed repository artifacts.
-scripts/export_repo.py unchanged.
-
-45. Known limitations
-Production TTS adapter currently Windows-only; requires two matching installed Microsoft Desktop voices and working output device.
-TTS defaults disabled; configure backend/.env after review to enable it.
-Exact text/types/count validated, but arbitrary language correctness depends on Qwen; known synthetic PL/EN/mixed cases pass.
-Invalid/rephrased/mis-spaced plan fails safely; no fallback reading mixed answer through one Polish voice.
-Native inference is drained before resource cleanup; STOP/close during synthesis may wait up to synthesis bound rather than instantly abort.
-Audio quality and physical playback require manual listening; automated tests use controlled device boundary.
-No Android/WebSocket TTS, multi-turn, streaming partial STT/TTS, permanent audio cache/history.
-No reviewed semantic cutoff/reranker. Existing grounding/citations/insufficient behavior unchanged.
-Existing optional external-audio/symlink skips and deprecation warning noted in point38.
-
-46. Manual smoke instructions — REPORT ONLY
-After review:
-Enable the three TTS settings from point10; run existing scripts/desktop.py with project venv and local Ollama.
-A. Text ASK: "Gdzie teraz mieszka mój zielony smok?" → inspect grounded answer/citations → SPEAK.
-B. ASK BY VOICE: same question → STOP QUESTION → inspect transcript/result → automatic speech with checkbox enabled.
-Disable checkbox and repeat to check text-only result.
-C. Controlled mixed final answer: review PL→EN→PL pronunciation, e.g. synthetic example from point14.
-D. STOP AUDIO during playback; text/sources remain; SPEAK again.
-E. Close while Speaking and during preparing/synthesis; confirm clean shutdown/no retained owned WAV.
-No automated real main query/audio or manual microphone/main smoke was performed in this task.
-
-47. Proposed commit message
+Stan początkowy:
+HEAD = 164614cfaa5ac93e383b8971b29af095ac4a16cf
 feat: add local Desktop PL/EN speech with exact plans and safe playback
+HEAD i origin/main zgodne. TASK 6B.2 (5ac04ca) w historii, committed/pushed.
+Na wejściu były nasze niezatwierdzone zmiany tej samej correction; zostały
+zachowane i dopracowane zgodnie z najnowszym poleceniem.
+Vendor = 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
+PyCharm SDK: project .venv, Python 3.13.15; sprawdzany przed Python/pytest/pip.
+Main schema current/head = kulai_memory_0004. Początkowy strict doctor PASS.
 
-48. Decyzja
-OK DO COMMITA
-Real offline installed TTS PL/EN/mixed PASS; exact speech plans PASS; single reused Qwen/TTS clients.
-SPEAK/auto voice/STOP/cancellation and temp cleanup PASS; answer/citations survive speech failure.
-Zero TTS/question DB writes, checkout during Qwen/TTS0; main complete snapshot unchanged.
-Full regressions PASS with two documented environment/optional skips; golden unchanged; vendor clean.
-Commit i push NIE wykonane.
+1. Root cause mixed PL/EN
+Audyt przeszedł pełny production path:
+DesktopRagResult.answer -> MemoryRagRuntime.plan_speech -> SpeechPlan
+-> SpeechRuntime -> WindowsSpeechProvider -> SoundDevicePlayback.
+Odtworzono konkretny błąd klasyfikacji Qwena: w dwóch syntetycznych
+przypadkach z angielską frazą wewnątrz polskiego zdania baseline dawał
+jeden PL segment. Exact text był prawidłowy, ale cała fraza dostawała Paulinę.
+W starszym ośmioprzypadkowym baseline przypadki 5 i 7: PL;
+po correction: PL -> EN. Pozostałe sześć przypadków baseline już przełączało
+język. Prywatnego tekstu z manualnego main smoke nie odtwarzano automatycznie.
+
+2. Planner / provider / playback / UI
+Reprodukowalny błąd mixed dotyczył planner language labels, nie kolejności WAV.
+Prompt teraz jawnie klasyfikuje frazy wewnątrz zdań: polski początek nie może
+przypisać całej późniejszej angielskiej frazy do PL. Dodano niezależne
+przykłady inline oraz EN -> PL -> EN; nazwy/kod same w sobie mogą pozostać
+z językiem otoczenia.
+Dla prawidłowych planów real provider/playback zachowały właściwą kolejność.
+Dodatkowo wzmocniono native provider: SelectVoice(EXACT configured voice)
+-> sprawdzenie aktywnego $synth.Voice.Name -> Speak.
+Python nadal sprawdza zwrócone language i voice ID.
+Nie wprowadzono heurystyki znaków PL, fuzzy repair, tłumaczenia ani PL fallback.
+
+3. Real Qwen planner — sześć wymaganych przypadków
+Sekwencje języków (bez dumpu tekstów/promptów):
+1: PL -> EN
+2: EN -> PL
+3: PL -> EN -> PL
+4: EN -> PL -> EN
+5: PL -> EN
+6: EN -> PL
+Łącznie 15 syntetycznych odpowiedzi: pure PL, pure EN, sześć aktualnie
+wymaganych, wcześniejsze inline/techniczne frazy oraz dokładny tekst CLI A.
+Każdy plan: exact concatenation == original answer, identyczne spacje,
+interpunkcja i znaki; pełne angielskie frazy pokryte EN; zero rewrite/translation.
+Test używa MemoryRagRuntime.plan_speech i tego samego klienta Qwen.
+Planner dostaje wyłącznie final answer jako dane, bez Memory context/citations.
+Forbidden DB factory: zero sessions.
+
+4. Real voice routing
+PL -> Microsoft Paulina Desktop; EN -> Microsoft Zira Desktop.
+Jedna instancja WindowsSpeechProvider i jeden persistent hidden process
+obsłużyły 11 odpowiedzi / 23 syntezy, w tym wszystkie cztery kierunki:
+PL/EN: Paulina -> Zira
+EN/PL: Zira -> Paulina
+PL/EN/PL: Paulina -> Zira -> Paulina
+EN/PL/EN: Zira -> Paulina -> Zira.
+Każdy request ma przypisany język i exact voice selection; każdy returned
+voice ID oraz jego kolejność są sprawdzane przez production provider/runtime
+i controlled integration. Brak providera per segment.
+Real WAV: PCM16, poprawny header, niepusty, duration > 0.
+Native program test z celowo nieskutecznym SelectVoice dowodzi ZERO Speak
+przy aktywnym niewłaściwym głosie. Wrong response voice/language/audio
+odrzucane bezpiecznie osobno dla PL i EN.
+
+5. tts_smoke A — PL -> EN -> PL
+scripts/tts_smoke.py używa production Settings, create_llm_provider,
+production plan_speech, WindowsSpeechProvider, SpeechRuntime i playback.
+Bez DB/Memory, bez permanentnego audio. --no-play zachowuje syntezę,
+WAV validation i cleanup, pomija jedynie odtwarzanie.
+Rzeczywista osobna komenda --no-play oraz pełny production CLI integration
+bez --no-play: PASS.
+Diagnostyka:
+segment_count=3
+segment=1 language=pl chars=24 voice=Microsoft Paulina Desktop
+segment=2 language=en chars=27 voice=Microsoft Zira Desktop
+segment=3 language=pl chars=18 voice=Microsoft Paulina Desktop
+
+6. tts_smoke B — EN -> PL -> EN
+Rzeczywista osobna komenda --no-play oraz pełny production CLI integration
+bez --no-play: PASS.
+segment_count=3
+segment=1 language=en chars=23 voice=Microsoft Zira Desktop
+segment=2 language=pl chars=30 voice=Microsoft Paulina Desktop
+segment=3 language=en chars=15 voice=Microsoft Zira Desktop
+Pełne CLI integracje podmieniają tylko fizyczne urządzenie: production
+SoundDevicePlayback czyta wszystkie real PCM callbacks; max active stream=1.
+Nie podmieniono planera, syntezy, Settings, lifecycle ani runtime.
+Fizyczny odsłuch/jakość brzmienia pozostają manualnym smoke po review.
+
+7. Root cause auto-speak
+Auto-speak był uruchamiany wyłącznie w _on_voice_question_finished.
+Text ASK kończył się wspólnym _on_rag_finished bez uruchomienia speech.
+Stary label sugerował też semantykę tylko dla Voice ASK.
+
+8. Common auto-speak fix
+Label: Speak answers automatically. Domyślnie checked.
+_on_rag_finished najpierw renderuje answer/citations i aktualizuje controls,
+potem raz uruchamia SPEAK dla ANSWERED / INSUFFICIENT_CONTEXT, jeśli opcja
+checked, TTS available i aplikacja nie jest closing.
+Voice handler wyłącznie przekazuje result do wspólnego handlera; usunięto
+jego dodatkowy trigger. Guards blokują stale/duplicate zakończenia.
+UI i README jawnie określają zakres: Polish / English speech.
+
+9. Text ASK — real AsyncDesktopThread proof
+Nowe testy tworzą MainWindow + rzeczywisty AsyncDesktopThread +
+DesktopController + SpeechRuntime; modele/device są kontrolowane.
+Pełny request -> controller result -> rag_finished -> rendering -> dokładnie
+jedno controller.speak_answer na workerze. Answer/sources są gotowe przed
+requestem speech. Nie monkeypatchowano worker.request_speak_answer ani nie
+ograniczono testu do ręcznego wywołania slotu.
+
+10. Voice ASK — exactly once proof
+Start/stop kontrolowanego WAV -> existing transcription -> existing ask
+-> voice_question_finished -> wspólny rendering -> dokładnie jedno speech.
+Zero drugiego triggera. Pytanie nie jest ingestowane/indexowane i nie
+odświeża Recent. Jeden provider Whisper/BGE/RAG factory na controller.
+
+11. OFF / failure / unavailable / insufficient
+Checkbox OFF: zero auto speech dla Text ASK i Voice ASK; manual SPEAK działa.
+FAILED RAG: zero speech dla obu wejść.
+TTS unavailable: zero speech dla obu, RAG nadal działa.
+INSUFFICIENT_CONTEXT: dokładnie jedno auto speech dla obu, canonical PL,
+zero citations, bez dodatkowego speech-plan Qwen requestu.
+Real worker test synthesis failure zachowuje answer, sources i RAG Answered;
+secondary status: Could not speak answer. Brak PL fallback dla invalid plan.
+
+12. New-operation-during-speech race
+Usunięto konkurujące STOP future + natychmiastowy nowy request z UI.
+UI tylko wycofuje poprzedni speech presentation state i wysyła nową operację.
+Istniejący controller ask_memory/start_voice_question/start_recording
+awaituje stop_audio i całe cancel/drain PRZED operation lock i nową operacją.
+Manual STOP nadal oczekuje completion, blokując konfliktujące controls.
+Real worker tests Text -> Text oraz Voice -> Voice:
+jawna bariera native cleanup zatrzymuje nowy request; pliki pozostają do
+końca czytania; druga operacja nie startuje przed drain_finished;
+zero DesktopStateError; tylko drugi speech emituje FINISHED.
+Bez produkcyjnego sleep/timer workaround.
+Test Qt otrzymał jawny 10s deadline zamiast odziedziczonego 2s, a kontrolowana
+bariera ma timeout 20s. Nie opóźnia to produkcji ani nie zastępuje asercji
+kolejności; usuwa niestabilność testu pod obciążeniem realnych modeli.
+
+13. Provider reuse / cancellation / cleanup
+Real planner-only: Qwen clients=1, requests=15, closed=1.
+Real Desktop switching: Qwen clients=1, speech-plan requests=11, closed=1;
+TTS clients/processes=1, PL requests=12, EN requests=11, closed=1.
+Osobne CLI A/B: każdy run TTS clients=1/closed=1, Qwen factory raz,
+trzy ordered requests; brak retained artifacts.
+Owned real Desktop full RAG/speech:
+Whisper providers=1, controlled inferences=2;
+BGE clients=1, requests=4, closed=1, native_dimension=1024, overrides=0;
+Qwen clients=1, RAG requests=3, speech-plan=2, total=5, closed=1;
+TTS clients=1, PL requests=3, EN=0 (odpowiedzi PL), closed=1.
+Liczniki opisują pojedynczy runtime/scenario, nie sumę niezależnych testów.
+Controller speech nie dodaje Whisper/BGE/DB calls.
+STOP/new operation/shutdown propagują cancellation, drainują native/file IO,
+czyszczą WAV dopiero po odczycie i zamykają provider raz.
+Loop exception handler bez błędów; brak stale success i pending tasks.
+Owned full flow: snapshots równe także failure/STOP/cancellation,
+ask_speech_writes=0, checkout podczas Qwen/TTS=0, audio_retained=0.
+Real owned snapshot BEFORE == AFTER: revision 0004; counts Memory/vector/
+tombstone = 1/1/0. Memory SHA256:
+d8815ce21ce34fac993e46e9007367baaa831dd6ddf15a4baf1df1ae77b75e81
+Vector SHA256:
+e5bed83700d3cf727eb598a6e9988317d054d5dddda938ec6e8f080415f23264
+Tombstone SHA256:
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+14. Test totals / regressions
+Backend full default: 610 PASS, 116 SKIP, 0 failures/errors (59.05 s).
+Root full, wszystkie 5 opt-ins: 986 PASS, 2 SKIP, 0 failures/errors
+(448.98 s). Skips: optional external Whisper WAV nie ustawiony oraz symlinks
+niedostępne dla procesu. Controlled real Whisper audio działa i PASS.
+Jedno istniejące third-party ostrzeżenie Starlette/Anyio deprecation.
+Speech/planning/playback/CLI units: 112 przypadków:
+speech-plan 27; runtime 16; Windows provider 12; playback 3;
+controller speech 19; slot UI 10; real-worker UI 13; CLI unit 12.
+Speech opt-in integrations: 9 przypadków (zestawy odpowiedzi wewnątrz):
+real planner 1/15 odpowiedzi; real Desktop switching 1/11 odpowiedzi;
+real PL/EN/mixed TTS 3; owned full Desktop speech 2; full real CLI 2.
+Focused real planner/provider/tts: 5 PASS; native provider/full CLI: 14 PASS.
+Regresje obejmują Text ASK, Voice ASK, Voice Note, Library/lifecycle,
+mandatory verified-backup DELETE, tombstones/replay/concurrency,
+backup/restore, indexing/retrieval, canonical RAG, WebSocket i boundaries.
+Applicable flags: POSTGRES/OLLAMA/LLM/WHISPER/TTS = 1.
+Real Whisper large-v3/cuda/int8_float16/VAD korzysta wyłącznie z kontrolowanego
+audio; one provider/model i temp cleanup potwierdzone.
+Wcześniejsze uruchomienie trafiło w testowy 2s wait pod obciążeniem; fixed
+deadline/bariera przechodzą w backend i finalnym root.
+Kolejny run miał jeden błąd komendy: eksport CUDA setting wpływał na test
+wartości domyślnej. Usunięto eksport, zachowano DLL PATH, nie zmieniano
+Settings/testu konfiguracji. Osobne testy konfiguracji: 2 PASS.
+Android/shared protocol niezmienione; rebuild Android nie był wymagany.
+
+15. Complete main DatabaseSnapshot BEFORE/AFTER
+PASS: complete DatabaseSnapshot AFTER == BEFORE dokładnie.
+AFTER ma te same revision, counts i wszystkie trzy SHA256 podane poniżej.
+Końcowy helper wykonał świeży strict doctor i assert całego snapshotu
+po zakończeniu wszystkich testów. Nie porównywano samych counts.
+BEFORE:
+revision: ["kulai_memory_0004"]
+memories count=8
+sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
+vectors count=8
+sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
+tombstones count=1
+sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Nie wykonano main ASK/STT/TTS/lifecycle/delete ani nie wysłano main content
+do planner/TTS. Wszystkie model fixtures są syntetyczne/owned.
+Raport nie zawiera real Memory content, promptów, audio ani DB credentials.
+
+16. Frozen golden retrieval
+Dataset SHA256:
+73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
+16 documents / 16 PL+EN queries. Recall@1/@3/@5 oraz MRR@5 = 1.0,
+overall i osobno PL/EN; fingerprints unchanged.
+Frozen dataset/hash/thresholds bez zmian (0.60 / 0.80 / 0.90).
+BGE clients=1, requests=32, closed=1, native1024=32, dimensions overrides=0.
+Nie dodano score cutoff/reranker i nie zmieniono retrieval/grounding/citations.
+
+17. pip check
+PASS: No broken requirements found.
+
+18. git diff --check
+PASS; sprawdzono także po końcowym zapisie tego raportu.
+
+19. db_doctor
+PASS na wejściu i po testach, main current/head = kulai_memory_0004.
+Brak migration/schema changes; local/current/head pozostają 0004.
+
+20. Vendor
+Clean; pin 720d0f26c75ba4af24d395f98f15a37e4bd5067e bez zmian.
+Nie modyfikowano vendor ani reusable provider contracts.
+
+21. Exact changed files względem HEAD (17)
+README.md
+backend/README.md
+backend/src/kulai_memory/application/speech.py
+backend/src/kulai_memory/desktop/app.py
+backend/src/kulai_memory/local_tts.py
+backend/src/kulai_memory/speech_runtime.py
+backend/tests/integration/test_speech_planner.py
+backend/tests/integration/test_desktop_polish_english_speech.py (new)
+backend/tests/integration/test_tts_smoke_integration.py (new)
+backend/tests/polish_english_fakes.py (new)
+backend/tests/test_desktop_auto_speech_ui.py (new)
+backend/tests/test_desktop_speech_ui.py
+backend/tests/test_speech_runtime.py
+backend/tests/test_windows_speech_provider.py
+scripts/tts_smoke.py (new)
+tests/test_tts_smoke.py (new)
+wynik.txt
+
+22. Known limitations
+Production speech obsługuje wyłącznie Polish + English.
+Exact-text validation nie dowodzi klasyfikacji każdego możliwego przyszłego
+tekstu; real reviewed corpus i returned voice checks są dodatkową kontrolą.
+Nazwy/technical tokens mogą pozostać z językiem otaczającej frazy.
+Fizyczny odsłuch Paulina/Zira i konkretne urządzenie użytkownika sprawdzamy
+manualnie po review; automated playback boundary jest kontrolowana.
+Nie ma Android/WebSocket TTS, multi-turn, partial STT/TTS ani reviewed
+score cutoff/reranker. Brak permanentnego audio/cache/speech-plan history.
+Future proposal: TASK 6A.5 — dynamic multilingual installed-voice routing
+(DE/FR/ES/IT/etc.); osobny design/zakres, nic z niego tu nie implementowano.
+
+23. Decision / proposed commit
+OK DO COMMITA — technical quality gate PASS.
+Physical manual playback/user acceptance pozostają do potwierdzenia po review.
+Proposed commit:
+fix: correct Desktop Polish/English switching and auto-speak for all answers
+Nie commitowano. Nie pushowano. Manual user acceptance pozostaje po review.
+
+MANUAL SMOKE — uruchomić po review, z repo i obecną Desktop TTS konfiguracją
+
+A. PL -> EN -> PL:
+.\.venv\Scripts\python.exe scripts\tts_smoke.py `
+  --text "To jest część po polsku. This is the English part. I znowu po polsku."
+Expected: Microsoft Paulina Desktop -> Microsoft Zira Desktop -> Paulina.
+
+B. EN -> PL -> EN:
+.\.venv\Scripts\python.exe scripts\tts_smoke.py `
+  --text "This starts in English. Potem przechodzimy na polski. English again."
+Expected: Microsoft Zira Desktop -> Microsoft Paulina Desktop -> Zira.
+Dodać --no-play, aby oddzielić planner/synthesis od urządzenia playback.
+
+C. Desktop Text ASK: Speak answers automatically ON -> answer/sources
+pojawiają się, następnie dokładnie jedno automatyczne playback.
+
+D. Desktop ASK BY VOICE: checkbox ON -> answer/sources -> dokładnie jedno
+automatyczne playback; brak drugiego voice-specific triggera.
+
+Dodatkowo: checkbox OFF dla obu wejść -> brak auto speech, manual SPEAK działa.
+STOP AUDIO -> dźwięk ustaje, text/sources pozostają, można SPEAK ponownie.
+New Text ASK / Voice ASK podczas Speaking -> old audio drain, potem nowa
+operacja, brak stale Speech finished / równoległego playback.
+Close podczas speech -> cleanup i shutdown; nie wykonywano automated main
+query ani odsłuchu prywatnych odpowiedzi.
