@@ -3,6 +3,8 @@ package com.kulai.memory
 import com.kulai.memory.audio.RecordingEnd
 import com.kulai.memory.audio.VoiceAudioContract
 import com.kulai.memory.audio.VoiceAudioRecorder
+import com.kulai.memory.audio.MicrophoneGate
+import com.kulai.memory.audio.CaptureOwner
 import com.kulai.memory.cache.PendingAudioCache
 import com.kulai.memory.cache.PendingAudioCacheStore
 import com.kulai.memory.protocol.ClientMessages
@@ -86,6 +88,7 @@ class VoiceMemoryController(
     private val parser: ServerEventParser = ServerEventParser(),
     private val newIngestionId: () -> UUID = UUID::randomUUID,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val microphoneGate: MicrophoneGate = MicrophoneGate(),
 ) {
     private val mutableState = MutableStateFlow(VoiceMemoryUiState())
     val state: StateFlow<VoiceMemoryUiState> = mutableState.asStateFlow()
@@ -100,6 +103,7 @@ class VoiceMemoryController(
     @Volatile
     private var transportFailed = false
     private var closed = false
+    private var captureLease: MicrophoneGate.Lease? = null
     private val socketEvents = Channel<Pair<Long, SocketEvent>>(Channel.UNLIMITED)
     private val socketEventJob = scope.launch {
         for ((generation, event) in socketEvents) {
@@ -122,14 +126,16 @@ class VoiceMemoryController(
     }
 
     fun startNewNote() {
-        if (!mutableState.value.canRecord || closed || captureJob?.isActive == true) {
+        if (!mutableState.value.canRecord || closed || captureJob?.isCompleted == false) {
             return
         }
+        captureLease = microphoneGate.acquire(CaptureOwner.NOTE) ?: return
         cleanupPending()
         val ingestionId = newIngestionId()
         val cache = try {
             cacheStore.create()
         } catch (_: Exception) {
+            releaseCaptureIfIdle()
             showError("Private audio cache is unavailable.")
             return
         }
@@ -200,10 +206,11 @@ class VoiceMemoryController(
             return
         }
         closed = true
+        connectionGeneration++
         stopElapsedTimer()
         recorder.requestStop()
         captureJob?.cancel()
-        captureJob = null
+        releaseCaptureIfIdle()
         socket?.cancel()
         socket = null
         socketEvents.close()
@@ -334,6 +341,7 @@ class VoiceMemoryController(
 
     private fun launchCapture(generation: Long) {
         val note = pending ?: return
+        val lease = captureLease
         captureJob = scope.launch {
             var result: RecordingEnd? = null
             var failure = false
@@ -342,7 +350,7 @@ class VoiceMemoryController(
                     recorder.record(
                         onStarted = {
                             scope.launch {
-                                if (generation == connectionGeneration && !transportFailed) {
+                                if (!closed && generation == connectionGeneration && !transportFailed) {
                                     mutableState.value = mutableState.value.copy(
                                         phase = VoiceMemoryPhase.RECORDING,
                                         elapsedMillis = 0,
@@ -370,6 +378,7 @@ class VoiceMemoryController(
             }
             finishCapture(generation, note, result, failure)
         }
+        captureJob?.invokeOnCompletion { lease?.release() }
     }
 
     private fun finishCapture(
@@ -380,7 +389,7 @@ class VoiceMemoryController(
     ) {
         stopElapsedTimer()
         note.cache.finishWriting()
-        if (generation != connectionGeneration || pending !== note) {
+        if (closed || generation != connectionGeneration || pending !== note) {
             note.cache.delete()
             return
         }
@@ -451,6 +460,7 @@ class VoiceMemoryController(
         stopElapsedTimer()
         transportFailed = true
         recorder.requestStop()
+        releaseCaptureIfIdle()
         if (pending != null && phase !in setOf(VoiceMemoryPhase.CONNECTING, VoiceMemoryPhase.READY)) {
             mutableState.value = mutableState.value.copy(
                 phase = VoiceMemoryPhase.RETRY_NOTE,
@@ -482,8 +492,10 @@ class VoiceMemoryController(
     }
 
     private fun failNonRecoverable(message: String, closeCode: Int) {
+        connectionGeneration++
         stopElapsedTimer()
         recorder.requestStop()
+        releaseCaptureIfIdle()
         cleanupPending()
         socket?.close(closeCode)
         socket = null
@@ -500,6 +512,10 @@ class VoiceMemoryController(
     private fun cleanupPending() {
         pending?.cache?.delete()
         pending = null
+    }
+
+    private fun releaseCaptureIfIdle() {
+        if (captureJob?.isCompleted != false) captureLease?.release()
     }
 
     private fun startElapsedTimer() {

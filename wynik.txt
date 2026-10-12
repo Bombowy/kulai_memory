@@ -1,310 +1,469 @@
-TASK 6C.1 correction — real Uvicorn HTTP assistant / 500
-Raport końcowy: 2026-10-12
-DECYZJA: OK DO COMMITA
+﻿TASK 6C.2 — Android Memory History + Text ASK + ASK BY VOICE
+Data: 2026-10-12
+Repo: C:\Bombowy\Projekty\kulai_memory
+Decyzja: OK DO COMMITA
 Nie wykonano commit ani push.
 
-Stan początkowy:
-HEAD/origin-main=4683d33e5d07bdaa6b99d4ec77bf092d26cda28e
-Working tree zawierał niecommitowany TASK 6C.1 (25 plików); zachowano te zmiany.
-Vendor clean, pin=720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-PyCharm SDK sprawdzany przed poleceniami Python: project .venv, Python 3.13.15.
-Main strict doctor PASS, current/head=kulai_memory_0004.
+1. Start commit/status
+HEAD = origin/main = 05f4e9bfaab37b7ef50fa3dcf99169efa3cffa31
+feat: add local Memory history and text/voice assistant transport
+TASK 6C.1 był committed/pushed przed rozpoczęciem zmian.
+Start git status --short: pusty; git status -sb: main...origin/main.
+Sprawdzono git log -5, git submodule status, vendor status.
+Vendor pin: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; clean.
+Schema/local migrations oraz main: kulai_memory_0004; strict db_doctor PASS.
+Nie uruchamiano export_repo.py ani automatycznego prywatnego main RAG.
 
-1. Exact reproduced symptom
-Prawdziwy Uvicorn przez scripts/dev.py z reload i Windows subprocess loop,
-loopback/free port, controlled synthetic runtime:
-Windows PowerShell Invoke-RestMethod, JSON string body zawierający polskie "ó",
-Content-Type application/json bez jawnego UTF-8 -> HTTP 500.
-Public body dokładnie:
-{"detail":"Memory assistant could not complete the operation."}
-ai_asks=0. BGE query i Qwen NIE były uruchamiane dla tego requestu.
-Odtworzono objaw bez private main LLM query i bez TestClient.
+2. Android architecture before
+MainActivity -> VoiceMemoryViewModel (AndroidViewModel/viewModelScope)
+-> VoiceMemoryController -> VoiceSocketFactory/OkHttp + AndroidVoiceAudioRecorder.
+Compose VoiceMemoryContent renderował jeden flow notatki.
+PendingAudioCacheStore przechowywał prywatny PCM wyłącznie do retry.
+VoiceProtocol miał osobne strict event projection i sequence validator.
+Przeczytano Gradle, oba manifesty, Activity/ViewModel/controller/screen,
+audio/cache/protocol/transport oraz istniejące testy. Nie przepisano kontrolera Note.
 
-Dodatkowe A/B w osobnym syntetycznym Uvicorn process:
-odtworzenie pierwotnego importu HTTPException -> powyższy exact body 500,
-zero ask calls; zachowany log PROOF exact_500_public_body=true.
+3. Root NOTE/ASK/MEMORY design
+Material3 NavigationBar, enum MemoryTab, bez Navigation framework.
+MemoryClientScreen renderuje odpowiedni niezależny feature state.
+MemoryClientController utrzymuje tab oraz koordynuje permission/shutdown/stale history.
+Kontrolery powstają raz w ViewModel. Tab switch nie rekonstruuje ich.
+NOTE -> ASK -> NOTE zachowuje Note; ASK -> MEMORY -> ASK zachowuje odpowiedź.
+History/detail pozostają w pamięci do jawnego refresh/filter change.
 
-2. Exact root cause
-Dwa kroki składały się na odtworzone 500:
-a) Windows PowerShell 5.1 może wysłać non-ASCII JSON string body w legacy
-   encoding, jeżeli Content-Type nie określa charset. Dla "ó" powstaje payload,
-   którego JSON parser nie może odczytać jako UTF-8.
-b) Installed FastAPI routing importuje HTTPException ze starlette.exceptions
-   i przy takim błędzie body parsing podnosi bazowe HTTPException(status_code=400).
-   Nowy adapter importował HTTPException z fastapi, czyli subclass.
-   except FastAPI.HTTPException nie łapał bazowego Starlette.HTTPException.
-   Generic except Exception maskował expected client 400 jako internal 500.
+4. Controller ownership
+VoiceMemoryController nadal obsługuje wyłącznie Voice Note.
+MemoryAssistantController: HTTP Text ASK i ephemeral assistant WS.
+MemoryHistoryController: read-only lista/detail/paging.
+VoiceMemoryViewModel pozostaje cienkim root lifecycle owner, zachowując stare Note methods.
+Wszystkie jobs należą do viewModelScope; brak GlobalScope/unmanaged scope.
+OkHttp HTTP/WS współdzielą dispatcher i connection pool; WS clone ma readTimeout=0.
+onCleared zamyka kontrolery, anuluje calls, evictuje pool i zamyka executor.
 
-Potwierdzono rzeczywiste installed API/source:
-fastapi/routing.py importuje Starlette HTTPException i tworzy 400
-"There was an error parsing the body".
-To błąd HTTP exception mapping, nie canonical RAG.
-TestClient z json= zawsze wysyłał poprawne UTF-8; poprzednie testy nie pokrywały
-tej ścieżki błędnego encodingu i typu bazowego wyjątku.
+5. Microphone ownership
+Jeden MicrophoneGate ze zsynchronizowanym lease i observable owner NOTE/QUESTION.
+Reservation przed connect zapobiega równoczesnym startom oraz rapid double tap.
+Dwa adaptery używają istniejącego AndroidVoiceAudioRecorder; nie ma dwóch aktywnych
+AudioRecord captures. Lease jest zwalniany dopiero przy completion capture job.
+Cancellation requested != capture drained: testy z niekooperatywnym recorderem
+dowodzą, że lease blokuje drugi capture aż do rzeczywistego zakończenia.
 
-Ważne: naprawa nie zgaduje kodowania i nie przepisuje query.
-Invalid UTF-8 pozostaje invalid request: teraz safe 400.
-Poprawne JSON UTF-8 działa jako FIRST request.
+6. BuildConfig URLs
+DEBUG:
+MEMORY_HTTP_BASE_URL=http://127.0.0.1:8000
+VOICE_WS_URL=ws://127.0.0.1:8000/ws/memory
+ASSISTANT_WS_URL=ws://127.0.0.1:8000/ws/assistant
+DEFAULT/RELEASE:
+MEMORY_HTTP_BASE_URL=https://127.0.0.1:8000
+VOICE_WS_URL=wss://127.0.0.1:8000/ws/memory
+ASSISTANT_WS_URL=wss://127.0.0.1:8000/ws/assistant
+Generated Debug i Release BuildConfig zostały sprawdzone.
 
-3. Direct server runtime przed fixem
-PASS przed zmianą obsługi HTTP:
-production VoiceMemoryServerRuntime, owned migrated DB, real shared BGE i Qwen.
-Direct await runtime.ask_memory -> sufficient=true, exact synthetic citation.
-Real TCP HTTP z poprawnym UTF-8 też dawał 200 przed fixem, first i second.
-To wykluczyło provider/lane problem w odtworzonym błędzie.
-Nowy direct subprocess integration test również PASS po fixie.
+7. Release security
+Main i debug manifest nie zostały zmienione.
+Main/release nie mają usesCleartextTraffic=true; sprawdzono merged release manifest.
+Debug override nadal jako jedyny włącza cleartext.
+processReleaseMainManifest i generateReleaseBuildConfig: PASS.
+Release URL to placeholder, nie wdrożony LAN/TLS/auth endpoint.
+Backend nadal 127.0.0.1; brak CORS/auth/LAN/WSS zmian.
 
-4. HTTP adapter / cancellation / server runtime
-Potwierdzona przyczyna odtworzonego 500: HTTP adapter / body error mapping.
-Błąd pojawiał się PRZED wejściem do runtime.ask_memory i until_disconnect.
-Server runtime, provider ownership, RAG prompt, retrieval i citations bez zmian.
-Nie zastępowano działającego receive wrappera ani nie usunięto cancellation.
+8. HTTP client design
+MemoryApi neutralny typed port; MemoryHttpClient używa istniejącego OkHttp.
+listMemories / getMemory / askMemory mapują dokładnie istniejące endpoints.
+enqueue wykonuje network/body read poza Main; JSON decoding używa Dispatchers.IO.
+Response.use zawsze zamyka body, także przy failure/invalid response.
+Continuation otrzymuje tylko owned bytes, nigdy live Response.
+invokeOnCancellation anuluje Call; wyjątki cancellation nie są maskowane.
+Timeouts: connect 10 s, read 210 s, whole call 240 s; response limit 2 MiB.
+Public wyjątki mają authored messages, bez raw body/cause/query/content.
+Brak Retrofit i network/content logging.
+Korzystano z publicznego cancellable-continuation contractu:
+https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellable-continuation/
 
-5. Safe diagnostic evidence
-Stary mapper:
-assistant request failed stage=http_operation error_type=HTTPException code=none
-ai_asks=0
-Nowy mapper:
-assistant request rejected stage=http_request_validation error_type=HTTPException code=http.invalid_request
+9. UTF-8 request proof
+POST Content-Type dokładnie application/json; charset=utf-8.
+JSONObject -> String.toRequestBody z jawnym UTF-8 MediaType.
+MockWebServer odebrał real bytes dla polskiego query zawierającego ó/Ż/ł/ć/ę.
+Decode UTF-8 i re-encode dają te same bytes; parsed query identyczne.
+Brak encoding fallback/repair. Malformed UTF-8 response jest odrzucany.
 
-Dla expected canonical errors:
-stage=rag_retrieval, error_type=MemoryRagError, code=rag.retrieval_failed
-stage=rag_generation, error_type=MemoryRagError, code=rag.generation_failed
-stage=rag_citations, error_type=MemoryRagError, code=rag.invalid_citations
-Dla watcher failure: stage=disconnect_watch + exception TYPE tylko.
+10. Strict JSON parsing
+Nowa biblioteka kotlinx-serialization-json 1.9.0 służy tylko do strict JSON DOM,
+bez serialization compiler plugin; została skompilowana z obecnym Kotlin 2.3.
+Nie użyto lenient org.json do nowych response parsers.
+MemoryJson/StrictJson sprawdzają exact field sets, missing/unknown fields,
+typy, canonical pełny UUID, positive Int revision/rank, finite numeric Double score,
+timezone-aware OffsetDateTime. Nie ma coercion quoted number/bool ani response repair.
+Preview <=200 Unicode code points; duplicate IDs w jednej stronie są odrzucane.
+Answered: nonblank answer i minimum jedna citation.
+Insufficient: nonblank answer i zero citations.
+HTTP answer i WS completed używają tego samego parsera.
 
-Zachowano wyłącznie wartościowe strukturalne failure logging.
-Brak raw exception message/stacktrace w NOWYCH logger calls.
-Brak query/content/context/prompt/vector/credentials/provider payload.
-Controlled error code logowany tylko z allowlisted MemoryRagError contractu.
-Synthetic sentinel privacy tests PASS.
+11. History models
+MemoryHistoryCursor(beforeCreatedAt, beforeId)
+MemoryHistoryItem(id, createdAt, revision, archived, contentPreview)
+MemoryHistoryPage(items, nextCursor)
+MemoryDetail(id, createdAt, revision, archived, content)
+Brak ingestion/session/metadata/vector/provider fields.
 
-6. Exact changed production code
-backend/src/kulai_memory/api/memory_http.py:
-- import/catch Starlette base HTTPException (obejmuje też FastAPI subclasses);
-- 400/422 -> "Invalid assistant request.";
-- 404/503 -> bounded known messages;
-- pozostałe HTTPException details nie są kopiowane do public response;
-- safe stage/type/allowlisted-code logging dla generation/retrieval/citations errors.
+12. History controller
+MemoryHistoryState: filter, items, loading, loadingMore, refreshing, nextCursor,
+selectedDetail, detailLoading, error, stale.
+refresh / loadMore / setFilter / selectMemory / clearDetail / shutdown.
+Default limit=20; constructor bounds 1..100.
+Active i Archived używają jawnego archived=false/true.
+Errors są authored; ponowny refresh może naprawić wcześniejszy failure.
 
-backend/src/kulai_memory/api/cancellation.py:
-- wyłącznie safe watcher failure logging exception TYPE/stage.
-- operation/watch ordering, cancellation/drain semantics bez zmian.
+13. Pagination
+Dokładnie before_created_at + before_id; bez OFFSET.
+Timestamp zachowuje precyzję micro/nanosecond w OffsetDateTime.
+Kolejność pochodzi z canonical backend created_at DESC, id DESC.
+Null cursor kończy paging; repeated cursor jest safe failure.
+Kolejne strony dedupe deterministycznie po UUID, zachowując kolejność.
+Backend regression obejmuje equal timestamp + UUID ordering i strony bez skip/duplicate.
+Client test sprawdza dokładne cursor query parameters i nonnull cursor parsing.
 
-Żadnych zmian w BGE/Qwen config, runtime orchestration, RAG prompt/grounding,
-Memory data/schema, vector namespace, Desktop, TTS, Android ani /ws/memory v1.
+14. Stale response protection
+List generation++ podczas refresh/filter change oraz cancellation previous Job.
+Oddzielny detail generation dla A -> B/back/filter.
+loadMore ma token generacji listy; stary response nie appenduje po refresh.
+Testy z suspendCoroutine continuations celowo kończą stary request po nowym.
+Stary Active, detail A i loadMore nie nadpisują aktualnego state.
+Shutdown retire'uje tokens i anuluje jobs.
 
-7. Real Uvicorn FIRST request proof
-Nowe network tests używają świeżego subprocessu, realnych socketów i Uvicorn.
-Wariant plain Uvicorn i wariant scripts/dev.py z rzeczywistym reload supervisor,
-host=127.0.0.1, free port.
-Test-only child app fixture zastępuje źródło danych/runtime, zachowując production
-app factory/router/middleware i launcher/process loop.
-Production startup, zero Qwen requests w ready; brak CLI/embedding smoke/warmup
-wewnątrz server process przed FIRST valid POST.
-Correct UTF-8 first POST -> 200, answered, validated citations.
-Real BGE/Qwen case również PASS na owned DB.
+15. Detail
+Klik row -> GET /api/memories/{UUID}.
+Full content + UUID + created + revision + Active/Archived.
+BACK czyści detail, zachowuje listę/cursor/filter.
+404 -> Memory not found; wrong returned identity -> safe failure.
+Brak EDIT/ARCHIVE/RESTORE/DELETE na Android.
 
-8. Real Uvicorn second-request proof
-Second valid POST -> 200 przez te same BGE/Qwen clients.
-Connection: close w testach; brak wymogu keepalive.
-Windows Invoke-RestMethod -DisableKeepAlive również PASS:
-- string body + charset=utf-8;
-- UTF-8 byte[] body + application/json.
-Legacy invalid non-UTF-8 body -> safe 400, asks=0, nie 500.
-Nie dodano sleep/retry masking.
+16. Assistant models
+AssistantCitation(memoryId, rank, score)
+AssistantAnswer(status, answer, citations)
+AssistantStatus: ANSWERED / INSUFFICIENT_CONTEXT.
+MemoryAssistantState posiada query, voiceTranscript, phase, result, error, permission.
+Brak prompt/context/vector/ingestion/provider payload.
 
-9. Canonical synthetic answer/citation
-Owned fixture: synthetic green dragon lives on Venus, canonical UUID(int=42).
-Real shared BGE bge-m3:567m-fp16, native 1024, Qwen qwen3.5:9b.
-FIRST/SECOND HTTP answers: answered, Venus/Wenus, exact fixture UUID citation.
-Direct production server runtime: sufficient, Venus/Wenus, exact UUID.
-Concatenation/grounding/citation core nie został zmieniony.
-Nie wypisano prompt/context/raw model response do raportu.
+17. Text ASK
+ASK tab: TextField, ASK, ASK BY VOICE/STOP QUESTION, CANCEL QUESTION.
+Client nonblank <=10000 UTF-16 characters; top_k=5.
+IDLE -> ASKING -> ANSWERED/INSUFFICIENT_CONTEXT/ERROR.
+New ASK czyści old answer/sources i voice transcript.
+Text ASK nie wymaga permission; nie uruchamia recorder ani Note socket.
 
-10. Disconnect cancellation proof
-Real raw TCP client:
-arm controlled slow RAG -> POST -> deterministic model-blocked event ->
-close TCP -> cancellation event -> AI callers/tasks=0, checkout=0.
-Następny real HTTP POST -> 200.
-Cancelled request nie zwiększa answered count; brak stale successful answer.
-BGE/Qwen clients pozostają reused i zamykane raz.
-Existing HTTP raw ASGI, WS disconnect/drain, shutdown tests także PASS.
+18. Text ASK cancellation
+Second ASK anuluje poprzedni HTTP Job/Call i nadaje nowy token.
+Cooperative cancellation test: pierwszy request cancelled na replacement,
+drugi cancelled na shutdown.
+Noncooperative late-response test: first response nie nadpisuje second answer.
+CANCEL QUESTION anuluje pending Text ASK albo Voice ASK i wraca do idle.
+Cancellation contract zachowuje się bez sleep/timer race workarounds.
 
-11. Provider reuse counters
-Fresh subprocess ready: BGE clients=1, Qwen clients=1, Qwen requests=0.
-FIRST/SECOND requests: nadal clients=1/1; answered counts=1, potem 2.
-Worker shutdown: BGE closed=1, Qwen closed=1, AI callers/tasks=0.
-Direct real worker: Qwen clients=1, requests=1, closed=1, BGE closed=1.
-Real server reuse regression z 6C.1:
-Whisper=1, engine=1,
-BGE clients=1, requests=9, closed=1,
-Qwen clients=1, requests=6, closed=1.
-Nie tworzono provider per request; startup fixture indexing i retrieval
-pozostają na jednym shared BGE.
+19. Assistant WS protocol
+Osobne AssistantClientMessages / AssistantEventParser / AssistantSequenceValidator.
+Nie rozszerzano Voice Note ServerEventParser.
+question.start exact schema_version=1/type/audio/top_k=5.
+Audio wartości pochodzą z VoiceAudioContract.
+question.stop exact schema_version/type. Zero ingestion_id i memory.retry.
+Strict envelope: schema_version/type/session_id/sequence/payload.
+Allowed events: session.ready, transcript.final, rag.started, assistant.completed, error.
 
-12. AI lane proof
-Existing deterministic server lane test PASS:
-Voice Note STT, Text RAG, Voice Question STT/RAG oraz indexing
-max_active_AI_operation=1.
-History reads działają, gdy AI lane zajęty.
-Zero własnej DB session podczas oczekiwania na lane/model work.
-Real Qwen client instrumentation obserwuje engine.pool.checkedout()==0.
-Cancellation kończy się z checkout=0.
+20. Voice ASK
+Connect /ws/assistant -> question.start -> session.ready -> direct PCM stream.
+STOP QUESTION -> recorder stop/drain -> question.stop -> transcript -> RAG result.
+Nie ma PendingAudioCacheStore w AssistantController ani UUID factory dla ingestion.
+Socket callbacks trafiają do scoped channel; parser pracuje na IO dispatcher.
+Sequence/state mapping i aktualizacja UI pracują na owner scope.
+Audio contract i recorder pozostają istniejącą implementacją, bez kopiowania limitów.
+Whole voice lifetime bounded do 10 minut capture + 300 sekund processing.
+Użytkownik może anulować wcześniej.
 
-13. /ws/assistant regression
-PASS: command/order/limits validation, event ordering/sequence,
-answered/insufficient, empty speech, failure/disconnect/cancellation, WAV cleanup,
-zero question persistence.
-Owned real BGE/Qwen voice transport i shared Whisper proofs PASS.
-assistant_ws.py/protocol nie zmieniono przez correction.
+21. Voice event sequence
+Sequence starts exactly 1, następne previous+1; session UUID nie może się zmienić.
+Strict event order: Ready -> Transcript -> Started -> Completed.
+Wrong order, duplicate transcript, unknown event/schema/field -> controlled failure.
+Normal completed/no-speech retire'ują generation, odrzucając także queued late events.
+Brak drugiego RAG implementation po stronie klienta.
 
-14. /ws/memory regression
-PASS: legacy recording.start/stop, binary PCM, retry/save/index,
-stable ingestion identity, provider reuse, concurrency.
-memory_ws.py, memory_ws_protocol.py i canonical events bez zmian.
-Android existing strict consumers również PASS.
+22. Transcript
+Rozpoznany tekst trafia do voiceTranscript i query input.
+Widoczny niezależnie od Voice Note transcript.
+Transcribing -> Searching po rag.started.
+Pytanie nie przechodzi przez VoiceMemoryController/save/cache.
 
-15. History/detail regression
-PASS: active/archived, bounded limit, keyset cursor pair, equal timestamp UUID
-ordering, preview bound, full detail, missing 404, privacy/read-only.
-Nie zmieniano history queries ani read models w correction.
+23. Citations
+UI pokazuje wyłącznie parsed AssistantAnswer.citations.
+Rank, canonical UUID, finite score formatowane do 4 miejsc.
+Sources nie zawierają Memory content i nie są zgadywane z top-k.
+HTTP i WS zachowują dokładnie canonical synthetic citation w testach.
 
-16. Main complete snapshot BEFORE / AFTER
-BEFORE:
-revision=["kulai_memory_0004"]
-memories.count=8
-memories.sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
-vectors.count=8
-vectors.sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
-tombstones.count=1
-tombstones.sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+24. Insufficient context
+HTTP/WS zachowują canonical server answer:
+Nie mam wystarczających informacji w pamięci.
+Status Not enough information, zero sources.
+Parser odrzuca insufficient z citation oraz answered bez citation.
 
-AFTER:
-revision=["kulai_memory_0004"]
-memories.count=8
-memories.sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
-vectors.count=8
-vectors.sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
-tombstones.count=1
-tombstones.sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+25. Silence
+Empty/blank transcript -> NO_SPEECH, no answer/citations; socket normal close.
+Nie wysyła dodatkowego HTTP ASK, retry ani Note command.
+Real OkHttp MockWebServer no-speech flow PASS.
+Backend owned voice no-speech regression potwierdza zero RAG/model-query calls.
 
-Complete BEFORE == AFTER EXACTLY (assert, nie tylko counts).
-Zero correction automated private-main LLM/STT queries.
-Main smoke ograniczony do /health oraz malformed-UTF8 validation check,
-który jest odrzucany PRZED RAG: live endpoint -> 400.
-Nie pobierano real history/detail do testów/raportu.
-No main reindex/lifecycle/vector writes.
-Full owned snapshot after startup, before FIRST HTTP ask ==
-snapshot after SECOND ask w real network test.
+26. Disconnect
+CONNECTING/RECORDING/TRANSCRIBING/SEARCHING -> authored ERROR, recorder stop,
+socket cancel, old answer cleared.
+Old socket generation i terminal callbacks nie modyfikują nowego state.
+Protocol error/server error nie ujawniają raw message/body/payload.
+Shutdown jest idempotentny; nie emituje stale success po drained capture.
 
-17. Test totals
-Focused post-fix HTTP/runtime/disconnect/Uvicorn + real PG/BGE/Qwen:
-64 PASS, zero failures (56.45 s).
-Nowych cases: 8 real-Uvicorn/process/client integrations + 4 unit/privacy cases.
-Backend full default: 672 PASS, 123 SKIP, zero failures (75.72 s).
-Final root full tests + backend/tests z PG/Ollama/LLM/Whisper/TTS opt-ins=1:
-1055 PASS, 2 SKIP, zero failures/errors (614.39 s).
-Skips: optional external KULAI_WHISPER_AUDIO unset i brak symlink privilege.
-Generated controlled real Whisper tests PASS, nie użyto user audio.
-1 existing Starlette/AnyIO deprecation warning.
+27. Zero question persistence
+Assistant ma tylko read-only HTTP ASK oraz question WS.
+Nie posiada Note service/cache/ingestion factory ani lifecycle mutation API.
+Root tests porównują istniejący Note state przed/po ASK.
+Owned backend tests włączają snapshot invariants dla HTTP/Voice RAG.
+Main automated models/content nigdy nie były użyte.
 
-Pre-fix red proof nie został przemianowany na PASS:
-legacy PowerShell reproduced 500; A/B original import reproduced exact 500 body.
-Po diagnozie invalid wire encoding ma zgodny z contractem expected 400.
-Correct UTF-8 normal-client cases są 200 jako first request.
-Private main query nie powtarzano automatycznie; jego oryginalnych wire bytes
-nie przechwytywano. Potwierdzona przyczyna odnosi się do odtworzonego non-UTF-8
-PowerShell failure. Jeśli oryginalny request był już poprawnym UTF-8,
-safe stage/code logs pozwalają rozróżnić odrębny błąd.
+28. Zero question retry cache
+QuestionRecorder PCM przekazywany prosto do VoiceSocket.sendBinary.
+Brak plików/cache/history DB dla question/answer.
+Root test assertuje brak files w private Note cache podczas Voice ASK.
+Socket commands są wyłącznie question.start/question.stop.
+Connection loss: user powtarza question; brak RETRY NOTE/SAVE dla ASK.
 
-18. Android regression
-gradlew.bat testDebugUnitTest assembleDebug:
-BUILD SUCCESSFUL in 14 s, 45 tasks up-to-date.
-Existing 22 unit tests, zero failures/errors/skips.
-No Android/shared contract/source/release security changes.
+29. Voice Note regressions
+22 istniejące testy pozostają niezmienione i PASS:
+VoiceMemoryControllerTest 7
+VoiceWebSocketMockServerTest 4
+VoiceProtocolTest 5
+PendingAudioCacheTest 3
+AudioContractTest 3
+Save/empty/cache cleanup/stable UUID/retry Note/retry Save/index retry
+i real OkHttp v1 note transport nadal działają.
+Production VoiceProtocol, VoiceSocket, AudioRecorder/AudioContract/cache: bez zmian.
+Minimalne zmiany NoteController dotyczą injected gate oraz shutdown/late-callback guard.
+Nie dodano HTTP/history/RAG logic do NoteController.
+Assistant events są explicit rejected przez Note parser.
 
-19. Golden
-Hash=73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
-16 docs / 16 queries, dataset/hash/thresholds bez zmian.
-Overall i PL/EN: Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0.
-Thresholds 0.60/0.80/0.90 bez zmian.
-Fingerprints unchanged.
-BGE clients=1, requests=32, native_1024=32, closed=1, overrides=0.
+30. Microphone exclusivity
+Root i kontrolery blokują drugi voice start przed connect/native capture.
+NOTE connecting/recording blokuje ASK BY VOICE.
+Question connecting/recording blokuje Note.
+Rapid double start -> jeden socket/capture.
+Controlled drain tests w obu kierunkach: active lease utrzymany po cancel/shutdown,
+drained recorder -> release; zero stale stop/success/request.
+Gate release używa isCompleted, nie isActive.
 
-20. pip check
-PASS: No broken requirements found.
+31. Permission behavior
+MainActivity zachowuje istniejący permission launcher i onResume check.
+Root propaguje permission do obu voice controllers.
+Denied -> Note i Voice ASK disabled/rejected, zero sockets/captures.
+Text ASK/history/detail nadal działają w testach bez permission.
+Revocation podczas Question zatrzymuje jej recorder/socket safely.
+Fizyczny Android permission dialog/deny wymagają manual smoke.
 
-21. git diff --check
-PASS, także po zapisaniu raportu.
-Nie stage'owano zmian.
+32. Tab state preservation
+9 MemoryClientStateTest: tabs/Note/answer/history/detail/permission/controls,
+mutual capture exclusion, drain ownership, saved-note invalidation i shutdown.
+Kontrolery/scopes nie są restartowane podczas switch.
+History cache markStale po Saved nie uruchamia konkurencyjnego paging refresh.
+UI/state tests nie są instrumented screenshot/Espresso tests; brak pixel assertions.
 
-22. db_doctor
-Strict PASS BEFORE i AFTER; head/current kulai_memory_0004.
-No migration/schema/data change.
+33. HTTP tests
+MemoryHttpClientTest: 7 PASS.
+InvalidMemoryResponseTest: 28 PASS.
+Real loopback MockWebServer requests: active/archived/cursor/detail/404,
+answered/insufficient/citations/UTF-8/400/422/500/503, missing/unknown/wrong types,
+numeric/date/UUID rules, malformed JSON/UTF-8, 2 MiB bound i reuse po failure.
+Cancellation obejmuje list/detail/ask: real Call.isCanceled po coroutine cancel.
 
-23. Vendor
-CLEAN, pin=720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-No vendor changes.
+34. History tests
+MemoryHistoryControllerTest: 12 PASS.
+Initial Active/Archived, reset, paging/null/dedupe/cursor,
+late Active/detail/loadMore, detail/back/filter, error/retry, mismatch identity,
+shutdown, stale refresh, limit bounds, repeated cursor failure.
 
-24. Exact correction changed files (7)
-backend/src/kulai_memory/api/memory_http.py
-backend/src/kulai_memory/api/cancellation.py
-backend/tests/test_server_transport.py
-backend/tests/integration/test_assistant_uvicorn.py (NEW)
-backend/tests/uvicorn_assistant_worker.py (NEW, test-only control endpoints)
-docs/LOCAL_ASSISTANT_TRANSPORT.md
-wynik.txt
+35. Assistant protocol tests
+AssistantProtocolTest: 4 PASS.
+InvalidAssistantProtocolTest: 13 PASS.
+Exact commands/audio, supported events, shared answer parser, sequence/session,
+unknown/extra/schema/type/UUID/citation/status errors i Note parser isolation.
 
-Pełny working tree nadal zawiera wcześniejszy niecommitowany 6C.1.
-Łączna lista (27 plików) do review:
+36. Assistant controller tests
+MemoryAssistantControllerTest: 17 PASS.
+Text validation/answered/insufficient/safe errors/cancellation/stale response.
+Voice connect/PCM/stop/transcript/answer/insufficient/silence,
+disconnect w 4 phases, protocol/server errors, old/terminal events ignored,
+permission/double-start, gate, cancellation/shutdown.
+AssistantWebSocketMockServerTest: 3 PASS.
+Prawdziwy OkHttp WebSocket do synthetic server: answered, insufficient i silence.
+
+37. UI/state tests
+MemoryClientStateTest: 9 PASS, scenariusze wymienione w punktach 30–32.
+Compose root NOTE/ASK/MEMORY, Ask controls/citations, history filters/list/detail
+są kompilowane w real debug APK.
+Nie wykonywano automatycznego microphone testu ani prywatnego main query.
+Manual device rendering/permissions/audio to review step poniżej.
+
+38. Backend transport regressions
+Production backend, schema i kontrakty: BEZ ZMIAN.
+Final test command z root .venv, opt-ins PostgreSQL/Ollama/LLM/Whisper=1:
+python -m pytest
+  backend/tests/test_server_transport.py
+  backend/tests/test_assistant_disconnect.py
+  backend/tests/test_server_assistant_runtime.py
+  backend/tests/test_server_runtime.py
+  backend/tests/test_memory_ws_concurrency.py
+  backend/tests/integration/test_memory_websocket.py
+  backend/tests/integration/test_server_assistant_postgres.py
+  backend/tests/integration/test_assistant_uvicorn.py
+  backend/tests/test_application_boundaries.py -q
+83 PASS, 0 failed, 0 skipped, 130.07 s.
+Obejmuje HTTP history/detail/ASK, oba WS, shared provider lifecycle/lane,
+owned PostgreSQL, real BGE/Qwen/Whisper, actual Uvicorn first/second requests,
+UTF-8/body validation i disconnect cancellation. Wszystkie fixtures synthetic/owned.
+DB checkout=0 podczas Qwen, questions snapshot unchanged.
+Baseline Starlette AnyIO deprecation warning; nie jest failure.
+
+39. Android test total
+115 PASS, 0 failures, 0 errors, 0 skipped.
+Final XML reports: mobile/android/app/build/test-results/testDebugUnitTest.
+Final run: gradlew.bat testDebugUnitTest assembleDebug, BUILD SUCCESSFUL in 5 s.
+22 existing + 93 new tests.
+Nie zmieniono semantycznie istniejących Note testów.
+
+40. assembleDebug
+PASS / BUILD SUCCESSFUL.
+Dodatkowo processReleaseMainManifest/generateReleaseBuildConfig PASS.
+Nowe runtime parsers/controllers/screens są w debug APK.
+Wcześniejszy pierwszy build miał lokalny SDK XML version warning; final build bez
+Kotlin compile warnings/errors. Nie zmieniano Android SDK ani projektu backendu.
+
+41. APK path + SHA-256
+C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+Size: 12686925 bytes.
+SHA-256: fc9bb65f5a5c9a590153357abc2169d865f608195853d4984d07b0b34afc8b2c
+APK/build artifacts są ignored, nie są dodawane do Git.
+
+42. Complete main snapshot BEFORE/AFTER
+BEFORE == AFTER EXACTLY (pełne DatabaseSnapshot equality, nie tylko counts).
+Revision: ["kulai_memory_0004"]
+Memories count=8
+SHA-256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
+Vectors count=8
+SHA-256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
+Tombstones count=1
+SHA-256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Strict db_doctor przed i po: PASS.
+Main użyte tylko przez read-only doctor/snapshot; zero main RAG/STT/content export,
+zero lifecycle/reindex/vector writes. Raport nie zawiera real main Memory content.
+
+43. git diff --check
+PASS. Po zapisaniu raportu wykonano final check.
+Nie wykonywano commit, push ani staging.
+
+44. Vendor status
+git -C vendor/kulai_modules status --porcelain: pusty.
+Vendor nadal pin 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Brak backend/Desktop/TTS/model/migration/protocol changes.
+
+45. Exact changed files (25)
 README.md
-backend/README.md
-backend/src/kulai_memory/app_factory.py
-backend/src/kulai_memory/api/assistant_contract.py
-backend/src/kulai_memory/api/assistant_ws.py
-backend/src/kulai_memory/api/assistant_ws_protocol.py
-backend/src/kulai_memory/api/cancellation.py
-backend/src/kulai_memory/api/memory_http.py
-backend/src/kulai_memory/api/server_access.py
-backend/src/kulai_memory/application/history.py
-backend/src/kulai_memory/application/ports.py
-backend/src/kulai_memory/history_persistence.py
-backend/src/kulai_memory/persistence/repository.py
-backend/src/kulai_memory/server/runtime.py
-backend/tests/assistant_transport_fakes.py
-backend/tests/integration/test_assistant_uvicorn.py
-backend/tests/integration/test_automatic_indexing_postgres.py
-backend/tests/integration/test_memory_websocket.py
-backend/tests/integration/test_server_assistant_postgres.py
-backend/tests/test_assistant_disconnect.py
-backend/tests/test_memory_ws_concurrency.py
-backend/tests/test_server_assistant_runtime.py
-backend/tests/test_server_runtime.py
-backend/tests/test_server_transport.py
-backend/tests/uvicorn_assistant_worker.py
-docs/LOCAL_ASSISTANT_TRANSPORT.md
+mobile/android/README.md
+mobile/android/app/build.gradle.kts
+mobile/android/gradle/libs.versions.toml
+mobile/android/app/src/main/java/com/kulai/memory/MainActivity.kt
+mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryController.kt
+mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryScreen.kt
+mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryViewModel.kt
+mobile/android/app/src/main/java/com/kulai/memory/MemoryAssistantController.kt
+mobile/android/app/src/main/java/com/kulai/memory/MemoryClientController.kt
+mobile/android/app/src/main/java/com/kulai/memory/MemoryClientScreen.kt
+mobile/android/app/src/main/java/com/kulai/memory/MemoryHistoryController.kt
+mobile/android/app/src/main/java/com/kulai/memory/audio/MicrophoneGate.kt
+mobile/android/app/src/main/java/com/kulai/memory/models/MemoryModels.kt
+mobile/android/app/src/main/java/com/kulai/memory/protocol/AssistantProtocol.kt
+mobile/android/app/src/main/java/com/kulai/memory/protocol/MemoryJson.kt
+mobile/android/app/src/main/java/com/kulai/memory/transport/MemoryHttpClient.kt
+mobile/android/app/src/test/java/com/kulai/memory/AssistantTestFixtures.kt
+mobile/android/app/src/test/java/com/kulai/memory/AssistantWebSocketMockServerTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/MemoryAssistantControllerTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/MemoryClientStateTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/MemoryHistoryControllerTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/protocol/AssistantProtocolTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/transport/MemoryHttpClientTest.kt
 wynik.txt
 
-Ignored diagnostics/snapshots/JUnit/probes w .venv/task6c1_http_correction
-nie są częścią zmian do commita.
+46. Known limitations
+Local debug/ADB reverse only; no auth/LAN/WSS yet (TASK 4D).
+No Android TTS/lifecycle mutation UI/multi-turn/partial STT.
+History/assistant state is in-memory and does not survive process death.
+Existing Note cache still provides only in-process retry semantics.
+Question disconnect requires repeating the question; no retained audio or retry cache.
+HTTP response bound 2 MiB; oversized detail/response is rejected safely.
+Query limit is conservative UTF-16 length <=10000.
+Physical device UI/microphone/permission behavior not automatically verified.
+No reviewed semantic score cutoff/reranker; canonical RAG is unchanged.
 
-25. Proposed commit message
-fix: handle assistant body errors safely and verify real Uvicorn requests
-(Dla całego niecommitowanego 6C.1: feat: add verified local history and assistant transport)
+47. Manual physical-device steps — po review
+Terminal 1 (PowerShell):
+cd C:\Bombowy\Projekty\kulai_memory
+.\.venv\Scripts\python.exe scripts\dev.py
 
-Manual UTF-8 invocation (po review; nie wykonano private-main RAG automatycznie):
-$body = @{ query = "<wstaw swoje pytanie>"; top_k = 5 } | ConvertTo-Json -Compress
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/assistant/ask" -Method Post -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Terminal 2 (PowerShell):
+cd C:\Bombowy\Projekty\kulai_memory
+adb reverse tcp:8000 tcp:8000
+adb reverse --list
+cd mobile\android
+.\gradlew.bat assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
 
-Nie wymaga special keepalive, drugiego requestu ani wcześniejszego CLI warmup.
-Unsupported/malformed encoding nie jest reinterpretowany ani naprawiany fuzzy.
-Server nadal local-only, bez auth/LAN/WSS; no Desktop/TTS/Android changes.
+NOTE:
+Nagraj nową expendable Memory -> STOP -> Saved.
+Sprawdź RETRY NOTE / RETRY SAVE przy kontrolowanym disconnect/save failure.
 
-26. Decision
+MEMORY:
+Active -> nowa Memory widoczna -> open full detail -> BACK -> Archived.
+Sprawdź LOAD MORE gdy cursor dostępny oraz REFRESH.
+
+TEXT ASK:
+Gdzie mieszka mój zielony smok?
+Expected: grounded answer + exact Memory citation.
+
+VOICE ASK:
+ASK BY VOICE, powiedz "Gdzie mieszka mój zielony smok?", STOP QUESTION.
+Expected: transcript -> Searching -> answer -> citation.
+
+SILENCE:
+ASK BY VOICE -> cisza -> STOP QUESTION.
+Expected: No speech detected, no answer/sources, no Memory created.
+
+PERMISSION:
+Odmów microphone permission (w razie wcześniejszej zgody odbierz ją w App settings).
+History/detail i Text ASK działają; oba voice start buttons disabled.
+Permission button nadal pozwala zażądać zgody.
+
+TAB STATE:
+ASK result -> MEMORY -> ASK: poprzedni answer/citations pozostają.
+NOTE -> ASK -> NOTE: Note state nie resetuje się.
+Przy active capture drugi voice start nie może uruchomić drugiego mikrofonu.
+
+Ten manual smoke nie był wykonany automatycznie. Prywatny main query/audio
+może być użyty wyłącznie ręcznie po review.
+
+48. Proposed next task
+Po physical-device review 6C.2: TASK 6C.3 — Android local TTS,
+z osobnym audytem dostępnych PL/EN voices i bez zmiany canonical RAG.
+LAN/WSS/auth/pairing nadal osobno w TASK 4D.
+
+49. Proposed commit message
+feat: add Android history and text/voice Memory assistant
+
+50. Decision
 OK DO COMMITA
-Odtworzone błędne 500 z body parsing zostało poprawione na safe client 400.
-Poprawny UTF-8 działa FIRST/SECOND przez real scripts/dev.py/Uvicorn i real BGE/Qwen.
-Canonical answer/citation, disconnect cancellation, reuse/lane i read-only invariants PASS.
-Main unchanged; full regressions/Android/golden/pip/doctor/vendor PASS.
+NOTE invariants zachowane; NOTE/ASK/MEMORY mają niezależne state.
+HTTP UTF-8/strict parsing/cancellation, keyset history/detail, voice question,
+citations/insufficient/no-speech i max-one capture są pokryte testami.
+Android 115 PASS + debug build PASS, backend transport 83 PASS.
+Main complete snapshot identical; doctor PASS; vendor clean; diff check PASS.
 Nie wykonano commit ani push.

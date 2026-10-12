@@ -64,6 +64,7 @@ internal fun VoiceMemoryContent(
     onRetrySave: () -> Unit,
     onRetryNote: () -> Unit,
     onRequestPermission: () -> Unit,
+    captureAvailable: Boolean = true,
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -123,7 +124,7 @@ internal fun VoiceMemoryContent(
             ) {
                 Button(
                     onClick = onRecord,
-                    enabled = state.canRecord,
+                    enabled = state.canRecord && captureAvailable,
                     modifier = Modifier.weight(1f).height(64.dp),
                 ) {
                     Text("NAGRAJ")

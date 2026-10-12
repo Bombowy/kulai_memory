@@ -17,6 +17,9 @@ android {
         versionCode = 1
         versionName = "0.1.0-alpha"
 
+        buildConfigField("String", "MEMORY_HTTP_BASE_URL", "\"https://127.0.0.1:8000\"")
+        buildConfigField("String", "ASSISTANT_WS_URL", "\"wss://127.0.0.1:8000/ws/assistant\"")
+
         buildConfigField(
             "String",
             "VOICE_WS_URL",
@@ -26,6 +29,8 @@ android {
 
     buildTypes {
         debug {
+            buildConfigField("String", "MEMORY_HTTP_BASE_URL", "\"http://127.0.0.1:8000\"")
+            buildConfigField("String", "ASSISTANT_WS_URL", "\"ws://127.0.0.1:8000/ws/assistant\"")
             buildConfigField(
                 "String",
                 "VOICE_WS_URL",
@@ -70,6 +75,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

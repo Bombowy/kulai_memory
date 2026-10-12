@@ -223,8 +223,8 @@ trigger indexing writes or refresh Recent Memory.
 
 The local `scripts/ask_memory.py` CLI remains available for diagnostics. There
 is no reviewed semantic score cutoff or reranker yet. Desktop has no
-conversational multi-turn or partial STT; Android has no RAG UI yet. The local
-server provides text and voice RAG transport described below. The existing
+conversational multi-turn or partial STT. Android provides text/voice ASK through
+the local server transport described below. The existing
 voice-note save/index/Recent Memory flow is unchanged.
 
 Desktop supports optional **local Polish / English speech** on Windows using installed
@@ -418,10 +418,10 @@ reconciliation without Qwen generation; owned providers close once on shutdown.
 See [the transport contract](docs/LOCAL_ASSISTANT_TRANSPORT.md) for complete
 HTTP/WS schemas, cursor rules, events, audio limits and safe errors. `/ws/memory`
 v1 and current Android Voice Note are unchanged. The new transport has no TTS,
-authentication, LAN/WSS or Android assistant UI yet; future 6C.2 will use the
-same localhost URLs through ADB reverse. Desktop continues to run in process.
+authentication or LAN/WSS. Android uses these localhost APIs through ADB reverse
+for history, detail and text/voice ASK. Desktop continues to run in process.
 
-## Android voice-memory alpha
+## Android NOTE / ASK / MEMORY alpha
 
 The native Android alpha lives in `mobile/android`. It uses Kotlin, Jetpack
 Compose, `AudioRecord`, and OkHttp. The debug build records voice-recognition
@@ -429,6 +429,21 @@ PCM16 at 16 kHz mono and streams bounded binary frames to the existing
 WebSocket protocol v1. It keeps a private cache copy only while a note can be
 retried, uses one stable ingestion UUID for every retry, and deletes the cache
 after `memory.saved`, an empty transcript, or a nonrecoverable error.
+
+**NOTE**, **ASK** and **MEMORY** keep independent in-memory state across tab
+switches. ASK supports text queries and ephemeral **ASK BY VOICE** questions,
+showing transcript, grounded answer and validated citations. Insufficient context
+has no sources; silence skips RAG. Questions/answers are never saved as Memory,
+and voice questions have no retry cache or ingestion UUID. A shared capture gate
+prevents simultaneous Note/Question capture and waits for native capture drain.
+Text ASK, history and detail remain usable without microphone permission.
+
+MEMORY provides Active/Archived history, timestamp/UUID keyset pagination,
+**LOAD MORE**, **REFRESH**, full canonical detail and **BACK**. Successful Note
+save marks history stale for its next visit. HTTP uses OkHttp cancellation and
+explicit UTF-8 JSON; HTTP and assistant WS use strict typed projections, shared
+answer validation and stale-response protection. See
+[Android documentation](mobile/android/README.md) for the controls and smoke plan.
 
 Build and test the debug APK from the repository root:
 
@@ -444,7 +459,9 @@ The APK is written to:
 mobile\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-The debug client deliberately uses `ws://127.0.0.1:8000/ws/memory`. Cleartext
+Debug uses `http://127.0.0.1:8000` for history/detail/text ASK,
+`ws://127.0.0.1:8000/ws/assistant` for voice ASK, and the unchanged
+`ws://127.0.0.1:8000/ws/memory` for Voice Note. Cleartext
 is enabled only in the debug manifest. The main/release manifest does not
 enable it. Start the backend on loopback, attach a debug-authorized Android
 device, install the APK, and configure ADB reverse:
@@ -456,16 +473,17 @@ adb reverse --list
 adb install -r mobile\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-The backend must remain bound to `127.0.0.1`; TASK 4C does not expose it to the
+The backend must remain bound to `127.0.0.1`; this alpha does not expose it to the
 LAN. On the phone, grant microphone permission, record a short Polish note,
 stop, and confirm `Saved`. Then record 2–3 seconds of silence and confirm `No
 speech detected` without a new Memory. Disconnect recovery uses `RETRY NOTE`
 to replay private cached PCM with the same ingestion ID. A live recoverable
 database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
 
-This alpha does not retain retry state across process death. It has no history
-screen, LAN transport, WSS, authentication, RAG UI, partial STT, or
-public-storage audio. LAN/WSS and authentication/pairing belong to TASK 4D.
+This alpha does not retain retry state across process death. History/assistant
+state is in-memory. There is no Android TTS, lifecycle mutation UI, LAN transport,
+WSS, authentication, multi-turn, partial STT, or public-storage audio.
+LAN/WSS and authentication/pairing belong to TASK 4D.
 
 ## Local embedding foundation
 
@@ -570,7 +588,7 @@ The LLM has an explicit 180-second generation/HTTP timeout and the CLI a
 thinking disabled; no Whisper is loaded by the CLI. Desktop uses this same
 canonical RAG through its text ASK and ASK BY VOICE controls and borrows its
 shared BGE provider. The local server also exposes canonical text/voice RAG;
-Android RAG UX is not integrated yet.
+Android exposes it through the ASK tab without storing questions or answers.
 
 The real RAG integration uses **only owned temporary databases and synthetic
 Memories**, never real main content:

@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             KulAIMemoryTheme {
-                VoiceMemoryScreen(
+                MemoryClientScreen(
                     viewModel = viewModel,
                     requestMicrophonePermission = {
                         microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
