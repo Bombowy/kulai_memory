@@ -46,7 +46,14 @@ from kulai_memory.database_safety import (
 from kulai_memory.application.indexing import IndexReconciliationReport
 from kulai_memory.automatic_indexing import (
     AutomaticMemoryIndexer, RuntimeMemoryIndexer, RuntimeIndexerFactory,
+    EmbeddingProviderFactory, OwnedEmbeddingProvider,
 )
+from kulai_memory.embedding_provider import create_embedding_provider
+from kulai_memory.rag_runtime import MemoryRagRuntime
+from kulai_memory.application.rag import MemoryRagResult
+from kulai_memory.application.retrieval import MemoryRetrievalService
+from kulai_memory.application.history import MemoryDetail, MemoryHistoryCursor, MemoryHistoryPage
+from kulai_memory.history_persistence import read_memory_history, read_memory_detail
 from kulai_memory.persistence import PostgresMemoryRepository
 from kulai_memory.runtime import CudaRuntimeConfigurationError, ProcessCudaDllScope
 from kulai_memory.settings import Settings, get_settings
@@ -150,7 +157,7 @@ async def _wait_for_uncancellable_operation(task: asyncio.Task[Any]) -> None:
 
 
 class VoiceMemoryServerRuntime:
-    """Own one provider, DB pool and serialized inference context per process."""
+    """Own one Whisper, shared BGE, RAG/Qwen and DB pool per local process."""
 
     def __init__(
         self,
@@ -163,6 +170,8 @@ class VoiceMemoryServerRuntime:
         session_factory_builder: SessionFactoryBuilder = _session_factory_builder,
         repository_factory: RepositoryFactory = _repository_factory,
         indexer_factory: RuntimeIndexerFactory = AutomaticMemoryIndexer,
+        embedding_provider_factory: EmbeddingProviderFactory = create_embedding_provider,
+        rag_runtime_factory: Callable[..., Any] = MemoryRagRuntime,
     ) -> None:
         self._settings = settings or get_settings()
         self._provider_factory = provider_factory
@@ -172,18 +181,24 @@ class VoiceMemoryServerRuntime:
         self._session_factory_builder = session_factory_builder
         self._repository_factory = repository_factory
         self._indexer_factory = indexer_factory
+        self._embedding_provider_factory = embedding_provider_factory
+        self._rag_runtime_factory = rag_runtime_factory
+        self._embedding_provider: OwnedEmbeddingProvider | None = None
+        self._rag: MemoryRagRuntime | None = None
         self._indexer: RuntimeMemoryIndexer | None = None
         self._indexing_report = IndexReconciliationReport()
         self._cuda_scope = ProcessCudaDllScope(self._settings.kulai_cuda_dll_dir)
         self._lifecycle_lock = asyncio.Lock()
         self._inference_lock = asyncio.Lock()
         self._inference_tasks: set[asyncio.Task[Any]] = set()
+        self._ai_callers: set[asyncio.Task[Any]] = set()
         self._engine: _Engine | None = None
         self._session_factory: _SessionFactory | None = None
         self._provider: TranscriptionProvider | None = None
         self._transcription_service: TranscriptionService | None = None
         self._started = False
         self._closed = False
+        self._shutdown_task: asyncio.Task[None] | None = None
 
     @property
     def provider(self) -> TranscriptionProvider | None:
@@ -224,10 +239,18 @@ class VoiceMemoryServerRuntime:
                 self._transcription_service = TranscriptionService(
                     provider=self._provider
                 )
+                self._embedding_provider = self._embedding_provider_factory(settings=self._settings)
                 self._indexer = self._indexer_factory(
                     settings=self._settings, session_factory=self._session_factory,
+                    provider=self._embedding_provider,
                 )
-                self._indexing_report = await self._indexer.reconcile()
+                self._rag = self._rag_runtime_factory(
+                    settings=self._settings, session_factory=self._session_factory,
+                    embedding_provider=self._embedding_provider,
+                )
+                await self._rag.__aenter__()
+                async with self._inference_lock:
+                    self._indexing_report = await self._indexer.reconcile()
                 self._report_indexing_state()
                 self._started = True
             except asyncio.CancelledError:
@@ -242,16 +265,24 @@ class VoiceMemoryServerRuntime:
 
     async def shutdown(self) -> None:
         async with self._lifecycle_lock:
-            if self._closed:
-                return
-            self._closed = True
-            self._started = False
-            tasks = tuple(self._inference_tasks)
+            if self._shutdown_task is None:
+                self._closed = True
+                self._started = False
+                self._shutdown_task = asyncio.create_task(self._shutdown())
+            try:
+                await asyncio.shield(self._shutdown_task)
+            except asyncio.CancelledError:
+                await _wait_for_uncancellable_operation(self._shutdown_task)
+                raise
+
+    async def _shutdown(self) -> None:
+        tasks = tuple(self._ai_callers)
+        for task in tasks:
+            task.cancel()
+        try:
             if tasks:
-                await asyncio.gather(
-                    *(asyncio.shield(task) for task in tasks),
-                    return_exceptions=True,
-                )
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
             await self._shutdown_resources()
 
     def create_voice_session(
@@ -270,26 +301,70 @@ class VoiceMemoryServerRuntime:
     async def transcribe(
         self, *, session: VoiceSession, audio_path: Path
     ) -> TranscriptionResult:
+        return await self._run_ai(lambda: session.transcribe(request=self._transcription_request(audio_path)),
+                                  drain=True)
+
+    @staticmethod
+    def _transcription_request(audio_path: Path) -> TranscriptionRequest:
+        return TranscriptionRequest(audio=AudioPathInput(path=audio_path),
+                                    mode=TranscriptionMode.TRANSCRIBE,
+                                    timestamp_mode=TranscriptionTimestampMode.NONE)
+
+    async def transcribe_question(self, *, audio_path: Path) -> TranscriptionResult:
+        """Borrow existing Whisper; no VoiceSession/ingestion identity is created."""
         self._require_started()
-        async with self._inference_lock:
-            self._require_started()
-            operation = asyncio.create_task(
-                session.transcribe(
-                    request=TranscriptionRequest(
-                        audio=AudioPathInput(path=audio_path),
-                        mode=TranscriptionMode.TRANSCRIBE,
-                        timestamp_mode=TranscriptionTimestampMode.NONE,
-                    )
-                )
-            )
-            self._inference_tasks.add(operation)
-            try:
-                return await asyncio.shield(operation)
-            except asyncio.CancelledError:
-                await _wait_for_uncancellable_operation(operation)
-                raise
-            finally:
-                self._inference_tasks.discard(operation)
+        service = self._transcription_service
+        if service is None:
+            raise ServerRuntimeError()
+        return await self._run_ai(lambda: service.transcribe(request=self._transcription_request(audio_path)),
+                                  drain=True)
+
+    async def _run_ai(self, operation: Callable[[], Awaitable[Any]], *, drain: bool = False):
+        """One lane, entered before any model work or DB checkout.
+
+        Cancel network inference promptly. Thread-backed Whisper is shielded and
+        drained while keeping the lane and its input WAV alive.
+        """
+        self._require_started()
+        caller = asyncio.current_task()
+        self._ai_callers.add(caller)
+        try:
+            async with self._inference_lock:
+                self._require_started()
+                task = asyncio.create_task(operation())
+                self._inference_tasks.add(task)
+                try:
+                    return await asyncio.shield(task) if drain else await task
+                except asyncio.CancelledError:
+                    if drain:
+                        await _wait_for_uncancellable_operation(task)
+                    else:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    raise
+                finally:
+                    self._inference_tasks.discard(task)
+        finally:
+            self._ai_callers.discard(caller)
+
+    async def ask_memory(self, *, query: str, top_k: int = 5) -> MemoryRagResult:
+        MemoryRetrievalService.validate_input(query=query, top_k=top_k)
+        self._require_started()
+        if self._rag is None:
+            raise ServerRuntimeError()
+        return await self._run_ai(lambda: self._rag.ask(query=query, top_k=top_k))
+
+    async def list_memories(self, *, archived: bool = False, limit: int = 50,
+                            cursor: MemoryHistoryCursor | None = None) -> MemoryHistoryPage:
+        self._require_started()
+        return await read_memory_history(archived=archived, limit=limit, cursor=cursor,
+                                         session_factory=self._session_factory,
+                                         repository_factory=self._repository_factory)
+
+    async def get_memory(self, *, memory_id: UUID) -> MemoryDetail | None:
+        self._require_started()
+        return await read_memory_detail(memory_id=memory_id, session_factory=self._session_factory,
+                                        repository_factory=self._repository_factory)
 
     async def ingest(
         self,
@@ -330,7 +405,7 @@ class VoiceMemoryServerRuntime:
             try:
                 if self._indexer is None:
                     raise ServerRuntimeError
-                await self._indexer.ensure(memory=result.memory)
+                await self._run_ai(lambda: self._indexer.ensure(memory=result.memory))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -341,7 +416,7 @@ class VoiceMemoryServerRuntime:
         self._require_started()
         if self._indexer is None:
             raise ServerRuntimeError
-        self._indexing_report = await self._indexer.reconcile()
+        self._indexing_report = await self._run_ai(lambda: self._indexer.reconcile())
         self._report_indexing_state()
         return self._indexing_report
 
@@ -369,12 +444,15 @@ class VoiceMemoryServerRuntime:
             raise ServerRuntimeError
 
     async def _shutdown_resources(self) -> None:
-        indexer = self._indexer
-        self._indexer = None
         cancellation = None
-        if indexer is not None:
+        rag, self._rag = self._rag, None
+        indexer, self._indexer = self._indexer, None
+        embedding, self._embedding_provider = self._embedding_provider, None
+        for resource in (rag, indexer, embedding):
+            if resource is None:
+                continue
             try:
-                await indexer.aclose()
+                await resource.aclose()
             except asyncio.CancelledError as exc:
                 cancellation = exc
             except Exception:

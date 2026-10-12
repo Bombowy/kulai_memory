@@ -115,7 +115,8 @@ Canonical retrieval closes its short read-only snapshot before structured Qwen
 generation. Bounded untrusted JSON evidence contains only IDs, ranks and content;
 answers require validated citations or return canonical insufficient context.
 Zero evidence skips the LLM. There is no reviewed score cutoff/reranker,
-Android RAG UI, WebSocket voice RAG, or multi-turn conversation yet. Tests use
+Android RAG UI or multi-turn conversation yet. Local server voice RAG is available
+through `/ws/assistant` as documented below. Tests use
 only owned DBs with synthetic evidence and controlled audio.
 
 Optional Desktop TTS uses the host-local Windows `System.Speech` adapter and
@@ -243,5 +244,32 @@ Canonical events are emitted in operation order. An empty final transcript
 closes the connection without Memory events. A recoverable save failure leaves
 the socket open for `memory.retry`, which reuses the same transcript and IDs.
 The server closes cleanly after `memory.saved`. The adapter is bound only by the
-existing localhost development launcher; LAN exposure, authentication, and the
-Android client belong to TASK 4C.
+existing localhost development launcher. Android alpha still uses this unchanged
+v1 endpoint through ADB reverse. LAN/WSS/auth/pairing belong to TASK 4D.
+
+## Local history and assistant transport
+
+`GET /api/memories` provides active/archived history with bounded keyset pagination;
+`GET /api/memories/{id}` reads canonical detail. `POST /api/assistant/ask` reuses
+canonical text RAG. The separate `/ws/assistant` accepts one PCM voice question,
+transcribes it with the existing Whisper and runs the same RAG. Questions and
+answers are never persisted, and this transport performs no TTS.
+
+All adapters borrow the single `VoiceMemoryServerRuntime` created by the existing
+router lifespan. It owns the DB engine, Whisper and shared BGE; the indexer and
+`MemoryRagRuntime` borrow that BGE, and RAG owns one Qwen client. Startup performs
+strict doctor, CUDA scope setup and bounded reconciliation, without Qwen generation.
+One AI lane serializes Whisper, indexing and RAG; DB transactions close before
+model work or waiting for that lane. History reads use independent short read-only
+snapshots and remain available while inference is busy. Shutdown cancels network
+RAG, drains thread-backed Whisper and closes owned resources once.
+
+The separate assistant event contract reuses ready/transcript/started/error event
+shapes but projects validated answer/status/citations in `assistant.completed`.
+The canonical `{text}` completed event and strict `/ws/memory` v1 consumers remain
+unchanged. Disconnect monitoring cancels BGE/Qwen and drains Whisper before WAV
+cleanup; no completed event is sent after disconnect.
+
+See [local transport contract](../docs/LOCAL_ASSISTANT_TRANSPORT.md) for schemas,
+cursor semantics, audio bounds, errors and future Android URLs. This phase is
+loopback-only, without authentication, LAN, WSS or new Android UI.

@@ -21,6 +21,7 @@ from kulai_memory.database_safety import CheckResult, DoctorReport
 from kulai_memory.server import VoiceMemoryServerRuntime
 from kulai_memory.settings import Settings
 from backend.tests.indexing_fakes import FakeRuntimeIndexer
+from backend.tests.desktop_rag_fakes import FakeOwnedBGE, FakeDesktopRag
 
 
 class BlockingProvider:
@@ -146,6 +147,8 @@ def test_two_websocket_connections_share_one_serialized_provider() -> None:
             session_factory_builder=lambda ignored: FakeSession,
             repository_factory=lambda ignored: repository,
             indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
+            embedding_provider_factory=lambda **kwargs: FakeOwnedBGE(),
+            rag_runtime_factory=lambda **kwargs: FakeDesktopRag(),
         )
 
     app = create_app(voice_runtime_factory=runtime_factory)

@@ -217,12 +217,15 @@ def test_second_check_rejects_stale_embedding_after_concurrent_change(other):
 
 
 def runtime_arguments(factory, provider):
+    from backend.tests.desktop_rag_fakes import FakeDesktopRag
     engine = factory.kw["bind"]
     return dict(settings=Settings(_env_file=None, kulai_vector_dimension=1024),
         provider_factory=lambda ignored: SttProvider(("synthetic automatically indexed speech",)),
         database_config_factory=lambda: database_config_for_database(engine.url.database, config=database_config()),
         engine_factory=lambda ignored: engine, session_factory_builder=lambda ignored: factory,
-        indexer_factory=lambda **kwargs: AutomaticMemoryIndexer(**kwargs, provider_factory=lambda **ignored: provider))
+        embedding_provider_factory=lambda **kwargs: provider,
+        rag_runtime_factory=lambda **kwargs: FakeDesktopRag(),
+        indexer_factory=lambda **kwargs: AutomaticMemoryIndexer(**kwargs))
 
 
 def test_two_automatic_workers_wait_on_canonical_lock_and_only_one_upserts(monkeypatch):

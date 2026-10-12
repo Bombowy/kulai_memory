@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from kulai_memory.application.memory import (
 from .ingestion_lock import lock_ingestion
 from kulai_memory.application.deletion import MemoryDeletionRevisionConflictError
 from .models import MemoryDb, MemoryIngestionTombstoneDb
+from kulai_memory.application.history import MemoryHistoryCursor, validate_history
 
 
 def _to_domain(row: MemoryDb) -> Memory:
@@ -40,6 +41,27 @@ class PostgresMemoryRepository:
 
     def __init__(self, *, db: AsyncSession) -> None:
         self._db = db
+
+    @staticmethod
+    def _library_query(archived: bool):
+        return select(MemoryDb).where(
+            MemoryDb.archived_at.is_not(None) if archived else MemoryDb.archived_at.is_(None)
+        ).order_by(MemoryDb.created_at.desc(), MemoryDb.id.desc())
+
+    async def list_history(self, *, archived: bool, limit: int,
+                           cursor: MemoryHistoryCursor | None = None) -> tuple[Memory, ...]:
+        validate_history(archived=archived, limit=limit, cursor=cursor)
+        statement = self._library_query(archived)
+        if cursor is not None:
+            statement = statement.where(or_(
+                MemoryDb.created_at < cursor.before_created_at,
+                and_(MemoryDb.created_at == cursor.before_created_at, MemoryDb.id < cursor.before_id),
+            ))
+        try:
+            result = await self._db.execute(statement.limit(limit + 1))
+            return tuple(_to_domain(row) for row in result.scalars().all())
+        except Exception:
+            raise MemoryPersistenceError() from None
 
     async def get_for_update(self, memory_id: UUID) -> Memory | None:
         """Same order as ingestion/delete: advisory identity -> canonical row."""
@@ -235,9 +257,7 @@ class PostgresMemoryRepository:
     async def list_library(self, *, archived: bool, limit: int) -> tuple[Memory, ...]:
         if type(archived) is not bool or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("Invalid Memory library filter or limit.")
-        statement = select(MemoryDb).where(
-            MemoryDb.archived_at.is_not(None) if archived else MemoryDb.archived_at.is_(None)
-        ).order_by(MemoryDb.created_at.desc(), MemoryDb.id.desc()).limit(limit)
+        statement = self._library_query(archived).limit(limit)
         try:
             result = await self._db.execute(statement)
             return tuple(_to_domain(row) for row in result.scalars().all())

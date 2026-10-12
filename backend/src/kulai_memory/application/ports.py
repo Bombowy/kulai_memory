@@ -9,6 +9,7 @@ from .events import VoiceSessionEvent
 
 if TYPE_CHECKING:
     from .memory import IdempotentMemoryWrite, Memory
+    from .history import MemoryHistoryCursor
 
 
 @runtime_checkable
@@ -49,6 +50,15 @@ class MemoryLibraryRepository(Protocol):
     async def list_library(self, *, archived: bool, limit: int) -> tuple[Memory, ...]:
         """Order by created_at DESC, id DESC; include only the requested partition."""
         ...
+
+
+class MemoryHistoryRepository(Protocol):
+    """Keyset history reads; fetch one extra row to detect a following page."""
+
+    async def list_history(self, *, archived: bool, limit: int,
+                           cursor: MemoryHistoryCursor | None = None) -> tuple[Memory, ...]: ...
+
+    async def get_by_id(self, memory_id: UUID) -> Memory | None: ...
 
 
 @runtime_checkable

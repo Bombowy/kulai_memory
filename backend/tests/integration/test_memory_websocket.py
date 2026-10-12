@@ -166,10 +166,10 @@ def test_websocket_durable_duplicate_uses_real_postgres(index_failure) -> None:
 
         def indexer_factory(**kwargs):
             nonlocal embedding_provider
-            embedding_provider = CheckedProvider(kwargs["session_factory"].kw["bind"])
+            embedding_provider = kwargs["provider"]
             if index_failure:
                 embedding_provider.error = RuntimeError("PRIVATE_EMBED_SENTINEL")
-            return AutomaticMemoryIndexer(**kwargs, provider_factory=lambda **ignored: embedding_provider)
+            return AutomaticMemoryIndexer(**kwargs)
 
         def provider_factory(settings: Settings) -> FixedProvider:
             nonlocal provider_factory_calls
@@ -182,6 +182,7 @@ def test_websocket_durable_duplicate_uses_real_postgres(index_failure) -> None:
 
         def runtime_factory() -> RecordingRuntime:
             nonlocal runtime
+            from backend.tests.desktop_rag_fakes import FakeDesktopRag
             runtime = RecordingRuntime(
                 settings=Settings(_env_file=None, kulai_vector_dimension=1024),
                 provider_factory=provider_factory,
@@ -190,6 +191,8 @@ def test_websocket_durable_duplicate_uses_real_postgres(index_failure) -> None:
                     config=main_config,
                 ),
                 indexer_factory=indexer_factory,
+                embedding_provider_factory=lambda **kwargs: CheckedProvider(runtime._engine),
+                rag_runtime_factory=lambda **kwargs: FakeDesktopRag(),
             )
             return runtime
 

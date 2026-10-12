@@ -5,6 +5,8 @@ from kulai_fastapi_core import create_kulai_app
 
 from .api.health import create_health_router
 from .api.memory_ws import RuntimeFactory, create_memory_ws_router
+from .api.memory_http import create_memory_http_router
+from .api.assistant_ws import create_assistant_ws_router
 from .settings import get_settings
 
 
@@ -21,5 +23,5 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None) -> FastAP
         title=settings.app_name,
         version="0.1.0",
         debug=settings.debug,
-        routers=(create_health_router(), memory_router),
+        routers=(create_health_router(), memory_router, create_memory_http_router(), create_assistant_ws_router()),
     )

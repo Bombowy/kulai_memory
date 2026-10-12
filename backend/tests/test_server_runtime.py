@@ -23,6 +23,7 @@ from kulai_memory.server import (
 )
 from kulai_memory.settings import Settings
 from backend.tests.indexing_fakes import FakeRuntimeIndexer
+from backend.tests.desktop_rag_fakes import FakeOwnedBGE, FakeDesktopRag
 
 
 class FakeEngine:
@@ -101,6 +102,8 @@ def _runtime(
         engine_factory=lambda ignored: engine,
         session_factory_builder=lambda ignored: NoopSessionFactory(),
         indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
+        embedding_provider_factory=lambda **kwargs: FakeOwnedBGE(),
+        rag_runtime_factory=lambda **kwargs: FakeDesktopRag(),
     )
 
 
@@ -227,6 +230,8 @@ def test_runtime_preserves_retired_error_and_does_not_commit():
             session_factory_builder=lambda ignored: lambda: session,
             repository_factory=lambda ignored: Repository(),
             indexer_factory=lambda **kwargs: FakeRuntimeIndexer(),
+            embedding_provider_factory=lambda **kwargs: FakeOwnedBGE(),
+            rag_runtime_factory=lambda **kwargs: FakeDesktopRag(),
         )
         await runtime.startup()
         with pytest.raises(MemoryIngestionRetiredError):

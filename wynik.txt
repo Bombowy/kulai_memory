@@ -1,303 +1,310 @@
-TASK 6A.4 CORRECTION — POLISH / ENGLISH SWITCHING + AUTO-SPEAK
-Repo: C:\Bombowy\Projekty\kulai_memory
-Data: 2026-10-10
-Status raportu: finalny; OK DO COMMITA (manual user smoke po review).
-Nie wykonano commit ani push. Automatyzacja nie używa prywatnego main answer/audio.
+TASK 6C.1 correction — real Uvicorn HTTP assistant / 500
+Raport końcowy: 2026-10-12
+DECYZJA: OK DO COMMITA
+Nie wykonano commit ani push.
 
 Stan początkowy:
-HEAD = 164614cfaa5ac93e383b8971b29af095ac4a16cf
-feat: add local Desktop PL/EN speech with exact plans and safe playback
-HEAD i origin/main zgodne. TASK 6B.2 (5ac04ca) w historii, committed/pushed.
-Na wejściu były nasze niezatwierdzone zmiany tej samej correction; zostały
-zachowane i dopracowane zgodnie z najnowszym poleceniem.
-Vendor = 720d0f26c75ba4af24d395f98f15a37e4bd5067e, clean.
-PyCharm SDK: project .venv, Python 3.13.15; sprawdzany przed Python/pytest/pip.
-Main schema current/head = kulai_memory_0004. Początkowy strict doctor PASS.
+HEAD/origin-main=4683d33e5d07bdaa6b99d4ec77bf092d26cda28e
+Working tree zawierał niecommitowany TASK 6C.1 (25 plików); zachowano te zmiany.
+Vendor clean, pin=720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+PyCharm SDK sprawdzany przed poleceniami Python: project .venv, Python 3.13.15.
+Main strict doctor PASS, current/head=kulai_memory_0004.
 
-1. Root cause mixed PL/EN
-Audyt przeszedł pełny production path:
-DesktopRagResult.answer -> MemoryRagRuntime.plan_speech -> SpeechPlan
--> SpeechRuntime -> WindowsSpeechProvider -> SoundDevicePlayback.
-Odtworzono konkretny błąd klasyfikacji Qwena: w dwóch syntetycznych
-przypadkach z angielską frazą wewnątrz polskiego zdania baseline dawał
-jeden PL segment. Exact text był prawidłowy, ale cała fraza dostawała Paulinę.
-W starszym ośmioprzypadkowym baseline przypadki 5 i 7: PL;
-po correction: PL -> EN. Pozostałe sześć przypadków baseline już przełączało
-język. Prywatnego tekstu z manualnego main smoke nie odtwarzano automatycznie.
+1. Exact reproduced symptom
+Prawdziwy Uvicorn przez scripts/dev.py z reload i Windows subprocess loop,
+loopback/free port, controlled synthetic runtime:
+Windows PowerShell Invoke-RestMethod, JSON string body zawierający polskie "ó",
+Content-Type application/json bez jawnego UTF-8 -> HTTP 500.
+Public body dokładnie:
+{"detail":"Memory assistant could not complete the operation."}
+ai_asks=0. BGE query i Qwen NIE były uruchamiane dla tego requestu.
+Odtworzono objaw bez private main LLM query i bez TestClient.
 
-2. Planner / provider / playback / UI
-Reprodukowalny błąd mixed dotyczył planner language labels, nie kolejności WAV.
-Prompt teraz jawnie klasyfikuje frazy wewnątrz zdań: polski początek nie może
-przypisać całej późniejszej angielskiej frazy do PL. Dodano niezależne
-przykłady inline oraz EN -> PL -> EN; nazwy/kod same w sobie mogą pozostać
-z językiem otoczenia.
-Dla prawidłowych planów real provider/playback zachowały właściwą kolejność.
-Dodatkowo wzmocniono native provider: SelectVoice(EXACT configured voice)
--> sprawdzenie aktywnego $synth.Voice.Name -> Speak.
-Python nadal sprawdza zwrócone language i voice ID.
-Nie wprowadzono heurystyki znaków PL, fuzzy repair, tłumaczenia ani PL fallback.
+Dodatkowe A/B w osobnym syntetycznym Uvicorn process:
+odtworzenie pierwotnego importu HTTPException -> powyższy exact body 500,
+zero ask calls; zachowany log PROOF exact_500_public_body=true.
 
-3. Real Qwen planner — sześć wymaganych przypadków
-Sekwencje języków (bez dumpu tekstów/promptów):
-1: PL -> EN
-2: EN -> PL
-3: PL -> EN -> PL
-4: EN -> PL -> EN
-5: PL -> EN
-6: EN -> PL
-Łącznie 15 syntetycznych odpowiedzi: pure PL, pure EN, sześć aktualnie
-wymaganych, wcześniejsze inline/techniczne frazy oraz dokładny tekst CLI A.
-Każdy plan: exact concatenation == original answer, identyczne spacje,
-interpunkcja i znaki; pełne angielskie frazy pokryte EN; zero rewrite/translation.
-Test używa MemoryRagRuntime.plan_speech i tego samego klienta Qwen.
-Planner dostaje wyłącznie final answer jako dane, bez Memory context/citations.
-Forbidden DB factory: zero sessions.
+2. Exact root cause
+Dwa kroki składały się na odtworzone 500:
+a) Windows PowerShell 5.1 może wysłać non-ASCII JSON string body w legacy
+   encoding, jeżeli Content-Type nie określa charset. Dla "ó" powstaje payload,
+   którego JSON parser nie może odczytać jako UTF-8.
+b) Installed FastAPI routing importuje HTTPException ze starlette.exceptions
+   i przy takim błędzie body parsing podnosi bazowe HTTPException(status_code=400).
+   Nowy adapter importował HTTPException z fastapi, czyli subclass.
+   except FastAPI.HTTPException nie łapał bazowego Starlette.HTTPException.
+   Generic except Exception maskował expected client 400 jako internal 500.
 
-4. Real voice routing
-PL -> Microsoft Paulina Desktop; EN -> Microsoft Zira Desktop.
-Jedna instancja WindowsSpeechProvider i jeden persistent hidden process
-obsłużyły 11 odpowiedzi / 23 syntezy, w tym wszystkie cztery kierunki:
-PL/EN: Paulina -> Zira
-EN/PL: Zira -> Paulina
-PL/EN/PL: Paulina -> Zira -> Paulina
-EN/PL/EN: Zira -> Paulina -> Zira.
-Każdy request ma przypisany język i exact voice selection; każdy returned
-voice ID oraz jego kolejność są sprawdzane przez production provider/runtime
-i controlled integration. Brak providera per segment.
-Real WAV: PCM16, poprawny header, niepusty, duration > 0.
-Native program test z celowo nieskutecznym SelectVoice dowodzi ZERO Speak
-przy aktywnym niewłaściwym głosie. Wrong response voice/language/audio
-odrzucane bezpiecznie osobno dla PL i EN.
+Potwierdzono rzeczywiste installed API/source:
+fastapi/routing.py importuje Starlette HTTPException i tworzy 400
+"There was an error parsing the body".
+To błąd HTTP exception mapping, nie canonical RAG.
+TestClient z json= zawsze wysyłał poprawne UTF-8; poprzednie testy nie pokrywały
+tej ścieżki błędnego encodingu i typu bazowego wyjątku.
 
-5. tts_smoke A — PL -> EN -> PL
-scripts/tts_smoke.py używa production Settings, create_llm_provider,
-production plan_speech, WindowsSpeechProvider, SpeechRuntime i playback.
-Bez DB/Memory, bez permanentnego audio. --no-play zachowuje syntezę,
-WAV validation i cleanup, pomija jedynie odtwarzanie.
-Rzeczywista osobna komenda --no-play oraz pełny production CLI integration
-bez --no-play: PASS.
-Diagnostyka:
-segment_count=3
-segment=1 language=pl chars=24 voice=Microsoft Paulina Desktop
-segment=2 language=en chars=27 voice=Microsoft Zira Desktop
-segment=3 language=pl chars=18 voice=Microsoft Paulina Desktop
+Ważne: naprawa nie zgaduje kodowania i nie przepisuje query.
+Invalid UTF-8 pozostaje invalid request: teraz safe 400.
+Poprawne JSON UTF-8 działa jako FIRST request.
 
-6. tts_smoke B — EN -> PL -> EN
-Rzeczywista osobna komenda --no-play oraz pełny production CLI integration
-bez --no-play: PASS.
-segment_count=3
-segment=1 language=en chars=23 voice=Microsoft Zira Desktop
-segment=2 language=pl chars=30 voice=Microsoft Paulina Desktop
-segment=3 language=en chars=15 voice=Microsoft Zira Desktop
-Pełne CLI integracje podmieniają tylko fizyczne urządzenie: production
-SoundDevicePlayback czyta wszystkie real PCM callbacks; max active stream=1.
-Nie podmieniono planera, syntezy, Settings, lifecycle ani runtime.
-Fizyczny odsłuch/jakość brzmienia pozostają manualnym smoke po review.
+3. Direct server runtime przed fixem
+PASS przed zmianą obsługi HTTP:
+production VoiceMemoryServerRuntime, owned migrated DB, real shared BGE i Qwen.
+Direct await runtime.ask_memory -> sufficient=true, exact synthetic citation.
+Real TCP HTTP z poprawnym UTF-8 też dawał 200 przed fixem, first i second.
+To wykluczyło provider/lane problem w odtworzonym błędzie.
+Nowy direct subprocess integration test również PASS po fixie.
 
-7. Root cause auto-speak
-Auto-speak był uruchamiany wyłącznie w _on_voice_question_finished.
-Text ASK kończył się wspólnym _on_rag_finished bez uruchomienia speech.
-Stary label sugerował też semantykę tylko dla Voice ASK.
+4. HTTP adapter / cancellation / server runtime
+Potwierdzona przyczyna odtworzonego 500: HTTP adapter / body error mapping.
+Błąd pojawiał się PRZED wejściem do runtime.ask_memory i until_disconnect.
+Server runtime, provider ownership, RAG prompt, retrieval i citations bez zmian.
+Nie zastępowano działającego receive wrappera ani nie usunięto cancellation.
 
-8. Common auto-speak fix
-Label: Speak answers automatically. Domyślnie checked.
-_on_rag_finished najpierw renderuje answer/citations i aktualizuje controls,
-potem raz uruchamia SPEAK dla ANSWERED / INSUFFICIENT_CONTEXT, jeśli opcja
-checked, TTS available i aplikacja nie jest closing.
-Voice handler wyłącznie przekazuje result do wspólnego handlera; usunięto
-jego dodatkowy trigger. Guards blokują stale/duplicate zakończenia.
-UI i README jawnie określają zakres: Polish / English speech.
+5. Safe diagnostic evidence
+Stary mapper:
+assistant request failed stage=http_operation error_type=HTTPException code=none
+ai_asks=0
+Nowy mapper:
+assistant request rejected stage=http_request_validation error_type=HTTPException code=http.invalid_request
 
-9. Text ASK — real AsyncDesktopThread proof
-Nowe testy tworzą MainWindow + rzeczywisty AsyncDesktopThread +
-DesktopController + SpeechRuntime; modele/device są kontrolowane.
-Pełny request -> controller result -> rag_finished -> rendering -> dokładnie
-jedno controller.speak_answer na workerze. Answer/sources są gotowe przed
-requestem speech. Nie monkeypatchowano worker.request_speak_answer ani nie
-ograniczono testu do ręcznego wywołania slotu.
+Dla expected canonical errors:
+stage=rag_retrieval, error_type=MemoryRagError, code=rag.retrieval_failed
+stage=rag_generation, error_type=MemoryRagError, code=rag.generation_failed
+stage=rag_citations, error_type=MemoryRagError, code=rag.invalid_citations
+Dla watcher failure: stage=disconnect_watch + exception TYPE tylko.
 
-10. Voice ASK — exactly once proof
-Start/stop kontrolowanego WAV -> existing transcription -> existing ask
--> voice_question_finished -> wspólny rendering -> dokładnie jedno speech.
-Zero drugiego triggera. Pytanie nie jest ingestowane/indexowane i nie
-odświeża Recent. Jeden provider Whisper/BGE/RAG factory na controller.
+Zachowano wyłącznie wartościowe strukturalne failure logging.
+Brak raw exception message/stacktrace w NOWYCH logger calls.
+Brak query/content/context/prompt/vector/credentials/provider payload.
+Controlled error code logowany tylko z allowlisted MemoryRagError contractu.
+Synthetic sentinel privacy tests PASS.
 
-11. OFF / failure / unavailable / insufficient
-Checkbox OFF: zero auto speech dla Text ASK i Voice ASK; manual SPEAK działa.
-FAILED RAG: zero speech dla obu wejść.
-TTS unavailable: zero speech dla obu, RAG nadal działa.
-INSUFFICIENT_CONTEXT: dokładnie jedno auto speech dla obu, canonical PL,
-zero citations, bez dodatkowego speech-plan Qwen requestu.
-Real worker test synthesis failure zachowuje answer, sources i RAG Answered;
-secondary status: Could not speak answer. Brak PL fallback dla invalid plan.
+6. Exact changed production code
+backend/src/kulai_memory/api/memory_http.py:
+- import/catch Starlette base HTTPException (obejmuje też FastAPI subclasses);
+- 400/422 -> "Invalid assistant request.";
+- 404/503 -> bounded known messages;
+- pozostałe HTTPException details nie są kopiowane do public response;
+- safe stage/type/allowlisted-code logging dla generation/retrieval/citations errors.
 
-12. New-operation-during-speech race
-Usunięto konkurujące STOP future + natychmiastowy nowy request z UI.
-UI tylko wycofuje poprzedni speech presentation state i wysyła nową operację.
-Istniejący controller ask_memory/start_voice_question/start_recording
-awaituje stop_audio i całe cancel/drain PRZED operation lock i nową operacją.
-Manual STOP nadal oczekuje completion, blokując konfliktujące controls.
-Real worker tests Text -> Text oraz Voice -> Voice:
-jawna bariera native cleanup zatrzymuje nowy request; pliki pozostają do
-końca czytania; druga operacja nie startuje przed drain_finished;
-zero DesktopStateError; tylko drugi speech emituje FINISHED.
-Bez produkcyjnego sleep/timer workaround.
-Test Qt otrzymał jawny 10s deadline zamiast odziedziczonego 2s, a kontrolowana
-bariera ma timeout 20s. Nie opóźnia to produkcji ani nie zastępuje asercji
-kolejności; usuwa niestabilność testu pod obciążeniem realnych modeli.
+backend/src/kulai_memory/api/cancellation.py:
+- wyłącznie safe watcher failure logging exception TYPE/stage.
+- operation/watch ordering, cancellation/drain semantics bez zmian.
 
-13. Provider reuse / cancellation / cleanup
-Real planner-only: Qwen clients=1, requests=15, closed=1.
-Real Desktop switching: Qwen clients=1, speech-plan requests=11, closed=1;
-TTS clients/processes=1, PL requests=12, EN requests=11, closed=1.
-Osobne CLI A/B: każdy run TTS clients=1/closed=1, Qwen factory raz,
-trzy ordered requests; brak retained artifacts.
-Owned real Desktop full RAG/speech:
-Whisper providers=1, controlled inferences=2;
-BGE clients=1, requests=4, closed=1, native_dimension=1024, overrides=0;
-Qwen clients=1, RAG requests=3, speech-plan=2, total=5, closed=1;
-TTS clients=1, PL requests=3, EN=0 (odpowiedzi PL), closed=1.
-Liczniki opisują pojedynczy runtime/scenario, nie sumę niezależnych testów.
-Controller speech nie dodaje Whisper/BGE/DB calls.
-STOP/new operation/shutdown propagują cancellation, drainują native/file IO,
-czyszczą WAV dopiero po odczycie i zamykają provider raz.
-Loop exception handler bez błędów; brak stale success i pending tasks.
-Owned full flow: snapshots równe także failure/STOP/cancellation,
-ask_speech_writes=0, checkout podczas Qwen/TTS=0, audio_retained=0.
-Real owned snapshot BEFORE == AFTER: revision 0004; counts Memory/vector/
-tombstone = 1/1/0. Memory SHA256:
-d8815ce21ce34fac993e46e9007367baaa831dd6ddf15a4baf1df1ae77b75e81
-Vector SHA256:
-e5bed83700d3cf727eb598a6e9988317d054d5dddda938ec6e8f080415f23264
-Tombstone SHA256:
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+Żadnych zmian w BGE/Qwen config, runtime orchestration, RAG prompt/grounding,
+Memory data/schema, vector namespace, Desktop, TTS, Android ani /ws/memory v1.
 
-14. Test totals / regressions
-Backend full default: 610 PASS, 116 SKIP, 0 failures/errors (59.05 s).
-Root full, wszystkie 5 opt-ins: 986 PASS, 2 SKIP, 0 failures/errors
-(448.98 s). Skips: optional external Whisper WAV nie ustawiony oraz symlinks
-niedostępne dla procesu. Controlled real Whisper audio działa i PASS.
-Jedno istniejące third-party ostrzeżenie Starlette/Anyio deprecation.
-Speech/planning/playback/CLI units: 112 przypadków:
-speech-plan 27; runtime 16; Windows provider 12; playback 3;
-controller speech 19; slot UI 10; real-worker UI 13; CLI unit 12.
-Speech opt-in integrations: 9 przypadków (zestawy odpowiedzi wewnątrz):
-real planner 1/15 odpowiedzi; real Desktop switching 1/11 odpowiedzi;
-real PL/EN/mixed TTS 3; owned full Desktop speech 2; full real CLI 2.
-Focused real planner/provider/tts: 5 PASS; native provider/full CLI: 14 PASS.
-Regresje obejmują Text ASK, Voice ASK, Voice Note, Library/lifecycle,
-mandatory verified-backup DELETE, tombstones/replay/concurrency,
-backup/restore, indexing/retrieval, canonical RAG, WebSocket i boundaries.
-Applicable flags: POSTGRES/OLLAMA/LLM/WHISPER/TTS = 1.
-Real Whisper large-v3/cuda/int8_float16/VAD korzysta wyłącznie z kontrolowanego
-audio; one provider/model i temp cleanup potwierdzone.
-Wcześniejsze uruchomienie trafiło w testowy 2s wait pod obciążeniem; fixed
-deadline/bariera przechodzą w backend i finalnym root.
-Kolejny run miał jeden błąd komendy: eksport CUDA setting wpływał na test
-wartości domyślnej. Usunięto eksport, zachowano DLL PATH, nie zmieniano
-Settings/testu konfiguracji. Osobne testy konfiguracji: 2 PASS.
-Android/shared protocol niezmienione; rebuild Android nie był wymagany.
+7. Real Uvicorn FIRST request proof
+Nowe network tests używają świeżego subprocessu, realnych socketów i Uvicorn.
+Wariant plain Uvicorn i wariant scripts/dev.py z rzeczywistym reload supervisor,
+host=127.0.0.1, free port.
+Test-only child app fixture zastępuje źródło danych/runtime, zachowując production
+app factory/router/middleware i launcher/process loop.
+Production startup, zero Qwen requests w ready; brak CLI/embedding smoke/warmup
+wewnątrz server process przed FIRST valid POST.
+Correct UTF-8 first POST -> 200, answered, validated citations.
+Real BGE/Qwen case również PASS na owned DB.
 
-15. Complete main DatabaseSnapshot BEFORE/AFTER
-PASS: complete DatabaseSnapshot AFTER == BEFORE dokładnie.
-AFTER ma te same revision, counts i wszystkie trzy SHA256 podane poniżej.
-Końcowy helper wykonał świeży strict doctor i assert całego snapshotu
-po zakończeniu wszystkich testów. Nie porównywano samych counts.
+8. Real Uvicorn second-request proof
+Second valid POST -> 200 przez te same BGE/Qwen clients.
+Connection: close w testach; brak wymogu keepalive.
+Windows Invoke-RestMethod -DisableKeepAlive również PASS:
+- string body + charset=utf-8;
+- UTF-8 byte[] body + application/json.
+Legacy invalid non-UTF-8 body -> safe 400, asks=0, nie 500.
+Nie dodano sleep/retry masking.
+
+9. Canonical synthetic answer/citation
+Owned fixture: synthetic green dragon lives on Venus, canonical UUID(int=42).
+Real shared BGE bge-m3:567m-fp16, native 1024, Qwen qwen3.5:9b.
+FIRST/SECOND HTTP answers: answered, Venus/Wenus, exact fixture UUID citation.
+Direct production server runtime: sufficient, Venus/Wenus, exact UUID.
+Concatenation/grounding/citation core nie został zmieniony.
+Nie wypisano prompt/context/raw model response do raportu.
+
+10. Disconnect cancellation proof
+Real raw TCP client:
+arm controlled slow RAG -> POST -> deterministic model-blocked event ->
+close TCP -> cancellation event -> AI callers/tasks=0, checkout=0.
+Następny real HTTP POST -> 200.
+Cancelled request nie zwiększa answered count; brak stale successful answer.
+BGE/Qwen clients pozostają reused i zamykane raz.
+Existing HTTP raw ASGI, WS disconnect/drain, shutdown tests także PASS.
+
+11. Provider reuse counters
+Fresh subprocess ready: BGE clients=1, Qwen clients=1, Qwen requests=0.
+FIRST/SECOND requests: nadal clients=1/1; answered counts=1, potem 2.
+Worker shutdown: BGE closed=1, Qwen closed=1, AI callers/tasks=0.
+Direct real worker: Qwen clients=1, requests=1, closed=1, BGE closed=1.
+Real server reuse regression z 6C.1:
+Whisper=1, engine=1,
+BGE clients=1, requests=9, closed=1,
+Qwen clients=1, requests=6, closed=1.
+Nie tworzono provider per request; startup fixture indexing i retrieval
+pozostają na jednym shared BGE.
+
+12. AI lane proof
+Existing deterministic server lane test PASS:
+Voice Note STT, Text RAG, Voice Question STT/RAG oraz indexing
+max_active_AI_operation=1.
+History reads działają, gdy AI lane zajęty.
+Zero własnej DB session podczas oczekiwania na lane/model work.
+Real Qwen client instrumentation obserwuje engine.pool.checkedout()==0.
+Cancellation kończy się z checkout=0.
+
+13. /ws/assistant regression
+PASS: command/order/limits validation, event ordering/sequence,
+answered/insufficient, empty speech, failure/disconnect/cancellation, WAV cleanup,
+zero question persistence.
+Owned real BGE/Qwen voice transport i shared Whisper proofs PASS.
+assistant_ws.py/protocol nie zmieniono przez correction.
+
+14. /ws/memory regression
+PASS: legacy recording.start/stop, binary PCM, retry/save/index,
+stable ingestion identity, provider reuse, concurrency.
+memory_ws.py, memory_ws_protocol.py i canonical events bez zmian.
+Android existing strict consumers również PASS.
+
+15. History/detail regression
+PASS: active/archived, bounded limit, keyset cursor pair, equal timestamp UUID
+ordering, preview bound, full detail, missing 404, privacy/read-only.
+Nie zmieniano history queries ani read models w correction.
+
+16. Main complete snapshot BEFORE / AFTER
 BEFORE:
-revision: ["kulai_memory_0004"]
-memories count=8
-sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
-vectors count=8
-sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
-tombstones count=1
-sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Nie wykonano main ASK/STT/TTS/lifecycle/delete ani nie wysłano main content
-do planner/TTS. Wszystkie model fixtures są syntetyczne/owned.
-Raport nie zawiera real Memory content, promptów, audio ani DB credentials.
+revision=["kulai_memory_0004"]
+memories.count=8
+memories.sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
+vectors.count=8
+vectors.sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
+tombstones.count=1
+tombstones.sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
 
-16. Frozen golden retrieval
-Dataset SHA256:
-73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
-16 documents / 16 PL+EN queries. Recall@1/@3/@5 oraz MRR@5 = 1.0,
-overall i osobno PL/EN; fingerprints unchanged.
-Frozen dataset/hash/thresholds bez zmian (0.60 / 0.80 / 0.90).
-BGE clients=1, requests=32, closed=1, native1024=32, dimensions overrides=0.
-Nie dodano score cutoff/reranker i nie zmieniono retrieval/grounding/citations.
+AFTER:
+revision=["kulai_memory_0004"]
+memories.count=8
+memories.sha256=57ee8b3d52c4066656e4fed79b647f23ac1bce40bb8f28df749e181f88a6ee1e
+vectors.count=8
+vectors.sha256=2f26e4e44c8b2a04141aa864eab0093a802ac3845d5c27cdc791b702c87f4d1f
+tombstones.count=1
+tombstones.sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
 
-17. pip check
+Complete BEFORE == AFTER EXACTLY (assert, nie tylko counts).
+Zero correction automated private-main LLM/STT queries.
+Main smoke ograniczony do /health oraz malformed-UTF8 validation check,
+który jest odrzucany PRZED RAG: live endpoint -> 400.
+Nie pobierano real history/detail do testów/raportu.
+No main reindex/lifecycle/vector writes.
+Full owned snapshot after startup, before FIRST HTTP ask ==
+snapshot after SECOND ask w real network test.
+
+17. Test totals
+Focused post-fix HTTP/runtime/disconnect/Uvicorn + real PG/BGE/Qwen:
+64 PASS, zero failures (56.45 s).
+Nowych cases: 8 real-Uvicorn/process/client integrations + 4 unit/privacy cases.
+Backend full default: 672 PASS, 123 SKIP, zero failures (75.72 s).
+Final root full tests + backend/tests z PG/Ollama/LLM/Whisper/TTS opt-ins=1:
+1055 PASS, 2 SKIP, zero failures/errors (614.39 s).
+Skips: optional external KULAI_WHISPER_AUDIO unset i brak symlink privilege.
+Generated controlled real Whisper tests PASS, nie użyto user audio.
+1 existing Starlette/AnyIO deprecation warning.
+
+Pre-fix red proof nie został przemianowany na PASS:
+legacy PowerShell reproduced 500; A/B original import reproduced exact 500 body.
+Po diagnozie invalid wire encoding ma zgodny z contractem expected 400.
+Correct UTF-8 normal-client cases są 200 jako first request.
+Private main query nie powtarzano automatycznie; jego oryginalnych wire bytes
+nie przechwytywano. Potwierdzona przyczyna odnosi się do odtworzonego non-UTF-8
+PowerShell failure. Jeśli oryginalny request był już poprawnym UTF-8,
+safe stage/code logs pozwalają rozróżnić odrębny błąd.
+
+18. Android regression
+gradlew.bat testDebugUnitTest assembleDebug:
+BUILD SUCCESSFUL in 14 s, 45 tasks up-to-date.
+Existing 22 unit tests, zero failures/errors/skips.
+No Android/shared contract/source/release security changes.
+
+19. Golden
+Hash=73489b2a359a444074a7aa191337de00d7dcdeea86c741dd59d6e5c7c285bdf7
+16 docs / 16 queries, dataset/hash/thresholds bez zmian.
+Overall i PL/EN: Recall@1=1.0, Recall@3=1.0, Recall@5=1.0, MRR@5=1.0.
+Thresholds 0.60/0.80/0.90 bez zmian.
+Fingerprints unchanged.
+BGE clients=1, requests=32, native_1024=32, closed=1, overrides=0.
+
+20. pip check
 PASS: No broken requirements found.
 
-18. git diff --check
-PASS; sprawdzono także po końcowym zapisie tego raportu.
+21. git diff --check
+PASS, także po zapisaniu raportu.
+Nie stage'owano zmian.
 
-19. db_doctor
-PASS na wejściu i po testach, main current/head = kulai_memory_0004.
-Brak migration/schema changes; local/current/head pozostają 0004.
+22. db_doctor
+Strict PASS BEFORE i AFTER; head/current kulai_memory_0004.
+No migration/schema/data change.
 
-20. Vendor
-Clean; pin 720d0f26c75ba4af24d395f98f15a37e4bd5067e bez zmian.
-Nie modyfikowano vendor ani reusable provider contracts.
+23. Vendor
+CLEAN, pin=720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+No vendor changes.
 
-21. Exact changed files względem HEAD (17)
-README.md
-backend/README.md
-backend/src/kulai_memory/application/speech.py
-backend/src/kulai_memory/desktop/app.py
-backend/src/kulai_memory/local_tts.py
-backend/src/kulai_memory/speech_runtime.py
-backend/tests/integration/test_speech_planner.py
-backend/tests/integration/test_desktop_polish_english_speech.py (new)
-backend/tests/integration/test_tts_smoke_integration.py (new)
-backend/tests/polish_english_fakes.py (new)
-backend/tests/test_desktop_auto_speech_ui.py (new)
-backend/tests/test_desktop_speech_ui.py
-backend/tests/test_speech_runtime.py
-backend/tests/test_windows_speech_provider.py
-scripts/tts_smoke.py (new)
-tests/test_tts_smoke.py (new)
+24. Exact correction changed files (7)
+backend/src/kulai_memory/api/memory_http.py
+backend/src/kulai_memory/api/cancellation.py
+backend/tests/test_server_transport.py
+backend/tests/integration/test_assistant_uvicorn.py (NEW)
+backend/tests/uvicorn_assistant_worker.py (NEW, test-only control endpoints)
+docs/LOCAL_ASSISTANT_TRANSPORT.md
 wynik.txt
 
-22. Known limitations
-Production speech obsługuje wyłącznie Polish + English.
-Exact-text validation nie dowodzi klasyfikacji każdego możliwego przyszłego
-tekstu; real reviewed corpus i returned voice checks są dodatkową kontrolą.
-Nazwy/technical tokens mogą pozostać z językiem otaczającej frazy.
-Fizyczny odsłuch Paulina/Zira i konkretne urządzenie użytkownika sprawdzamy
-manualnie po review; automated playback boundary jest kontrolowana.
-Nie ma Android/WebSocket TTS, multi-turn, partial STT/TTS ani reviewed
-score cutoff/reranker. Brak permanentnego audio/cache/speech-plan history.
-Future proposal: TASK 6A.5 — dynamic multilingual installed-voice routing
-(DE/FR/ES/IT/etc.); osobny design/zakres, nic z niego tu nie implementowano.
+Pełny working tree nadal zawiera wcześniejszy niecommitowany 6C.1.
+Łączna lista (27 plików) do review:
+README.md
+backend/README.md
+backend/src/kulai_memory/app_factory.py
+backend/src/kulai_memory/api/assistant_contract.py
+backend/src/kulai_memory/api/assistant_ws.py
+backend/src/kulai_memory/api/assistant_ws_protocol.py
+backend/src/kulai_memory/api/cancellation.py
+backend/src/kulai_memory/api/memory_http.py
+backend/src/kulai_memory/api/server_access.py
+backend/src/kulai_memory/application/history.py
+backend/src/kulai_memory/application/ports.py
+backend/src/kulai_memory/history_persistence.py
+backend/src/kulai_memory/persistence/repository.py
+backend/src/kulai_memory/server/runtime.py
+backend/tests/assistant_transport_fakes.py
+backend/tests/integration/test_assistant_uvicorn.py
+backend/tests/integration/test_automatic_indexing_postgres.py
+backend/tests/integration/test_memory_websocket.py
+backend/tests/integration/test_server_assistant_postgres.py
+backend/tests/test_assistant_disconnect.py
+backend/tests/test_memory_ws_concurrency.py
+backend/tests/test_server_assistant_runtime.py
+backend/tests/test_server_runtime.py
+backend/tests/test_server_transport.py
+backend/tests/uvicorn_assistant_worker.py
+docs/LOCAL_ASSISTANT_TRANSPORT.md
+wynik.txt
 
-23. Decision / proposed commit
-OK DO COMMITA — technical quality gate PASS.
-Physical manual playback/user acceptance pozostają do potwierdzenia po review.
-Proposed commit:
-fix: correct Desktop Polish/English switching and auto-speak for all answers
-Nie commitowano. Nie pushowano. Manual user acceptance pozostaje po review.
+Ignored diagnostics/snapshots/JUnit/probes w .venv/task6c1_http_correction
+nie są częścią zmian do commita.
 
-MANUAL SMOKE — uruchomić po review, z repo i obecną Desktop TTS konfiguracją
+25. Proposed commit message
+fix: handle assistant body errors safely and verify real Uvicorn requests
+(Dla całego niecommitowanego 6C.1: feat: add verified local history and assistant transport)
 
-A. PL -> EN -> PL:
-.\.venv\Scripts\python.exe scripts\tts_smoke.py `
-  --text "To jest część po polsku. This is the English part. I znowu po polsku."
-Expected: Microsoft Paulina Desktop -> Microsoft Zira Desktop -> Paulina.
+Manual UTF-8 invocation (po review; nie wykonano private-main RAG automatycznie):
+$body = @{ query = "<wstaw swoje pytanie>"; top_k = 5 } | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/assistant/ask" -Method Post -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($body))
 
-B. EN -> PL -> EN:
-.\.venv\Scripts\python.exe scripts\tts_smoke.py `
-  --text "This starts in English. Potem przechodzimy na polski. English again."
-Expected: Microsoft Zira Desktop -> Microsoft Paulina Desktop -> Zira.
-Dodać --no-play, aby oddzielić planner/synthesis od urządzenia playback.
+Nie wymaga special keepalive, drugiego requestu ani wcześniejszego CLI warmup.
+Unsupported/malformed encoding nie jest reinterpretowany ani naprawiany fuzzy.
+Server nadal local-only, bez auth/LAN/WSS; no Desktop/TTS/Android changes.
 
-C. Desktop Text ASK: Speak answers automatically ON -> answer/sources
-pojawiają się, następnie dokładnie jedno automatyczne playback.
-
-D. Desktop ASK BY VOICE: checkbox ON -> answer/sources -> dokładnie jedno
-automatyczne playback; brak drugiego voice-specific triggera.
-
-Dodatkowo: checkbox OFF dla obu wejść -> brak auto speech, manual SPEAK działa.
-STOP AUDIO -> dźwięk ustaje, text/sources pozostają, można SPEAK ponownie.
-New Text ASK / Voice ASK podczas Speaking -> old audio drain, potem nowa
-operacja, brak stale Speech finished / równoległego playback.
-Close podczas speech -> cleanup i shutdown; nie wykonywano automated main
-query ani odsłuchu prywatnych odpowiedzi.
+26. Decision
+OK DO COMMITA
+Odtworzone błędne 500 z body parsing zostało poprawione na safe client 400.
+Poprawny UTF-8 działa FIRST/SECOND przez real scripts/dev.py/Uvicorn i real BGE/Qwen.
+Canonical answer/citation, disconnect cancellation, reuse/lane i read-only invariants PASS.
+Main unchanged; full regressions/Android/golden/pip/doctor/vendor PASS.
+Nie wykonano commit ani push.

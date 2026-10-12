@@ -223,9 +223,9 @@ trigger indexing writes or refresh Recent Memory.
 
 The local `scripts/ask_memory.py` CLI remains available for diagnostics. There
 is no reviewed semantic score cutoff or reranker yet. Desktop has no
-conversational multi-turn or partial STT; Android has no RAG UI, and WebSocket
-has no voice RAG flow. The existing voice-note save/index/Recent Memory flow is
-unchanged.
+conversational multi-turn or partial STT; Android has no RAG UI yet. The local
+server provides text and voice RAG transport described below. The existing
+voice-note save/index/Recent Memory flow is unchanged.
 
 Desktop supports optional **local Polish / English speech** on Windows using installed
 Microsoft **Desktop** voices through `System.Speech`, with the existing
@@ -398,6 +398,29 @@ reuses the transcript, ingestion ID, and session ID without running Whisper
 again. There is no partial STT. This adapter remains localhost-only and has no
 authentication until LAN/WSS pairing is added in TASK 4D.
 
+## Local server history and Memory assistant
+
+The same local server now provides bounded read-only `GET /api/memories` history,
+`GET /api/memories/{id}` canonical detail, `POST /api/assistant/ask` text RAG and
+one voice question per `/ws/assistant` connection. History supports Active/Archived
+and descending timestamp/UUID keyset cursors; detail exposes full content without
+private ingestion/session/vector metadata. Assistant responses contain grounded
+answer/status and validated citations, with the canonical insufficient-context
+answer when evidence is missing. Questions and answers are never saved as Memory.
+
+All transports reuse one server Whisper, one shared BGE (indexing + retrieval),
+one Qwen and one DB pool. One AI lane serializes heavy inference; DB sessions
+close before model work, and history can run while inference is busy. Voice
+questions use private temporary WAVs that are cleaned after safe STT drain.
+Disconnects cancel RAG promptly. Startup runs strict doctor and bounded indexing
+reconciliation without Qwen generation; owned providers close once on shutdown.
+
+See [the transport contract](docs/LOCAL_ASSISTANT_TRANSPORT.md) for complete
+HTTP/WS schemas, cursor rules, events, audio limits and safe errors. `/ws/memory`
+v1 and current Android Voice Note are unchanged. The new transport has no TTS,
+authentication, LAN/WSS or Android assistant UI yet; future 6C.2 will use the
+same localhost URLs through ADB reverse. Desktop continues to run in process.
+
 ## Android voice-memory alpha
 
 The native Android alpha lives in `mobile/android`. It uses Kotlin, Jetpack
@@ -546,7 +569,8 @@ The LLM has an explicit 180-second generation/HTTP timeout and the CLI a
 300-second overall deadline. Qwen uses non-streaming schema output with
 thinking disabled; no Whisper is loaded by the CLI. Desktop uses this same
 canonical RAG through its text ASK and ASK BY VOICE controls and borrows its
-shared BGE provider. WebSocket and Android RAG UX are not integrated.
+shared BGE provider. The local server also exposes canonical text/voice RAG;
+Android RAG UX is not integrated yet.
 
 The real RAG integration uses **only owned temporary databases and synthetic
 Memories**, never real main content:
