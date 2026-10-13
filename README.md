@@ -3,10 +3,12 @@
 KulAI Studio project `kulai_memory`.
 
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
-The ASGI app defaults to `SECURE` and denies private operations without a configured
-credential reader. `scripts/dev.py` explicitly preserves loopback `LOCAL_DEV` and
-ADB reverse unless a security mode is already configured. Pairing, durable security
-storage and TLS/LAN are future work. See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#authentication-foundation-task-4d1).
+The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader
+only after strict schema verification. TASK 4D.2A adds an independent security
+migration graph; canonical head stays `kulai_memory_0004`. `scripts/dev.py` preserves
+loopback `LOCAL_DEV` and ADB reverse. Main security migration requires explicit
+review and verified backup/restore; pairing and TLS/LAN remain future work.
+See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).
 
 ## Reproducibility
 

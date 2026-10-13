@@ -15,6 +15,7 @@ from backend.tests.test_memory_ws import _start_message, _stop_message
 from backend.tests.test_server_transport import start, stop
 from kulai_memory.app_factory import create_app
 from kulai_memory.security import Action, Authenticator, SecurityConfig, SecurityMode
+from kulai_memory.security.storage import DenyAllSecurityReader
 
 HTTP = [("GET", "/api/memories"), ("GET", "/api/memories/" + str(UUID(int=1))),
         ("POST", "/api/assistant/ask"), ("POST", "/api/assistant/speech-plan")]
@@ -53,7 +54,8 @@ async def setup(case="valid", *, mode=SecurityMode.SECURE, reader=None):
     elif case == "unconfigured":
         store = None
     auth = Authenticator(reader or store, clock=lambda: clock[0]) if reader or store else None
-    app = create_app(voice_runtime_factory=lambda: runtime, security_config=SecurityConfig(mode=mode), authenticator=auth)
+    app = create_app(voice_runtime_factory=lambda: runtime, security_config=SecurityConfig(mode=mode), authenticator=auth,
+                     security_reader=DenyAllSecurityReader() if case == "unconfigured" else None)
     return app, runtime, headers, manager, credential
 
 

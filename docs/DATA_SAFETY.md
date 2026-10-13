@@ -17,3 +17,13 @@
 10. Diagnostics and integration tests must not leave fixture records behind.
 11. PostgreSQL backups are restored only to a compatible major version. The
     canonical development and restore-test major is PostgreSQL 18.
+12. Optional persistent security tables are durable state, including trust,
+    digests, expiry and revocation. Complete backup/restore fingerprints include
+    them when installed; absence in historical backups remains explicit `None`.
+13. Security uses its own Alembic version table/graph. It never upgrades canonical
+    Memory implicitly. An absent security schema permits LOCAL_DEV compatibility;
+    SECURE requires both schemas to pass strict validation before AI startup.
+14. Installing security on main requires explicit confirmation, a retained full
+    backup, actual restore verification, immediate archive/source revalidation,
+    a transactional additive upgrade and strict post-upgrade doctor. Startup
+    performs no DDL, and a failed upgrade retains its backup.

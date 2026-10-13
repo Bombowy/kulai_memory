@@ -340,3 +340,93 @@ and controlled providers/storage. It performs no main DB writes, migrations or
 real model calls. Existing opt-in PostgreSQL/model suites remain separate.
 The pre-accept denial follows the [ASGI WebSocket specification](https://asgi.readthedocs.io/en/latest/specs/www.html#close-send-event);
 token generation follows [Python secrets](https://docs.python.org/3/library/secrets.html).
+
+## Persistent PostgreSQL Security Store (TASK 4D.2A)
+
+The default SECURE composition now uses `PostgresSecurityRuntime` and
+`PostgresSecurityStore`; explicit reader/authenticator injection remains supported.
+The core interfaces/models are unchanged and do not import persistence, Memory or
+RAG. The lifespan validates canonical and security schemas before starting any AI
+runtime. A missing/incompatible schema keeps public liveness and denies private
+operations. There is no DDL, token bootstrap or dev fallback during startup.
+
+One owned security pool serves short transactions (`echo=False`, hidden parameters,
+4-second statement/3-second lock timeouts). Lookup uses a READ ONLY transaction and
+one coherent token/device JOIN. Sessions close before endpoint/audio/AI work.
+Voice resources close before the security pool; disposal drains on cancellation.
+Borrowed readers are not closed by the app. No application authorization cache is
+introduced; prepared SQL statement caching does not cache credential state.
+
+The independent graph is `backend/security_alembic.ini` with revision
+`kulai_security_0001` and `public.kulai_security_version`. The canonical graph/head
+stays `kulai_memory_0004`. Devices/tokens live in `public.kulai_security_devices`
+and `public.kulai_security_tokens`, with UUID keys, owner FK, unique SHA-256 digest,
+aware timestamps, validated lifetime/status/action array and nullable project UUID.
+No plaintext token or metadata field is stored. Schema validation checks exact
+columns, constraints, index, revision, and refuses partial schemas, extra security
+tables, user triggers and row security. Project-scoped tokens remain refused by
+the existing global Memory routes; no multi-project row isolation is claimed.
+
+All writes lock device before token. Concurrent rotations of one old token produce
+one successor. Rotate vs revoke is serialized: revoke winning first blocks rotate;
+rotate winning first may create a successor before revoke of the old token.
+The old token is revoked in both outcomes. Revoke an entire device to invalidate
+all its credentials, including a successor that linearized first. Issue vs device
+revoke is also serialized; even an issue that commits first becomes unusable when
+device revoke commits. Revoked devices cannot be re-trusted under the v1 policy.
+These are PostgreSQL row locks, including across independent processes, following
+the [PostgreSQL locking contract](https://www.postgresql.org/docs/18/explicit-locking.html).
+
+Mutations return only after commit. Failures/cancellation roll back and close the
+session; driver/commit/rollback/dispose exceptions have safe authored errors.
+No automatic write retry is used. A lost connection during actual COMMIT can leave
+the caller uncertain about completion; inspect durable state after reconnect.
+The implementation does not claim to undo a commit already acknowledged by PG.
+
+Complete database snapshots now carry optional security revision and aggregate
+device/token hashes/counts, covering every persisted field without printing rows
+or raw digests. Old snapshot constructors default security to `None`; historical
+0002/0003/0004 dumps without these tables still verify through existing guarded
+backup/restore. An empty installed schema is distinct from absence. Any security
+mutation invalidates an earlier verified-source token. Existing backup/deletion
+safety checks remain mandatory; unknown/broken security schema fails strict doctor.
+
+Read-only checks (safe to execute on current main):
+
+```text
+.venv\Scripts\python.exe scripts\db_doctor.py
+.venv\Scripts\python.exe scripts\security_schema.py heads
+.venv\Scripts\python.exe scripts\security_schema.py check
+```
+
+`check` requires the security schema and returns UNAVAILABLE before installation.
+The current main database has not been upgraded. Installation is a separate,
+reviewed administrative action after stopping writers and reviewing this change:
+
+```text
+.venv\Scripts\python.exe scripts\security_schema.py upgrade --confirm-main-security-schema --backup-output C:\path-outside-repo\new-security-before.dump
+.venv\Scripts\python.exe scripts\db_doctor.py
+.venv\Scripts\python.exe scripts\security_schema.py check
+```
+
+The upgrade creates a retained full dump, verifies an actual restore into an owned
+temporary DB, revalidates source/archive immediately before DDL, serializes schema
+installation with an advisory lock, compares canonical fingerprints before/after
+within the transaction and requires post-upgrade strict doctor. It changes no
+existing Memory/vector/tombstone records. Failure rolls back transactional DDL and
+retains the archive. Direct Alembic execution without the guarded connection is
+refused; destructive security downgrade is not implemented. Restart the backend
+after an approved installation. Pairing/issuance UI and public token endpoints are
+outside 4D.2A; credential management remains a trusted host API.
+
+The measured synthetic loopback audio test sent 128 binary frames: 131 lookups
+(handshake + start + frames + stop), 262 SQL statements including READ ONLY setup,
+about 204–294 ms total across validation runs, with zero pool checkouts on completion
+and during AI callbacks. Counts use SQLAlchemy statement events for adapter SQL;
+driver BEGIN/COMMIT and pool pre-ping housekeeping are excluded from that count,
+but their time is included in the end-to-end measurement.
+Android's current normal 3,200-sample frame is 200 ms at 16 kHz, about 5 frames/s
+and 10 authentication SQL statements/s. This supports retaining fresh per-frame
+checks in the current local phase. No cache optimization is necessary for this
+measurement; larger deployments need their own measurements. Idle sockets and
+already admitted operations retain the revocation semantics documented in 4D.1.

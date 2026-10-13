@@ -274,3 +274,17 @@ cleanup; no completed event is sent after disconnect.
 See [local transport contract](../docs/LOCAL_ASSISTANT_TRANSPORT.md) for schemas,
 cursor semantics, audio bounds, errors and future Android URLs. This phase is
 loopback-only, with explicit `LOCAL_DEV` and `SECURE` modes, without LAN/WSS/pairing.
+
+TASK 4D.2A provides `PostgresSecurityStore` and an independent
+`kulai_security_0001` graph in `security_migrations`. Canonical head remains
+`kulai_memory_0004`. SECURE verifies both schemas and owns one security pool
+alongside the existing voice runtime; authentication transactions close before
+audio/model operations. Missing/incompatible storage denies access without
+starting AI. LOCAL_DEV does not open the security pool or run migrations.
+
+`scripts/security_schema.py heads` and `check` are read-only. Main installation
+is an explicit reviewed operation with `upgrade --confirm-main-security-schema
+--backup-output PATH`, requiring a new archive outside the repository and actual
+restore verification before DDL. No migration has been applied automatically.
+Complete backup/restore now includes security fingerprints; old backups remain
+supported. See [the security procedure](../docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).

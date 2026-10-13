@@ -26,6 +26,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from .settings import get_settings
+from .security_persistence.integrity import SecuritySnapshot, inspect_security_schema, security_snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -221,6 +222,7 @@ class DatabaseSnapshot:
     memories: MemoryFingerprint
     vectors: VectorFingerprint
     tombstones: TombstoneFingerprint | None
+    security: SecuritySnapshot | None = None  # Legacy dumps/snapshots have no security schema.
 
     def __post_init__(self) -> None:
         if self.tombstones is None and self.revision != ("kulai_memory_0002",):
@@ -565,6 +567,7 @@ async def database_snapshot_url(
                     memories=await memory_fingerprint(connection),
                     vectors=await vector_fingerprint(connection),
                     tombstones=tombstones,
+                    security=await security_snapshot(connection),
                 )
             finally:
                 await connection.rollback()
@@ -694,7 +697,7 @@ async def _tombstone_schema_checks(connection: AsyncConnection) -> tuple[CheckRe
     )
 
 
-async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
+async def run_database_doctor(*, async_url: str | None = None, require_security: bool = False) -> DoctorReport:
     """Inspect required database invariants using read-only SQL only."""
 
     checks: list[CheckResult] = []
@@ -927,6 +930,11 @@ async def run_database_doctor(*, async_url: str | None = None) -> DoctorReport:
             checks.append(
                 CheckResult(name="database.read_query", ok=query_value == 1)
             )
+            security = await inspect_security_schema(connection)
+            checks.append(CheckResult(name="security.schema", ok=security.valid and (security.present or not require_security),
+                value={"present": security.present, "valid": security.valid},
+                message=None if security.valid and (security.present or not require_security)
+                else "The security schema is absent or incompatible."))
             await connection.rollback()
     except Exception as exc:
         if not any(check.name == "database.connection" for check in checks):
