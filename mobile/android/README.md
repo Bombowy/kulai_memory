@@ -23,6 +23,10 @@ not provide restart recovery.
   Questions have no ingestion UUID, retry messages, disk cache or Memory writes.
   Connection loss requires asking again. **CANCEL QUESTION** cancels a pending
   request/capture; a new text ASK cancels the previous text request.
+  **SPEAK** and **STOP AUDIO** provide local Polish / English speech with
+  **Speak answers automatically** enabled by default for both text and voice
+  answers, including insufficient context. A common post-render trigger consumes
+  each answer once; returning to ASK does not replay it automatically.
 - **MEMORY** shows **ACTIVE** or **ARCHIVED** history, 20 items per page, with
   **REFRESH**, **LOAD MORE**, full detail and **BACK**. Pagination uses exactly
   `before_created_at` + `before_id`, ordered by descending timestamp then UUID;
@@ -44,6 +48,50 @@ it after AudioRecord drains. Note and Voice ASK cannot capture simultaneously,
 including rapid double taps and cancellation. Both voice starts require
 microphone permission; text ASK, history and detail work without it. A button
 in either voice area requests permission. No question audio is retained.
+
+## Local Polish / English speech
+
+One Android `TextToSpeech` instance belongs to the ViewModel and uses Application
+Context. Startup audits installed voices without speaking or downloading data.
+Selection requires exact offline `pl-PL` and `en-US`, rejects network-required
+or not-installed voices, sorts by voice ID and picks the first eligible voice
+for each locale. The selected offline PL/EN IDs appear under the speech controls.
+If either locale is missing, **TTS unavailable** appears; NOTE/ASK/MEMORY still work.
+Install/configure offline voice data manually in Android TTS settings and restart
+the app to repeat the audit. The app starts no download or cloud TTS request.
+Android 11+ TTS service visibility uses a manifest queries intent, as required by
+the [TextToSpeech API](https://developer.android.com/reference/android/speech/tts/TextToSpeech).
+
+The client sends only the final answer to `POST /api/assistant/speech-plan`.
+The server reuses canonical `application.speech.plan_speech`, its long-lived Qwen
+and the same AI lane; it opens no DB transaction and invokes no BGE/Whisper.
+The canonical insufficient answer uses a direct PL plan with no Qwen call.
+Both ends enforce 1..64 nonempty PL/EN segments, answer <=6,000 characters and
+exact concatenation, preserving every character, space and punctuation. There
+is no client language heuristic, translation, text repair or whole-answer PL
+fallback. Android uses a conservative UTF-16 character bound.
+
+Before every utterance, TTS sets the selected voice and verifies its active ID.
+Segments play sequentially, awaiting UtteranceProgressListener completion. Text
+longer than Android's native input bound is split into exact chunks in the same
+language, preserving surrogate pairs. Unique generation/segment/chunk IDs reject
+stale callbacks. Initial audit is bounded to 10 seconds, an utterance to 120
+seconds, and the speech operation to 600 seconds; the existing HTTP timeout also
+bounds planning. No app audio file/cache or synthesizeToFile is used.
+
+**STOP AUDIO** cancels planning/utterances, flushes TTS and retains answer/sources.
+**SPEAK** can repeat a valid answer with auto speech off or after completion.
+New Text ASK, Voice ASK or Voice Note stops and drains previous speech before
+starting. Playback continues across tabs; STOP AUDIO is available on returning
+to ASK. Speech does not start into an active microphone capture or replacement
+operation. TTS requires no microphone permission. A planning/TTS failure displays
+**Could not speak answer.** without clearing the grounded answer or citations.
+ViewModel shutdown cancels speech and shuts down the native TTS instance once.
+
+Physical device review should verify selected PL/EN voice IDs and actual
+pronunciation, including PL→EN→PL and EN→PL→EN. JVM tests use a fake platform
+boundary to exercise production voice selection, verification, ordering and
+callback ownership; they do not assess acoustic quality.
 
 Debug BuildConfig URLs:
 
@@ -86,7 +134,7 @@ Manual smoke after review:
 5. Deny microphone permission: both voice starts disabled; text/history still work.
 6. Switch ASK → MEMORY → ASK: the previous answer remains visible.
 
-There is no Android TTS, edit/archive/restore/delete, persisted assistant history,
+There is no arbitrary-language TTS, edit/archive/restore/delete, persisted assistant history,
 multi-turn conversation, partial STT, LAN/WSS/auth or public-storage audio.
 Physical microphone/permission/device behavior requires the manual smoke;
 automated tests use synthetic data and fake capture plus real OkHttp loopback

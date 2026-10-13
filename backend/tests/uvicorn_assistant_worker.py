@@ -100,6 +100,11 @@ def build_runtime(state):
         answered(h)
         runtime = h.runtime()
         h.rag.before = state.before_generation
+        async def controlled_speech(*, answer):
+            from kulai_memory.application.speech import SpeechPlan, SpeechSegment, SpeechLanguage
+            await state.before_generation()
+            return SpeechPlan(answer, (SpeechSegment(answer, SpeechLanguage.PL),))
+        h.rag.plan_speech = controlled_speech
     state.runtime = runtime
     original = runtime.ask_memory
     async def ask_memory(**kwargs):

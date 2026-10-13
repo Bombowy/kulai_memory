@@ -36,6 +36,10 @@ internal class FakeMemoryApi : MemoryApi {
     val asks = mutableListOf<String>()
     val lists = mutableListOf<Triple<Boolean, Int, MemoryHistoryCursor?>>()
     val details = mutableListOf<UUID>()
+    val speechRequests = mutableListOf<String>()
+    var planner: suspend (String) -> SpeechPlan = {
+        SpeechPlan(listOf(SpeechSegment(it, if (it == INSUFFICIENT.answer) SpeechLanguage.PL else SpeechLanguage.EN)))
+    }
     var answer: suspend (String) -> AssistantAnswer = { ANSWER }
     var list: suspend (Boolean, MemoryHistoryCursor?) -> MemoryHistoryPage = { archived, _ ->
         MemoryHistoryPage(listOf(historyItem(archived = archived)), null) }
@@ -45,6 +49,7 @@ internal class FakeMemoryApi : MemoryApi {
         lists += Triple(archived, limit, cursor); return list(archived, cursor)
     }
     override suspend fun getMemory(id: UUID): MemoryDetail { details += id; return detail(id) }
+    override suspend fun planSpeech(answer: String): SpeechPlan { speechRequests += answer; return planner(answer) }
 }
 internal class QuestionRecorder : VoiceAudioRecorder {
     var requests = 0

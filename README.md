@@ -297,8 +297,10 @@ by its synthesis timeout; shutdown closes TTS once and then existing providers.
 Completed playback, STOP, failure, cancellation, replacement and shutdown remove
 owned audio. There is no permanent audio cache or TTS history.
 
-Speech is Desktop-only. Android/WebSocket TTS, multi-turn conversation, streaming
-partial STT/TTS and a reviewed score cutoff/reranker are not implemented.
+Desktop speech uses System.Speech; Android also supports local Polish / English
+speech using installed offline voices and canonical server speech planning.
+WebSocket/audio TTS transport, multi-turn conversation, streaming partial STT/TTS
+and a reviewed score cutoff/reranker are not implemented.
 `KULAI_RUN_TTS_INTEGRATION=1` enables real installed-voice tests with synthetic
 PL/EN/mixed text. Automated tests validate PCM/WAV and cleanup through a fake
 audio-device boundary; listening quality and the physical output device are
@@ -420,6 +422,9 @@ HTTP/WS schemas, cursor rules, events, audio limits and safe errors. `/ws/memory
 v1 and current Android Voice Note are unchanged. The new transport has no TTS,
 authentication or LAN/WSS. Android uses these localhost APIs through ADB reverse
 for history, detail and text/voice ASK. Desktop continues to run in process.
+`POST /api/assistant/speech-plan` returns an exact PL/EN segment plan for a final
+answer using the same server Qwen and AI lane, with no DB work or BGE/Whisper.
+It returns no synthesized audio; playback belongs to the local client.
 
 ## Android NOTE / ASK / MEMORY alpha
 
@@ -437,6 +442,16 @@ has no sources; silence skips RAG. Questions/answers are never saved as Memory,
 and voice questions have no retry cache or ingestion UUID. A shared capture gate
 prevents simultaneous Note/Question capture and waits for native capture drain.
 Text ASK, history and detail remain usable without microphone permission.
+
+Android ASK offers **SPEAK**, **STOP AUDIO** and **Speak answers automatically**
+(default on for Text ASK and ASK BY VOICE). It requests canonical speech plans
+using only the final answer and validates exact text and PL/EN labels. One local
+Android TextToSpeech instance selects deterministic installed offline `pl-PL`
+and `en-US` voices, verifies voice ID before each utterance and awaits ordered
+playback. Missing either voice degrades to **TTS unavailable** without affecting
+NOTE/ASK/MEMORY. Speech failure preserves the answer/citations. New questions
+or Note capture stop previous speech; playback can continue across tab switches.
+No synthesized audio is stored, and TTS works without microphone permission.
 
 MEMORY provides Active/Archived history, timestamp/UUID keyset pagination,
 **LOAD MORE**, **REFRESH**, full canonical detail and **BACK**. Successful Note
@@ -481,7 +496,7 @@ to replay private cached PCM with the same ingestion ID. A live recoverable
 database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
 
 This alpha does not retain retry state across process death. History/assistant
-state is in-memory. There is no Android TTS, lifecycle mutation UI, LAN transport,
+state is in-memory. There is no arbitrary-language TTS, lifecycle mutation UI, LAN transport,
 WSS, authentication, multi-turn, partial STT, or public-storage audio.
 LAN/WSS and authentication/pairing belong to TASK 4D.
 

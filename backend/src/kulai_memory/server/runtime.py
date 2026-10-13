@@ -51,6 +51,7 @@ from kulai_memory.automatic_indexing import (
 from kulai_memory.embedding_provider import create_embedding_provider
 from kulai_memory.rag_runtime import MemoryRagRuntime
 from kulai_memory.application.rag import MemoryRagResult
+from kulai_memory.application.speech import SpeechPlan, validate_speech_text
 from kulai_memory.application.retrieval import MemoryRetrievalService
 from kulai_memory.application.history import MemoryDetail, MemoryHistoryCursor, MemoryHistoryPage
 from kulai_memory.history_persistence import read_memory_history, read_memory_detail
@@ -360,6 +361,14 @@ class VoiceMemoryServerRuntime:
         return await read_memory_history(archived=archived, limit=limit, cursor=cursor,
                                          session_factory=self._session_factory,
                                          repository_factory=self._repository_factory)
+
+    async def plan_speech(self, *, answer: str) -> SpeechPlan:
+        """Final answer data only; reuse Qwen and the AI lane, without DB reads."""
+        validate_speech_text(answer)
+        self._require_started()
+        if self._rag is None:
+            raise ServerRuntimeError()
+        return await self._run_ai(lambda: self._rag.plan_speech(answer=answer))
 
     async def get_memory(self, *, memory_id: UUID) -> MemoryDetail | None:
         self._require_started()

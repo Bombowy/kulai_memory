@@ -8,6 +8,8 @@ import com.kulai.memory.audio.MicrophoneGate
 import com.kulai.memory.cache.PendingAudioCacheStore
 import com.kulai.memory.transport.OkHttpVoiceSocketFactory
 import com.kulai.memory.transport.MemoryHttpClient
+import com.kulai.memory.speech.AndroidTtsBoundary
+import com.kulai.memory.speech.OfflineLocalSpeechEngine
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -28,24 +30,28 @@ class VoiceMemoryViewModel(application: Application) : AndroidViewModel(applicat
     val assistant = MemoryAssistantController(viewModelScope, api, BuildConfig.ASSISTANT_WS_URL,
         socketFactory, AndroidVoiceAudioRecorder(application), microphone)
     val history = MemoryHistoryController(viewModelScope, api)
-    val root = MemoryClientController(viewModelScope, controller, assistant, history, microphone)
+    val speech = MemorySpeechController(viewModelScope, api, OfflineLocalSpeechEngine { callback ->
+        AndroidTtsBoundary(application.applicationContext, callback)
+    })
+    val root = MemoryClientController(viewModelScope, controller, assistant, history, microphone, speech)
 
     val state = controller.state
 
     init {
         controller.startup()
+        speech.startup()
     }
 
     fun setMicrophonePermission(granted: Boolean) =
         root.setMicrophonePermission(granted)
 
-    fun record() = controller.startNewNote()
+    fun record() = root.record()
 
     fun stop() = controller.stopRecording()
 
-    fun retrySave() = controller.retrySave()
+    fun retrySave() = root.retrySave()
 
-    fun retryNote() = controller.retryNote()
+    fun retryNote() = root.retryNote()
 
     override fun onCleared() {
         root.shutdown()

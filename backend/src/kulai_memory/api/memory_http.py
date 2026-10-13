@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class _SafeRoute(APIRoute):
+    invalid_message = "Invalid assistant request."
+    operation_message = "Memory assistant could not complete the operation."
+    operation_stage = "http_operation"
+
     def get_route_handler(self):
         handler = super().get_route_handler()
 
@@ -28,30 +32,30 @@ class _SafeRoute(APIRoute):
             try:
                 return await handler(request)
             except RequestValidationError:
-                return JSONResponse(status_code=422, content={"detail": "Invalid assistant request."})
+                return JSONResponse(status_code=422, content={"detail": self.invalid_message})
             except ClientDisconnected:
                 raise asyncio.CancelledError() from None
             except HTTPException as exc:
                 # FastAPI's body parser raises the base Starlette exception,
                 # not necessarily the FastAPI subclass. Never echo its detail.
-                messages = {400: "Invalid assistant request.", 422: "Invalid assistant request.",
+                messages = {400: self.invalid_message, 422: self.invalid_message,
                             404: "Memory not found.", 503: "Memory assistant is unavailable."}
                 if exc.status_code in (400, 422):
                     logger.warning("assistant request rejected stage=http_request_validation error_type=%s code=http.invalid_request",
                                    type(exc).__name__)
                 return JSONResponse(status_code=exc.status_code, content={"detail": messages.get(
-                    exc.status_code, "Memory assistant could not complete the operation.")})
+                    exc.status_code, self.operation_message)})
             except ServerRuntimeError:
                 return JSONResponse(status_code=503, content={"detail": "Memory assistant is unavailable."})
             except Exception as exc:
                 code = exc.code if isinstance(exc, MemoryRagError) else "none"
                 stage = {"rag.retrieval_failed": "rag_retrieval",
                          "rag.generation_failed": "rag_generation",
-                         "rag.invalid_citations": "rag_citations"}.get(code, "http_operation")
+                         "rag.invalid_citations": "rag_citations"}.get(code, self.operation_stage)
                 logger.warning("assistant request failed stage=%s error_type=%s code=%s",
                                stage, type(exc).__name__, code)
                 return JSONResponse(status_code=500, content={
-                    "detail": "Memory assistant could not complete the operation."})
+                    "detail": self.operation_message})
 
         return safe
 

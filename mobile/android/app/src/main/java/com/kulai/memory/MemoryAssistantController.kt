@@ -20,6 +20,7 @@ data class MemoryAssistantState(
     val result: AssistantAnswer? = null,
     val error: String? = null,
     val permissionGranted: Boolean = false,
+    val answerVersion: Long = 0,
 ) {
     val voiceBusy: Boolean get() = phase in setOf(AssistantPhase.CONNECTING, AssistantPhase.RECORDING,
         AssistantPhase.TRANSCRIBING, AssistantPhase.SEARCHING)
@@ -187,7 +188,7 @@ class MemoryAssistantController(
         captureJob?.invokeOnCompletion { ownedLease?.release() }
     }
     private fun complete(answer: AssistantAnswer) {
-        mutableState.value = state.value.copy(result = answer, error = null, phase =
+        mutableState.value = state.value.copy(result = answer, answerVersion = state.value.answerVersion + 1, error = null, phase =
             if (answer.status == AssistantStatus.ANSWERED) AssistantPhase.ANSWERED else AssistantPhase.INSUFFICIENT_CONTEXT)
     }
     private fun finishSocket() {

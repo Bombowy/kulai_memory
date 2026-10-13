@@ -1,11 +1,11 @@
-# Local Memory history and assistant transport (6C.1)
+# Local Memory history, assistant and speech planning transport
 
 Start with `.venv\Scripts\python.exe scripts\dev.py`. It binds exclusively to
 `127.0.0.1:8000`; this development transport has no authentication. History/detail
 intentionally return canonical user data to the local client. Do not expose the
 port to a network. LAN/WSS/auth/pairing remain TASK 4D. No CORS wildcard is added.
 
-Desktop stays in process. The server performs no TTS and stores neither questions
+Desktop stays in process. The server performs no audio synthesis and stores neither questions
 nor answers. It uses existing canonical RAG grounding/citation rules, with no
 reviewed semantic score cutoff or reranker. No database migration is required.
 
@@ -119,6 +119,37 @@ Bounded public errors have only `detail`:
 
 Validation never echoes query/input and errors contain no content/credentials.
 Normal server logging records request structure, not bodies or Memory content.
+
+## Final-answer Polish / English speech plan
+
+`POST /api/assistant/speech-plan`, UTF-8 JSON:
+
+```json
+{"answer":"To jest odpowiedź. This is an answer."}
+```
+
+Answer is nonblank and <=6,000 characters. Only the final answer is supplied;
+there are no query/citation/Memory ID fields. Response:
+
+```json
+{"segments":[{"text":"To jest odpowiedź. ","language":"pl"},{"text":"This is an answer.","language":"en"}]}
+```
+
+Both projections forbid extra fields. There are 1..64 nonempty segments,
+languages only `pl`/`en`, with concatenation exactly equal to the requested
+answer. No translation/rewrite/fuzzy repair or whole-answer Polish fallback.
+This endpoint reuses `MemoryRagRuntime.plan_speech`/canonical application speech
+planning through the server AI lane and the existing Qwen client. The canonical
+insufficient answer yields one PL segment without a Qwen request. Planning
+opens no DB session, invokes no BGE/Whisper and creates no audio artifact.
+The answer is untrusted DATA; speech planning does not change RAG grounding.
+HTTP disconnect cancels planning and leaves the runtime reusable.
+
+Safe errors: 400/422 `Invalid speech request.`, 503
+`Memory assistant is unavailable.`, 500 `Speech planning could not be completed.`
+Neither logs nor errors contain answer/prompt/provider payload. Android performs
+its own exact-plan validation and local offline synthesis; voices and audio are
+not transported by the server. `/ws/memory` and `/ws/assistant` v1 are unchanged.
 
 ## Voice question v1
 

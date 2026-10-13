@@ -7,6 +7,26 @@ import java.util.UUID
 
 /** One strict projection for HTTP answers and assistant.completed. No response repair. */
 object MemoryJson {
+    fun speech(raw: String, answer: String): SpeechPlan {
+        val root = StrictJson.objectFrom(raw)
+        StrictJson.keys(root, "segments")
+        val elements = StrictJson.array(root, "segments")
+        if (elements.size !in 1..64) StrictJson.invalid()
+        val segments = elements.map {
+            val segment = StrictJson.objectValue(it)
+            StrictJson.keys(segment, "text", "language")
+            val text = StrictJson.string(segment, "text")
+            if (text.isEmpty()) StrictJson.invalid()
+            val language = when (StrictJson.string(segment, "language")) {
+                "pl" -> SpeechLanguage.PL
+                "en" -> SpeechLanguage.EN
+                else -> StrictJson.invalid()
+            }
+            SpeechSegment(text, language)
+        }
+        return try { SpeechPlan(segments).validate(answer) } catch (_: IllegalArgumentException) { StrictJson.invalid() }
+    }
+
     fun history(raw: String): MemoryHistoryPage {
         val root = StrictJson.objectFrom(raw)
         StrictJson.keys(root, "items", "next_cursor")

@@ -24,6 +24,7 @@ interface MemoryApi {
     suspend fun listMemories(archived: Boolean, limit: Int = 20, cursor: MemoryHistoryCursor? = null): MemoryHistoryPage
     suspend fun getMemory(id: UUID): MemoryDetail
     suspend fun askMemory(query: String, topK: Int = 5): AssistantAnswer
+    suspend fun planSpeech(answer: String): SpeechPlan
 }
 
 enum class HttpFailure { UNAVAILABLE, INVALID_RESPONSE, NOT_FOUND, OPERATION_FAILED }
@@ -64,6 +65,14 @@ class MemoryHttpClient(
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return parse(Request.Builder().url(base.newBuilder().addPathSegments("api/assistant/ask").build())
             .post(body).build(), MemoryJson::answer)
+    }
+
+    override suspend fun planSpeech(answer: String): SpeechPlan {
+        require(answer.isNotBlank() && answer.length <= 6000) { "Invalid speech request." }
+        val body = JSONObject().put("answer", answer).toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        return parse(Request.Builder().url(base.newBuilder().addPathSegments("api/assistant/speech-plan").build())
+            .post(body).build()) { MemoryJson.speech(it, answer) }
     }
 
     private suspend fun <T> parse(request: Request, parse: (String) -> T): T {

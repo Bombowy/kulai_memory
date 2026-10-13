@@ -23,6 +23,7 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
     val ask by viewModel.assistant.state.collectAsStateWithLifecycle()
     val history by viewModel.history.state.collectAsStateWithLifecycle()
     val capture by viewModel.microphone.owner.collectAsStateWithLifecycle()
+    val speech by viewModel.speech.state.collectAsStateWithLifecycle()
     val controls = memoryClientControls(note, ask, capture)
     Scaffold(bottomBar = {
         NavigationBar {
@@ -39,8 +40,10 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
                 MemoryTab.NOTE -> VoiceMemoryContent(note, viewModel::record, viewModel::stop,
                     viewModel::retrySave, viewModel::retryNote, requestMicrophonePermission, controls.noteRecordEnabled)
                 MemoryTab.ASK -> AssistantContent(ask, controls, viewModel.assistant::setQuery,
-                    viewModel.assistant::ask, viewModel.assistant::startVoiceQuestion,
-                    viewModel.assistant::stopVoiceQuestion, viewModel.assistant::cancelQuestion, requestMicrophonePermission)
+                    viewModel.root::ask, viewModel.root::startVoiceQuestion,
+                    viewModel.assistant::stopVoiceQuestion, viewModel.assistant::cancelQuestion, requestMicrophonePermission,
+                    speech, viewModel.root::speakAnswer, viewModel.root::stopAudio, viewModel.speech::setAutoSpeak,
+                    { viewModel.root.answerRendered(ask.answerVersion) }, capture == null)
                 MemoryTab.MEMORY -> HistoryContent(history, viewModel.history::setFilter,
                     viewModel.history::refresh, viewModel.history::loadMore, viewModel.history::selectMemory,
                     viewModel.history::clearDetail)
@@ -54,7 +57,12 @@ internal fun AssistantContent(
     state: MemoryAssistantState, controls: MemoryClientControls,
     onQuery: (String) -> Unit, onAsk: () -> Unit, onVoice: () -> Unit, onStop: () -> Unit,
     onCancel: () -> Unit, onPermission: () -> Unit,
+    speech: MemorySpeechState = MemorySpeechState(), onSpeak: () -> Unit = {}, onStopAudio: () -> Unit = {},
+    onAutoSpeak: (Boolean) -> Unit = {}, onAnswerRendered: () -> Unit = {},
+    speechAllowed: Boolean = true,
 ) {
+    // Common post-render trigger for text/voice/insufficient; root consumes each answerVersion once.
+    LaunchedEffect(state.answerVersion, state.result) { if (state.result != null) onAnswerRendered() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Ask Memory", style = MaterialTheme.typography.headlineMedium)
@@ -87,6 +95,26 @@ internal fun AssistantContent(
                     Text("${citation.rank}. ${citation.memoryId}\nScore: ${String.format(Locale.ROOT, "%.4f", citation.score)}")
                 }
             }
+        }
+        Text("Polish / English speech", style = MaterialTheme.typography.labelMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSpeak, enabled = state.result != null && speech.available && !speech.busy && speechAllowed) { Text("SPEAK") }
+            OutlinedButton(onClick = onStopAudio, enabled = speech.busy) { Text("STOP AUDIO") }
+        }
+        Row {
+            Checkbox(checked = speech.autoSpeak, onCheckedChange = onAutoSpeak)
+            Text("Speak answers automatically", modifier = Modifier.padding(top = 12.dp))
+        }
+        Text(when (speech.phase) {
+            SpeechPhase.UNAVAILABLE -> "TTS unavailable"
+            SpeechPhase.READY -> "Speech ready"
+            SpeechPhase.PLANNING -> "Preparing speech..."
+            SpeechPhase.SPEAKING -> "Speaking..."
+            SpeechPhase.STOPPING -> "Stopping audio..."
+            SpeechPhase.ERROR -> "Could not speak answer."
+        }, style = MaterialTheme.typography.bodySmall)
+        speech.voices?.let { voices ->
+            Text("PL (offline): ${voices.polish.id}\nEN (offline): ${voices.english.id}", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
