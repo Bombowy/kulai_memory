@@ -12,7 +12,7 @@ from kulai_memory.security_persistence.migration import security_migration_heads
 def test_security_graph_preserves_canonical_head_and_legacy_snapshots():
     backend = Path(__file__).resolve().parents[1] / "backend"
     assert ScriptDirectory.from_config(Config(str(backend / "alembic.ini"))).get_heads() == ["kulai_memory_0004"]
-    assert security_migration_heads() == ("kulai_security_0001",)
+    assert security_migration_heads() == ("kulai_security_0002",)
     snapshot = DatabaseSnapshot(("kulai_memory_0004",), MemoryFingerprint(0, "a" * 64),
                                 VectorFingerprint(0, "b" * 64), TombstoneFingerprint(0, "c" * 64))
     assert snapshot.security is None

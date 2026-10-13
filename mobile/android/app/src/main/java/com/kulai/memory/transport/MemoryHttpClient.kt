@@ -103,6 +103,7 @@ class MemoryHttpClient(
             override fun onResponse(call: Call, response: Response) {
                 try {
                     val bytes = response.use {
+                        if (it.code == 401) authentication.rejected(request)
                         if (!it.isSuccessful) throw MemoryHttpException(when (it.code) {
                             401, 403 -> HttpFailure.AUTHENTICATION_REQUIRED
                             404 -> HttpFailure.NOT_FOUND

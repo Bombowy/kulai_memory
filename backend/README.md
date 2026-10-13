@@ -246,7 +246,8 @@ the socket open for `memory.retry`, which reuses the same transcript and IDs.
 The server closes cleanly after `memory.saved`. The adapter is bound only by the
 existing localhost development launcher. Android alpha still uses this unchanged
 v1 endpoint through ADB reverse in explicit `LOCAL_DEV`. Authentication is available
-through the security core; LAN/WSS/pairing remain future tasks.
+through the security core; local pairing is available after the separately approved
+security schema installation. LAN/WSS deployment remains future work.
 
 ## Local history and assistant transport
 
@@ -273,7 +274,7 @@ cleanup; no completed event is sent after disconnect.
 
 See [local transport contract](../docs/LOCAL_ASSISTANT_TRANSPORT.md) for schemas,
 cursor semantics, audio bounds, errors and future Android URLs. This phase is
-loopback-only, with explicit `LOCAL_DEV` and `SECURE` modes, without LAN/WSS/pairing.
+loopback-only, with explicit `LOCAL_DEV` and `SECURE` modes, without LAN/WSS.
 
 TASK 4D.2A provides `PostgresSecurityStore` and an independent
 `kulai_security_0001` graph in `security_migrations`. Canonical head remains
@@ -288,3 +289,12 @@ is an explicit reviewed operation with `upgrade --confirm-main-security-schema
 restore verification before DDL. No migration has been applied automatically.
 Complete backup/restore now includes security fingerprints; old backups remain
 supported. See [the security procedure](../docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).
+
+TASK 4D.2B adds independent pairing domain/service/adapter, exact pre-auth native
+POST routes and trusted `scripts/pairing_admin.py`. Security head is now
+`kulai_security_0002`; strict doctor and backup/restore also accept historical
+`kulai_security_0001`. Pairing remains unavailable on v1 or absent security schemas,
+while the original credential reader remains usable on verified v1.
+Only explicit local CLI approval can trust the bound PENDING device; claim atomically
+issues one bounded token and consumes the session. No server token replay/refresh
+endpoint or public administrator endpoint is exposed.

@@ -29,6 +29,17 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
+def new_credential(device_id: UUID, ttl: timedelta, actions: frozenset[Action],
+                   project_id: UUID | None, now: datetime) -> tuple[TokenRecord, IssuedCredential]:
+    """PL/EN: pure issuance preparation; the caller owns atomic persistence."""
+    aware(now)
+    if not isinstance(ttl, timedelta) or not timedelta(0) < ttl <= timedelta(days=30):
+        raise SecurityError()
+    secret = secrets.token_urlsafe(32)
+    record = TokenRecord(uuid4(), device_id, token_digest(secret), now, now + ttl, actions, project_id)
+    return record, IssuedCredential(device_id, record.id, secret, record.expires_at)
+
+
 class Authenticator:
     def __init__(self, reader: SecurityReader, *, clock: Clock = utc_now) -> None:
         self._reader = reader
@@ -71,12 +82,7 @@ class CredentialManager:
 
     def _new(self, device_id: UUID, ttl: timedelta, actions: frozenset[Action],
              project_id: UUID | None, now: datetime) -> tuple[TokenRecord, IssuedCredential]:
-        aware(now)
-        if not isinstance(ttl, timedelta) or not timedelta(0) < ttl <= timedelta(days=30):
-            raise SecurityError()
-        secret = secrets.token_urlsafe(32)
-        record = TokenRecord(uuid4(), device_id, token_digest(secret), now, now + ttl, actions, project_id)
-        return record, IssuedCredential(device_id, record.id, secret, record.expires_at)
+        return new_credential(device_id, ttl, actions, project_id, now)
 
     async def issue(self, device_id: UUID, *, ttl: timedelta = timedelta(hours=1),
                     actions: frozenset[Action] = frozenset(Action), project_id: UUID | None = None) -> IssuedCredential:

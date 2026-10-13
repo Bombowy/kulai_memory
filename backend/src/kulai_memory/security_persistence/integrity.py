@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from kulai_memory.security.models import SecurityError
 from .schema_v1 import DEVICE_TABLE, TOKEN_TABLE, VERSION_TABLE, SECURITY_REVISION
+from .schema_v2 import PAIRING_TABLE, RATE_TABLE, SECURITY_HEAD
 
 EXPECTED_COLUMNS = {
     DEVICE_TABLE: {"id": ("uuid", False), "status": ("text", False), "created_at": ("timestamptz", False)},
@@ -34,11 +35,38 @@ EXPECTED_CONSTRAINTS = {
     VERSION_TABLE: {("p", "PRIMARY KEY (version_num)")},
 }
 
+PAIRING_COLUMNS = {
+    PAIRING_TABLE: {'id': ('uuid', False), 'invite_digest': ('text', False),
+        'receiver_digest': ('text', True), 'client_id': ('uuid', True), 'device_id': ('uuid', True),
+        'device_label': ('text', True), 'state': ('text', False), 'created_at': ('timestamptz', False),
+        'expires_at': ('timestamptz', False), 'approved_at': ('timestamptz', True), 'token_id': ('uuid', True),
+        'actions': ('_text', False), 'token_ttl_seconds': ('int4', False), 'attempts': ('int4', False)},
+    RATE_TABLE: {'id': ('int4', False), 'window_start': ('timestamptz', False), 'attempts': ('int4', False)},
+}
+PAIRING_CONSTRAINTS = {
+    PAIRING_TABLE: {
+        ('p', 'PRIMARY KEY (id)'), ('u', 'UNIQUE (invite_digest)'), ('u', 'UNIQUE (device_id)'), ('u', 'UNIQUE (token_id)'),
+        ('f', f'FOREIGN KEY (device_id) REFERENCES {DEVICE_TABLE}(id) ON DELETE RESTRICT'),
+        ('f', f'FOREIGN KEY (token_id) REFERENCES {TOKEN_TABLE}(id) ON DELETE RESTRICT'),
+        ('c', "CHECK (((invite_digest ~ '^[0-9a-f]{64}$'::text) AND ((receiver_digest IS NULL) OR (receiver_digest ~ '^[0-9a-f]{64}$'::text))))"),
+        ('c', "CHECK ((state = ANY (ARRAY['invited'::text, 'pending'::text, 'approved'::text, 'claimed'::text, 'denied'::text, 'cancelled'::text])))"),
+        ('c', "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:05:00'::interval))))"),
+        ('c', 'CHECK (((attempts >= 0) AND (attempts <= 8) AND (token_ttl_seconds >= 1) AND (token_ttl_seconds <= 86400)))'),
+        ('c', next(d for k, d in EXPECTED_CONSTRAINTS[TOKEN_TABLE] if k == 'c' and 'cardinality' in d)),
+        ('c', "CHECK ((((state = 'invited'::text) AND (receiver_digest IS NULL) AND (device_id IS NULL) AND (client_id IS NULL) AND (device_label IS NULL)) OR ((state <> 'invited'::text) AND (receiver_digest IS NOT NULL) AND (device_id IS NOT NULL) AND (client_id IS NOT NULL) AND (device_label IS NOT NULL))))"),
+        ('c', "CHECK ((((state = ANY (ARRAY['approved'::text, 'claimed'::text])) AND (approved_at IS NOT NULL)) OR ((state <> ALL (ARRAY['approved'::text, 'claimed'::text])) AND (approved_at IS NULL))))"),
+        ('c', "CHECK ((((state = 'claimed'::text) AND (token_id IS NOT NULL)) OR ((state <> 'claimed'::text) AND (token_id IS NULL))))"),
+        ('c', "CHECK (((device_label IS NULL) OR (device_label ~ '^[A-Za-z0-9 ._-]{1,48}$'::text)))"),
+    },
+    RATE_TABLE: {('p', 'PRIMARY KEY (id)'), ('c', 'CHECK (((id = 1) AND (attempts >= 0) AND (attempts <= 120)))')},
+}
+
 
 @dataclass(frozen=True, slots=True)
 class SchemaState:
     present: bool
     valid: bool
+    revision: str | None = None
 
 
 async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
@@ -54,45 +82,52 @@ async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
         return SchemaState(True, False)
     if not present:
         return SchemaState(False, True)
-    if present != {(name, "r") for name in EXPECTED_COLUMNS}:
+    if (VERSION_TABLE, 'r') not in present:
         return SchemaState(True, False)
-    triggers = await connection.scalar(text("""
+    revisions = tuple((await connection.execute(text(f"SELECT version_num FROM public.{VERSION_TABLE} ORDER BY version_num"))).scalars())
+    if revisions not in ((SECURITY_REVISION,), (SECURITY_HEAD,)):
+        return SchemaState(True, False)
+    v2 = revisions == (SECURITY_HEAD,)
+    expected_columns = {**EXPECTED_COLUMNS, **(PAIRING_COLUMNS if v2 else {})}
+    if present != {(name, 'r') for name in expected_columns}:
+        return SchemaState(True, False)
+    names = ','.join("'" + name + "'" for name in expected_columns)  # Constants, never request input.
+    triggers = await connection.scalar(text(f"""
         SELECT EXISTS(SELECT 1 FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid
           JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public' AND NOT t.tgisinternal
-          AND r.relname IN ('kulai_security_devices','kulai_security_tokens','kulai_security_version'))
+          AND r.relname IN ({names}))
     """))
     if triggers:
         return SchemaState(True, False)
-    rows = await connection.execute(text("""
+    rows = await connection.execute(text(f"""
         SELECT table_name,column_name,udt_name,is_nullable,column_default,character_maximum_length
         FROM information_schema.columns WHERE table_schema='public'
-          AND table_name IN ('kulai_security_devices','kulai_security_tokens','kulai_security_version')
+          AND table_name IN ({names})
     """))
-    columns = {name: {} for name in EXPECTED_COLUMNS}
+    columns = {name: {} for name in expected_columns}
     for table, column, kind, nullable, default, length in rows:
         if default is not None or length != (32 if table == VERSION_TABLE else None):
             return SchemaState(True, False)
         columns[table][column] = (kind, nullable == "YES")
-    if columns != EXPECTED_COLUMNS:
+    if columns != expected_columns:
         return SchemaState(True, False)
-    rows = await connection.execute(text("""
+    rows = await connection.execute(text(f"""
         SELECT r.relname,c.contype::text,pg_get_constraintdef(c.oid),c.convalidated,c.condeferrable
         FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace
         WHERE n.nspname='public' AND r.relname IN
-          ('kulai_security_devices','kulai_security_tokens','kulai_security_version')
+          ({names})
     """))
-    constraints = {name: set() for name in EXPECTED_COLUMNS}
+    constraints = {name: set() for name in expected_columns}
     for table, kind, definition, validated, deferrable in rows:
         if not validated or deferrable:
             return SchemaState(True, False)
         constraints[table].add((kind, definition))
-    expected = {name: set(values) for name, values in EXPECTED_CONSTRAINTS.items()}
+    expected = {name: set(values) for name, values in {**EXPECTED_CONSTRAINTS, **(PAIRING_CONSTRAINTS if v2 else {})}.items()}
     if int(await connection.scalar(text("SHOW server_version_num"))) >= 180000:
-        for name, columns in EXPECTED_COLUMNS.items():
+        for name, columns in expected_columns.items():
             expected[name].update(("n", f"NOT NULL {column}") for column, (_, nullable) in columns.items() if not nullable)
     if constraints != expected:
         return SchemaState(True, False)
-    revisions = tuple((await connection.execute(text(f"SELECT version_num FROM {VERSION_TABLE} ORDER BY version_num"))).scalars())
     indexed = await connection.scalar(text("""
         SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class r ON r.oid=i.indexrelid
           JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public'
@@ -100,7 +135,15 @@ async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
           AND pg_get_indexdef(i.indexrelid) =
             'CREATE INDEX ix_security_tokens_device ON public.kulai_security_tokens USING btree (device_id)')
     """))
-    return SchemaState(True, revisions == (SECURITY_REVISION,) and bool(indexed))
+    if v2:
+        indexed = indexed and await connection.scalar(text("""
+            SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class r ON r.oid=i.indexrelid
+              JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public'
+              AND r.relname='ix_security_pairings_expiry' AND i.indisvalid AND i.indisready
+              AND pg_get_indexdef(i.indexrelid) =
+                'CREATE INDEX ix_security_pairings_expiry ON public.kulai_security_pairings USING btree (expires_at)')
+        """))
+    return SchemaState(True, bool(indexed), revisions[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +157,8 @@ class SecuritySnapshot:
     revision: tuple[str, ...]
     devices: SecurityFingerprint
     tokens: SecurityFingerprint
+    pairings: SecurityFingerprint | None = None
+    pairing_rate: SecurityFingerprint | None = None
 
 
 async def _fingerprint(connection: AsyncConnection, table: str) -> SecurityFingerprint:
@@ -124,7 +169,7 @@ async def _fingerprint(connection: AsyncConnection, table: str) -> SecurityFinge
         for key, value in row._mapping.items():
             if hasattr(value, "utcoffset"):
                 value = value.astimezone(timezone.utc).isoformat()
-            elif key in {"id", "device_id", "project_id"} and value is not None:
+            elif key in {"id", "device_id", "project_id", "client_id", "token_id"} and value is not None:
                 value = str(value)
             values[key] = value
         payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -140,5 +185,7 @@ async def security_snapshot(connection: AsyncConnection) -> SecuritySnapshot | N
         raise SecurityError()
     if not state.present:
         return None
-    return SecuritySnapshot((SECURITY_REVISION,), await _fingerprint(connection, DEVICE_TABLE),
-                            await _fingerprint(connection, TOKEN_TABLE))
+    return SecuritySnapshot((state.revision,), await _fingerprint(connection, DEVICE_TABLE),
+        await _fingerprint(connection, TOKEN_TABLE),
+        await _fingerprint(connection, PAIRING_TABLE) if state.revision == SECURITY_HEAD else None,
+        await _fingerprint(connection, RATE_TABLE) if state.revision == SECURITY_HEAD else None)

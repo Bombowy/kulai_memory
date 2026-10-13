@@ -8,6 +8,7 @@ from collections import deque
 from collections.abc import Awaitable
 from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
+from typing import TypeVar
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -100,12 +101,15 @@ def _credentials(scope: Scope) -> tuple[str | None, UUID | None, UUID | None]:
     return match[1].decode("ascii"), device, project
 
 
+Result = TypeVar('Result')
+
+
 class _Disconnected(Exception):
     pass
 
 
-async def _authenticate_connected(operation: Awaitable[Principal], receive: Receive,
-                                  buffered: deque[Message], *, timeout: float) -> Principal:
+async def _authenticate_connected(operation: Awaitable[Result], receive: Receive,
+                                  buffered: deque[Message], *, timeout: float) -> Result:
     """Single receive owner while storage awaits; replay bounded input unchanged."""
     async def watch() -> None:
         size = 0
@@ -169,6 +173,18 @@ class AuthenticationMiddleware:
         try:
             if not _transport_allowed(scope):
                 await self._deny(scope, receive, send, status=403)
+                return
+            # PL/EN: exact pre-auth exception; no prefix, GET, WS or proxy bypass.
+            from .pairing_http import PAIRING_PATHS
+            if scope['type'] == 'http' and scope.get('method') == 'POST' and scope.get('path') in PAIRING_PATHS:
+                peer = scope.get('client')
+                if (self.config.mode is not SecurityMode.SECURE or scope.get('query_string')
+                        or not peer or not loopback(peer[0]) or _header(scope, b'sec-websocket-protocol') is not None):
+                    await self._deny(scope, receive, send, status=403)
+                    return
+                scope['security_pairing_local'] = True
+                async with asyncio.timeout(5):
+                    await self.app(scope, receive, send)
                 return
             token, device_id, project_id = _credentials(scope)
             # These routes address the existing global canonical Memory. A client

@@ -1,348 +1,353 @@
-TASK 4D.2A — Persistent PostgreSQL Security Store
+TASK 4D.2B — Secure Device Pairing: Android + PostgreSQL
 Projekt: KulAI Memory
 Data: 2026-10-13
-Status: zaimplementowano i zweryfikowano; użytkownik polecił commit i push 4D.2A.
-Migracji security NIE zastosowano na głównej bazie. Brak pairing/LAN/TLS/MCP.
+Status: implementacja i walidacja zakończone; użytkownik polecił commit i push 4D.2B.
+Nie instalowano żadnego schematu security ani nie wykonywano DDL na głównej bazie.
 
-1. Commit/push TASK 4D.1 i świeży preflight
-Na nowe polecenie użytkownika zatwierdzono i wypchnięto wcześniej wykonany TASK 4D.1:
-a9f0e5b9abd174a3d67704033e16ad2e0ed937f3
-feat: add secure authentication foundation for HTTP and WebSocket
-Push: origin/main, 69114f1 -> a9f0e5b, bez force.
-Przed commitem sprawdzono staged diff i usunięto zbędne puste linie EOF czterech
-nowych plików. Zachowano właściwy raport 4D.1 w tym commicie.
-Po push HEAD = origin/main = a9f0e5b; working tree i vendor były czyste.
-Warunek zatwierdzenia 4D.1 przed implementacją 4D.2A został spełniony.
+1. FAZA A — preflight i zamknięcie poprzedniego zadania
+TASK 4D.2A był już zatwierdzony i wypchnięty przed rozpoczęciem:
+010e3247f8256577b01623fc4320e9d652cba4d8
+feat: persist security credentials in PostgreSQL
+HEAD = origin/main = ten commit; początkowo working tree i index były czyste.
+Nie utworzono drugiego commita tego samego zakresu ani nie zmieniono jego tytułu.
+Warunkowy commit fazy A nie był potrzebny. Po implementacji 4D.2B pozostawiono
+bez commit/push do review. Następnie użytkownik jawnie polecił commit i push
+kodu, testów i dokumentacji 4D.2B na origin/main. Hash zakresu będzie w historii Git.
+Polecenie nie obejmuje instalacji migracji na głównej bazie.
+Końcowy fetch potwierdził HEAD/upstream zgodne, ahead/behind = 0/0.
+Vendor pin: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; submodule czysty, bez zmian.
+Świeży strict doctor: PASS. Canonical head: kulai_memory_0004.
+Security graph przed zmianami: kulai_security_0001. Main: security=None.
+Świeża pełna regresja PostgreSQL 4D.2A przed implementacją: 25 PASS, 75.29 s.
+Pełny read-only main snapshot zapisano PRZED testowymi zapisami.
+Audyt obejmował aktualne SecurityReader/SecurityStore/Authenticator/CredentialManager,
+ASGI enforcement, app_factory, lifecycle runtime, migracje, doctor, backup/restore,
+OkHttp HTTP/WS, CredentialProvider, ViewModel, Compose i manifest. Raport 4D.2A nie
+zastępował kontroli rzeczywistego kodu. Nie uruchamiano scripts/export_repo.py.
 
-Po implementacji, przed kolejnym poleceniem użytkownika, zmiany 4D.2A pozostawiono
-bez commit/push do review; upstream wskazywał a9f0e5b, index był pusty.
-Następnie użytkownik jawnie polecił commit i push zmian 4D.2A na origin/main.
-Autoryzacja dotyczy kodu, testów i dokumentacji; nie obejmuje migracji głównej bazy.
-Hash zatwierdzonego zakresu będzie dostępny w historii Git.
-Vendor pin niezmienny: 720d0f26c75ba4af24d395f98f15a37e4bd5067e; vendor czysty.
-Świeży strict db_doctor przed implementacją: PASS; canonical head kulai_memory_0004.
-Wykonano pełny snapshot read-only main przed implementacją; bez danych fixture.
-Nie wykonywano scripts/export_repo.py i nie zmieniano KulAI Modules.
+2. Threat model i granice zaufania
+Threat model zapisano w docs/LOCAL_ASSISTANT_TRANSPORT.md przed implementacją.
+Granice: zaufany lokalny administrator CLI -> niezaufany klient -> ASGI ingress ->
+application service -> transakcja PG -> chroniony storage Androida.
+Publiczny UUID, nazwa, IP, USB ani znajomość identyfikatora sesji nie są dowodem.
+Uwzględniono stolen invitation, podstawienie odbiorcy, replay, równoległe request/
+claim/revoke, enumerację, limity/brute force, oversized/malformed input, logging,
+backup export, utratę Keystore, origin substitution, redirects i błędy storage.
+Administrator porównuje konkretną sesję, device UUID oraz pełny publiczny SHA-256
+receiver verification code telefonu i CLI przed zatwierdzeniem.
+Złodziej zaproszenia może zająć PENDING, ale nie otrzyma tokenu bez świadomego approval.
+Wyczerpanie budżetu znanej sesji może spowodować odmowę prawowitemu użytkownikowi;
+to ograniczenie dostępności, nie obejście zaufania. Nowe zaproszenie wymaga review.
+CSPRNG secrets.token_urlsafe(32) / SecureRandom: 256 bitów. Standardowy SHA-256,
+AES-GCM i platformowy Keystore. Brak własnych algorytmów kryptograficznych.
 
-2. Audyt i decyzja architektoniczna
-Przeanalizowano aktualny kod SecurityReader/SecurityStore, Authenticator,
-CredentialManager, immutable modele, referencyjny InMemorySecurityStore,
-app_factory, ASGI enforcement i istniejący lifecycle runtime'u.
-Przeczytano istniejące grafy/env migracji, scripts/migrate.py, strict doctor,
-DatabaseSnapshot/fingerprinty, backup_service, CLI backup/restore, guarded owned
-DB capabilities, testy historycznych backupów i manifest/data safety contract.
-Sprawdzono obecny Android AudioRecord/VoiceAudioContract i ponawianie auth ramek WS.
-Nie oparto implementacji wyłącznie na poprzednim raporcie.
+3. Przebieg protokołu
+Administrator lokalnie tworzy zaproszenie z jawnymi permissions i TTL tokenu.
+Invite TTL: 5 minut, jednorazowe związanie z odbiorcą.
+Telefon tworzy niezależny receiver secret CSPRNG oraz publiczny registration UUID.
+Najpierw zapisuje zaszyfrowany pending state, potem wysyła request.
+Pierwszy request tworzy nowe server-owned device UUID i stan PENDING.
+Wskazanie publicznego UUID nie rejestruje ani nie reaktywuje istniejącego urządzenia.
+Dokładny retry request jest idempotentny i wymaga zaproszenia ORAZ tego samego receiver.
+Inny receiver/client/label nie może podmienić istniejącego związania.
+Po potwierdzeniu rejestracji Android usuwa invitation secret z zapisanego stanu.
+Approval dotyczy konkretnego session/device/code; dopiero wtedy device = TRUSTED.
+Claim wymaga receiver proof, niewygasłej sesji, approval i aktualnego TRUSTED.
+W jednej transakcji zapisuje token digest i zużywa sesję. Tylko jeden claim wygrywa.
+Token plaintext jest zwracany raz do telefonu, nie do CLI, DB, metadanych czy logów.
+Telefon zapisuje cały credential encrypted/atomic przed publikacją snapshotu.
+Cancel pending/approved jest kontrolowany i idempotentny; nie pozostawia zaufania.
+Cancel claimed pozwala właścicielowi receiver proof unieważnić własne urządzenie.
+Status ujawnia wyłącznie własną sesję po proof i uwzględnia revoke/expiry jej tokenu.
 
-Wybrano ODDZIELNY graf security zamiast przesunięcia canonical head do 0005.
-Canonical migration graph, istniejące migracje i head kulai_memory_0004 nie zmieniają się.
-Security graph: backend/security_alembic.ini -> security_migrations,
-head kulai_security_0001, własna tabela public.kulai_security_version.
-Pozwala to zachować strict canonical doctor i LOCAL_DEV przed zatwierdzeniem
-instalacji security na main; nie ma ignorowania starego doctor ani sztucznego stamp.
-Security Core oraz domena Memory/RAG pozostają bez zależności od SQL storage.
+4. Odbiór jednorazowy i lifecycle tokenów — świadoma decyzja
+Access TTL domyślnie 1 godzina, administrator może wybrać 1..86400 sekund.
+Istniejący neutralny CredentialManager zachowuje poprzednie bounded TTL/rotation.
+W tym zadaniu brak refresh credential i publicznego refresh/rotate endpointu.
+Nie zwiększono uprawnień przy wydaniu ani rotacji. Project scope pozostaje None;
+nie pozorujemy izolacji projektów lub multi-user canonical Memory.
+Wygasły/revoked token nie daje dostępu; device revoke odcina wszystkie jego tokeny.
+Przed claim Android zapisuje marker claiming. Po niepewnym commit, utracie odpowiedzi
+lub nieudanym zapisie tokenu nie odzyskuje sekretu przez replay. Wymaga nowego pairing
+oraz administrator revoke osieroconego urządzenia. Brak plaintext replay storage.
+Po restarcie zapisany token jest publikowany dopiero po sprawdzeniu własnej sesji.
+Czasowa utrata połączenia daje Unavailable, pozwala ponowić sprawdzenie istniejącego,
+nadal ważnego stanu; nigdy nie przedłuża TTL ani automatycznie nie włącza LOCAL_DEV.
+Clock error telefonu może odmówić dostępu wcześniej; czas serwera rozstrzyga ważność.
 
-3. Struktury PostgreSQL i kontrakt storage
-PostgresSecurityStore implementuje istniejące SecurityReader/SecurityStore.
-Borrowed async_sessionmaker; store nie tworzy ani nie zamyka cudzego engine.
+5. Moduły backendu i transport
+Pairing domain/application: backend/src/kulai_memory/pairing/domain.py.
+Port PairingStore jest niezależny od FastAPI, Memory i RAG.
+PostgresPairingStore rozszerza istniejący adapter i pożycza session factory;
+nie tworzy drugiego production pool ani nie trzyma DB podczas AI.
+Wspólną funkcję przygotowania CSPRNG credential wydzielono z istniejącego Managera,
+bez duplikowania kryptografii, nowej zależności ani zmiany dotychczasowych TTL.
+PostgresSecurityRuntime nadal zarządza jednym pool; pairing service istnieje tylko
+po zweryfikowaniu v2. Poprawne historyczne v1 nadal obsługuje wcześniejsze bearer auth.
+Brak/awaria security pozostaje fail-closed bez startupu AI i bez auto-DDL.
 
-public.kulai_security_devices:
-- id UUID PRIMARY KEY, trwała tożsamość oddzielona od secret;
-- status text: pending/trusted/revoked zgodnie z wartościami istniejącego enum;
-- created_at timestamptz NOT NULL.
+Jedyny pre-auth wyjątek: HTTP POST dokładnie na:
+/api/pairing/request, /api/pairing/status, /api/pairing/claim, /api/pairing/cancel.
+Wyłącznie SECURE, rzeczywisty loopback listener i peer, zgodny Host/listener port.
+Brak browser Origin, proxy headers, query, suffix/prefix/WS/admin-route bypass.
+Authorization: Pairing <secret>. Content-Type application/json, opcjonalnie UTF-8.
+Manual parsing ogranicza body do 4096 B, odrzuca duplicate/unknown JSON fields,
+duplicate headers i malformed UUID. Nie używa odbijających sekrety błędów walidacji.
+Public errors są ogólne; poprawne payloady mają Cache-Control: no-store.
+Disconnect watcher jest wspólny z authentication; anulowane work/watcher są drained.
+Zwykłe prywatne HTTP/WS nadal używają tego samego Bearer enforcement i policy.
+/health pozostaje publicznym liveness bez konfiguracji lub danych użytkownika.
+Nie wystawiono CredentialManager jako anonimowego issuer ani publicznego admin API.
 
-public.kulai_security_tokens:
-- id UUID PRIMARY KEY, device_id UUID FK do devices, ON DELETE RESTRICT;
-- digest text NOT NULL UNIQUE, CHECK dokładnego SHA-256 hex;
-- issued_at/expires_at timestamptz NOT NULL, CHECK expires_at > issued_at;
-- revoked_at nullable timestamptz, trwała revocation;
-- actions text[] ograniczone do memory.read, memory.write, assistant.ask,
-  assistant.speech_plan; niepusta tablica, max 4 elementy, bez NULL/nieznanych akcji;
-- nullable project_id UUID; brak FK lub pozorowanej izolacji canonical Memory;
-- indeks device_id do operacji dotyczących właściciela.
+6. PostgreSQL, schema, transactions i limity
+Nowy security head: kulai_security_0002, po kulai_security_0001.
+Canonical head pozostaje kulai_memory_0004; istniejące migracje niezmienione.
+Dodano public.kulai_security_pairings i public.kulai_security_pairing_rate.
+Pairings: UUID, invite/receiver digests, public client/device UUIDs, label, state,
+created/expires/approved timestamps, issued token UUID, permissions, TTL i attempts.
+Rate: trwały singleton window_start/attempts. Nie ma plaintext secret columns.
+FK/UNIQUE/CHECK/index są sprawdzane dokładnie przez strict doctor, także po restore.
+Doctor odrzuca partial schema, dodatkowe pola/tabele, brak constraint/index, bad head,
+triggers i RLS. Obsługuje absence, v1 i v2, bez udawania tabel w starym backupie.
 
-Nie dodano plaintext token column, metadata, logów tokenów ani publicznego issuera.
-Sekrety generuje istniejący CredentialManager; SQL otrzymuje wyłącznie digest.
-Przetrwanie po restarcie: DB jest jedynym źródłem trust/token/revocation, bez cache.
-UUID, zaufanie, scopes, expiry i revoked_at odczytywane są przez odtworzony adapter.
-PENDING nie może otrzymać tokenu; REVOKED nie można ponownie zaufać zgodnie z v1.
-Per-device actions działają. Project scope jest trwały, lecz current global routes
-odrzucają scoped tokens; nie udawano per-project/per-user izolacji danych.
+Limity: 8 aktywnych sesji, 128 retained sesji, 8 failed proofs/session,
+120 service calls/minute globalnie między procesami. Poll telefonu co 5 sekund.
+Anonimowy transport nie tworzy zaproszeń, więc nie ma nieograniczonego create API.
+Global advisory limiter -> session row -> device row -> token row.
+Dotychczasowe credential writes zachowują device -> token order; brak odwrotnego cyklu.
+Failed proof zapisuje counter i commit przed odmową; denial nie cofa jego budżetu.
+Approve/claim ponownie sprawdzają expiry po blokadach. Claim i device revoke linearizują:
+revoke pierwszy odmawia claim; claim pierwszy wydaje token, który revoke dezaktywuje.
+Constraint/statement/commit failures robią rollback i bezpieczne wyjątki.
+Nie obiecujemy cofnięcia commita przy zerwanym połączeniu w niepewnym momencie COMMIT.
 
-4. Transakcje, wyścigi i błędy
-Wszystkie zapisy kończą commit/rollback i close przed zwróceniem wyniku.
-Lock order: device row -> token row, zawsze w tej kolejności.
-Nie ma procesowych mutexów zastępujących blokady PostgreSQL.
+CLI prune-expired --confirm zwalnia retained budget, usuwa tylko expired sessions
+bez live trusted tokenu, revokes abandoned unclaimed devices. Zachowuje device/token
+rekordy. Prune jest jawny, bez automatycznego maintenance i bez wykonania na main.
 
-create_token blokuje urządzenie i sprawdza TRUSTED w transakcji przed insert.
-set_device_status blokuje urządzenie; terminalny REVOKED nie jest reaktywowany.
-rotate_token blokuje właściciela i stary token, ponownie sprawdza aktywność,
-zgodność device/actions/project/issued_at, revokes old i inserts successor atomowo.
-Tylko jedna równoczesna rotacja starego tokenu kończy się sukcesem.
-revoke_token jest idempotentne i stosuje ten sam lock order.
-Kontrolowana jest także zgodność właściciela po założeniu blokad.
+7. CLI administratora
+scripts/pairing_admin.py: invite --show-secret --permissions ...,
+pending, approve --session-id --device-id --verification-code,
+reject --session-id --device-id, devices, revoke --device-id,
+prune-expired --confirm.
+CLI wymaga loopback DB, development environment i verified v2; nie wykonuje migracji.
+Tylko jawny invite --show-secret pokazuje jednorazowy sekret. Długoterminowych bearer
+CLI nie drukuje. Test CLI operował na monkeypatched owned configuration, nie na main.
 
-Revoke vs rotate: wyniki odpowiadają kolejności serializacji.
-Jeśli revoke wygrywa pierwszy, rotate odmawia. Jeśli rotate wygrywa pierwszy,
-następca może powstać przed revoke starego tokenu; stary token jest już revoked.
-Nie deklaruje się, że revoke starego ID retroaktywnie odwołuje każdy następny ID.
-Revoke całego urządzenia blokuje wszystkie jego credentials, również następcę.
-Issue vs device revoke: issue może commitować wcześniej, ale token po końcowym
-revoke urządzenia jest nieaktywny; issue po revoke nie jest dopuszczone.
+8. Android UI, credentials i ownership
+Server Connection: canonical configurable origin, jawny LOCAL_DEV dla debug oraz
+Not paired / Pairing / Paired / Expired / Revoked / Unavailable, safe errors,
+Pair Device, oczekiwanie, comparison code, CHECK/RETRY, cancel, local unpair.
+Przed skutecznym pairing/verify prywatny UI w SECURE jest zablokowany.
+RequestAuthentication pozostaje wspólnym mechanizmem wszystkich HTTP i obu WS.
+Po 401/WS refusal powiadamia connection controller, który weryfikuje własny stan;
+spóźniona odmowa innego device UUID nie usuwa nowego credential.
+HTTP 403 z braku danego scope nie jest automatycznym device revoke.
+Server origin jest przypisany do credential i sprawdzany przed wysłaniem.
+Remote URL wymaga HTTPS; debug HTTP wyłącznie loopback; paths/userinfo/query/fragment
+są odrzucane, redirects i retry-on-connection-failure dla one-shot claim wyłączone.
+Platform certificate i hostname verification pozostają aktywne.
 
-Błędy driver/statement/commit/rollback/close/dispose są zastępowane SecurityError
-z komunikatem authored, bez params/URL/digest/token w publicznej treści lub cause.
-CancelledError zachowuje cancellation; lookup rollback zwalnia pool. Dispose jest
-shielded/drained istniejącym helperem, nie duplikowano mechanizmu drain.
-Brak automatycznych write retries po niepewnym commit.
-Utrata połączenia w trakcie rzeczywistego COMMIT może oznaczać niepewny wynik
-po stronie klienta. Nie obiecuje się cofnięcia już wykonanego commit; po reconnect
-należy sprawdzić durable state. Testy błędów przed commit wykazały pełny rollback.
+AES-256-GCM / AndroidKeyStore key; losowy 96-bit IV i 128-bit tag, version AAD.
+Jeden encrypted AtomicFile w noBackupFilesDir, nie plaintext SharedPreferences.
+Manifest allowBackup=false pozostaje; noBackupFilesDir chroni także transfer.
+UI secrets są remember, bez rememberSaveable/Bundle; FLAG_SECURE.
+IO/Keystore poza main thread. CredentialProvider to AtomicReference snapshot,
+thread-safe i nonblocking; expiry odcina snapshot. Nie ma nieograniczonego auth cache.
+Whole-record atomic replacement i claim-intent chronią spójność po awarii/restart.
+Jawny fd.sync propaguje błędy zapisu; read-after-write sprawdza rename, ponieważ
+Android AtomicFile może samo logować błąd rename zamiast rzucać wyjątek.
+Utrata klucza/decryption failure wymaga nowego pairing, bez plaintext/dev fallback.
+Konfiguracja/recreate features zamyka stare controllery i transporty; zachowano
+microphone permission oraz istniejący wspólny MicrophoneGate i feature shutdown.
+Poprawiono systemBars/IME insets po teście fizycznym; nie dodano biblioteki UI/storage.
+Local unpair zawsze usuwa secret; server cancel best-effort. Offline orphan revoke
+wymaga CLI. Zmiana origin również usuwa lokalny credential; przed nią należy revoke/
+unpair starego serwera, żeby nie zostawić dostępu po jego stronie.
 
-5. Weryfikacja schematu i backup/restore
-Read-only validator sprawdza:
-- obecność dokładnego zestawu trzech tabel, typy/nullability/defaults/length;
-- dokładne definicje PK/UNIQUE/FK/CHECK, validation i brak deferrable;
-- poprawny indeks device_id i security revision;
-- brak extra security tables/columns, user triggers oraz RLS.
-Partial/unknown/incompatible schema fail-closed, bez udawania poprawnego storage.
-PostgreSQL 18 NOT NULL constraints są uwzględnione w katalogowej kontroli.
+9. Backup, restore i instalacja main — NIEWYKONANA
+SecuritySnapshot rozszerzono o complete pairings i rate fingerprints, wszystkie pola.
+Historical v1: pairings=None/rate=None; canonical-only: security=None.
+Rzeczywisty pg_dump/pg_restore weryfikuje cały security i niepuste canonical fixtures.
+Guarded installer akceptuje absent -> v1+v2 oraz verified v1 -> v2. Nie osłabiono
+strict doctor, archive/source revalidation ani zasad backup/restore.
+W DDL transaction sprawdza niezmienność canonical oraz istniejących device/token hash.
+Nie zainstalowano v1 ani v2 na głównej bazie; lokalna alpha pozostaje LOCAL_DEV.
 
-run_database_doctor zachowuje wszystkie dotychczasowe strict checks i dodaje
-security.schema. Brak wszystkich security tabel jest legalny dla starej lokalnej
-alphy; schema obecna musi być w pełni poprawna. require_security=True wymaga jej
-obecności i jest używane w produkcyjnym SECURE composition.
+Warunki osobnej ręcznej instalacji po wyraźnej autoryzacji użytkownika:
+- zatrzymać writers/backend clients/CLI pairing,
+- strict doctor, nowy pełny backup poza repo bez overwrite,
+- actual restore verification w owned DB,
+- immediate archive/source revalidation,
+- scripts/security_schema.py upgrade --confirm-main-security-schema --backup-output PATH,
+- strict doctor + schema check, potem restart SECURE i nowe pairing.
+Backup pozostaje po błędzie; destructive downgrade nieobsługiwany.
+Restore starszego security backupu może cofnąć revocation/counters; wymaga świadomej
+operacji odzyskiwania i ponownego review/revoke poświadczeń. Brak auto-main-restore.
 
-DatabaseSnapshot ma opcjonalne security=None, zgodne ze starymi konstruktorami
-snapshotów i historycznymi dumpami. Zainstalowany pusty schemat jest innym stanem
-niż brak schematu. SecuritySnapshot zawiera revision oraz hash/count wszystkich
-pól device/token, również digest, scopes, expiry i revoked_at — bez wypisywania rows.
-Ponieważ istniejąca backup_service porównuje pełne DatabaseSnapshot, actual restore
-oraz source/archive revalidation obejmują teraz również trwałe security.
-Zmiana revocation unieważnia uprzedni verified-source token.
+10. Faktycznie wykonana walidacja
+PyCharm SDK: backend Python 3.14.5 w backend/.venv; root Python 3.13.15 w .venv.
+PostgreSQL 18.6. Nie instalowano zależności. Nie używano main do synthetic writes.
+PASS — backend unit/regression: 848 passed, 1 warning, 47.10 s.
+  pytest backend/tests --ignore=backend/tests/integration -q --tb=short
+PASS — root tools: 270 passed, 1 skipped, 3.77 s.
+  Skip symlink: brak uprawnień Windows do utworzenia symlink.
+PASS — full security+pairing PG suite: 42 passed, 1 warning, 127.35 s.
+  test_security_postgres.py (25) + test_pairing_postgres.py (17 w tym przebiegu).
+PASS — final pairing PG after disconnect test/review: 18 passed, 49.50 s.
+  Include blocked transaction cancellation/pool return and following request success.
+  Trwałość, deny/cancel/expiry/replay, bounds, wrong/unknown invite/proof, two processes,
+  concurrent register/claim/revoke, rollback faults, schema tamper, CLI, prune,
+  v1 upgrade, actual full restore z Memory=2/vector=1/tombstone=1.
 
-Nowy schemat i pełny backup po jego instalacji przeszły rzeczywisty pg_dump/pg_restore.
-Wykryto i poprawiono przed zakończeniem różnicę reprezentacji CHECK BETWEEN po restore:
-migracja używa równoważnych jawnych bounds, więc exact doctor nie wymaga osłabienia.
-Historyczne owned backupy 0002/0003/0004 nadal przechodzą istniejące guarded paths.
-Zachowano tombstones, retired ingestion replay i backup/delete safety invariants.
+Existing real integrations uruchomiono dla pre_migration_backup, tombstone_backup,
+memory_postgres, security_uvicorn, assistant_uvicorn i speech_uvicorn.
+Pierwszy combined run: 22 passed, 2 skipped, 1 FAILED (100.92 s).
+Failure: startup timeout Windows Uvicorn autoreload/string_utf8 i brak stopped event,
+podczas równoległych edycji obserwowanych plików. Nie oznaczono tego przebiegu PASS.
+Powtórzono całą grupę test_assistant_uvicorn.py bez edycji backendu:
+6 passed, 2 skipped, 30.60 s, w tym poprzednio failing string_utf8.
+Przyczyna autoreload jest wnioskowaniem z przebiegu/zmian plików, nie dowodem trace.
+Pozostałe 22 scenariusze combined były PASS, także 6 real canonical Memory/idempotency
+scenarios. BGE/Qwen opt-in cases (2) były SKIP, nie PASS.
+Nie wykonywano całego katalogu integration z real Whisper/BGE/Qwen/Windows TTS.
+Regresja obecnych model/voice kontraktów w unit tests używała controlled providers.
 
-6. Bezpieczna instalacja security — przygotowana, niewykonana na main
-scripts/security_schema.py:
-- heads: tylko odczyt niezależnego grafu;
-- check: strict doctor wymagający security, tylko read-only;
-- upgrade: wymaga jednocześnie --confirm-main-security-schema i --backup-output.
+PASS — Android: 21 XML suites, 194 tests, failures/errors/skips=0.
+  .\gradlew.bat testDebugUnitTest assembleDebug --rerun-tasks --console=plain
+  BUILD SUCCESSFUL, 45 executed tasks, 27 s (ostatni pełny przebieg po sync/review).
+  Existing 180 tests + 14 new pairing tests: first pair/restart/pending, loss,
+  claim ambiguity, encryption/tamper/key loss/atomic failure, expiry/revoke,
+  denied callback, origin, redirect, LOCAL_DEV/ADB policy, server change.
+APK: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+Size: 12692940 B
+SHA256: 5ddf9c872f3bef2cb556eafe5090fa8c186514eeed34b3304a1decfee5c7ceb7
+Existing warning: libandroidx.graphics.path.so could not be stripped.
+Backend warning: upstream anyio BlockingPortal alias deprecation.
+Dev iterations included failures (schema integer autoincrement, cancel view priority,
+Android initialization/constructor, coroutine exception recovery, header charset,
+owned tamper DROP dependencies/indentation). Fixed and rerun; not reported as PASS
+until the relevant final checks actually passed. No such DDL touched main.
 
-Procedura upgrade:
-1) strict doctor i istniejące loopback/development/path guards;
-2) nowy, retained full archive poza repozytorium, bez overwrite;
-3) actual restore verification w process-owned temporary DB;
-4) immediate source/archive revalidation przed DDL;
-5) serializacja instalacji advisory lock i kontrola absence/security state;
-6) sprawdzenie canonical fingerprintów przed/po DDL w transakcji;
-7) additive independent Alembic upgrade;
-8) schema verification, commit, strict post-upgrade doctor.
-Błąd DDL powoduje rollback również security version table i zachowuje dump.
-Direct Alembic bez guarded connection jest odmówiony; destructive downgrade niewdrożony.
-Istniejąca ścieżka migrate canonical nie jest zmodyfikowana.
+11. Fizyczny Android smoke — WYKONANY, ograniczony zakres
+SM-S938B / Android 16, adb install -r świeżego debug APK, bez uninstall/pm clear.
+Osobny synthetic runtime, random loopback port, marker-owned temporary PostgreSQL.
+Żadnych rzeczywistych Memory/AI danych z main w tym smoke.
+PASS: explicit SECURE connection/not paired, request/PENDING, force-stop/restart
+while pending, ten sam session/device/code z encrypted Keystore state.
+PASS: zgodny pełny comparison code -> conscious approval konkretnej sesji/device.
+PASS: token claim + encrypted durable storage, Paired po force-stop/restart.
+PASS: native authenticated MEMORY -> jeden synthetic list_memories call.
+PASS: administrator revoke -> następne MEMORY refused -> Revoked UI; liczba private
+operations pozostała dokładnie jeden, brak dalszego odczytu po odmowie.
+PASS: local unpair usunął credential; encrypted config-only file po cleanup 94 B.
+PASS: przywrócono http://127.0.0.1:8000 + LOCAL_DEV i adb reverse 8000:8000.
+Po ostatnim hardening zapisu ponownie zainstalowano final APK, odczytano Keystore
+configuration po restarcie i sprawdzono APPLY SERVER z fd.sync/read-after-write.
+Oba physical fixture processes zakończyły się normalnie i dropped owned DB;
+nie pozostawiono test backend listener/control directory.
+Nie zmieniano globalnej PowerShell execution policy; helper actions były inline.
+Początkowe mapowanie różnych portów ADB słusznie blokował Host guard. Do smoke
+użyto tego samego PORT telefonu/listenera, bez osłabienia transport checks.
+NOT RUN: pełny reboot urządzenia, fizyczne NOTE/ASK/TTS z realnymi modelami w tym
+pairing smoke. Nie utożsamiamy app restart z reboot ani synthetic runtime z real AI.
 
-Po review, dopiero jako OSOBNA zatwierdzona operacja i przy zatrzymanych writerach:
-.venv\Scripts\python.exe scripts\security_schema.py upgrade --confirm-main-security-schema --backup-output C:\path-outside-repo\new-security-before.dump
-.venv\Scripts\python.exe scripts\db_doctor.py
-.venv\Scripts\python.exe scripts\security_schema.py check
-Następnie restart backendu. Ta procedura nie została wykonana na main w 4D.2A.
-W tym zadaniu heads zwrócił kulai_security_0001; check na main poprawnie zwrócił
-UNAVAILABLE / exit 1, potwierdzając brak zainstalowanego schematu.
+12. Main data integrity i Git
+Końcowy strict doctor: PASS, 17 checks.
+Full consistent read-only main snapshot before == after, wszystkie rekordy/pola.
+Revision: kulai_memory_0004. Security: None — nie zainstalowano żadnych tabel.
+Memories=9; SHA256 c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
+Vectors=9; SHA256 75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
+Tombstones=1; SHA256 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Snapshot files poza repo: %TEMP%/kulai-task4d2b-main-before.json i -after.json.
+Canonical graph nadal 0004; security graph head 0002 (tylko kod/owned DB).
+Git diff --check PASS; osobno kontrola new/untracked files; vendor clean/pin unchanged.
+Stan przed bieżącym poleceniem commit/push: index pusty, HEAD/upstream = 010e324,
+zmiany 4D.2B pozostawione do review. Zatwierdzenie tego zakresu opisano w punkcie 1.
+Bez zmian namespace/model/dimension, ingestion IDs, tombstone/idempotency, danych,
+Voice Note v1, canonical RAG/citations, provider reuse czy KulAI Modules.
 
-7. FastAPI composition i ownership
-W SECURE bez injected source app_factory tworzy ReaderBinding i managed lifecycle.
-Lifespan: strict canonical+security verification -> jeden owned security pool ->
-istniejący voice runtime lifespan. Shutdown: voice/resources -> unbind reader ->
-drained dispose security pool. Lifecycles startup/shutdown są serializowane.
-Nie trzymamy sesji security podczas audio/Whisper/BGE/Qwen; sprawdzono pool checkout=0
-w samych callbackach operacji, nie tylko po zakończeniu HTTP.
-Pool: echo=False, hide_parameters=True, pre_ping, statement timeout 4 s,
-lock timeout 3 s, zaufany search_path pg_catalog,public; jawne public tables.
-Brak verified schema/błąd storage odmawia prywatnych operacji; AI startup i
-reconciliation nie startują przy niedostępnej security. Health pozostaje liveness.
-LOCAL_DEV nie tworzy security pool, nie wykonuje DDL i zachowuje ADB reverse.
-Injected readers pozostają borrowed; istniejące testy/integration ports zachowane.
-
-8. Pomiar kosztu ponownej autoryzacji WS
-Syntetyczny, rzeczywisty TCP/Uvicorn + PostgreSQL audio stream:
-128 binary frames, 131 lookup (handshake + start + 128 frames + stop),
-262 instrukcje adaptera: READ ONLY setup + coherent SELECT JOIN per lookup.
-Przebiegi: 294.12 ms, 230.47 ms oraz 203.70 ms end-to-end; pool checkout=0.
-Count pochodzi z SQLAlchemy statement events; driver BEGIN/COMMIT i pool pre-ping
-housekeeping nie są zaliczone do tego licznika, lecz ich czas mieści się w pomiarze.
-Native Android ma FRAME_SAMPLES=3200 przy 16 kHz: 200 ms / ok. 5 frames/s,
-czyli typowo 10 instrukcji SQL adaptera/s plus housekeeping transakcji/pool.
-Nie ma potrzeby cache optymalizacji dla zmierzonego lokalnego obciążenia.
-Pozostawiono skuteczne sprawdzanie aktualnego stanu przy każdej ramce. Nie dodano
-nieograniczonego cache ani opóźnienia revocation. Większy deployment wymaga osobnego
-pomiaru; ewentualny bounded cache wymaga jawnego revocation budget i fresh STOP/RETRY.
-Idle sockets i już admitted operacje mają dotychczasowe v1 semantics; brak push timer.
-
-9. Faktycznie wykonane testy i review
-Środowiska PyCharm:
-backend/.venv/Scripts/python.exe — Python 3.14.5 (backend/integration).
-.venv/Scripts/python.exe — Python 3.13.15 (root tools/preflight).
-PostgreSQL 18.6. Odczytane wersje root SDK: SQLAlchemy 2.1.2, asyncpg 0.31.0,
-Alembic 1.20.0. Nie dodano nowych zależności.
-
-PASS — finalny pełny backend unit/regression:
-backend/.venv/Scripts/python.exe -m pytest backend/tests --ignore=backend/tests/integration -q --tb=short
-826 passed, 1 upstream warning, 55.49 s.
-Obejmuje Memory/RAG/indexing/tombstone/backup/Desktop/TTS/runtime/HTTP/WS oraz
-nowe runtime lifecycle/fail-closed/cancellation/dispose error tests.
-
-PASS — pełny nowy real PostgreSQL suite na owned temporary DBs:
-KULAI_RUN_POSTGRES_INTEGRATION=1; pytest backend/tests/integration/test_security_postgres.py
-25 passed, 1 upstream warning, 66.13 s.
-Trwałość po odtworzeniu adaptera, trusted/revoked device, token revoke, project/actions,
-jedna rotacja z 8, rotate/revoke, device revoke/issue, dwa rzeczywiste procesy,
-commit/rollback fault, cancelled DB lookup, schema tampering, actual full backup/
-restore, rollback całego DDL, wszystkie prywatne HTTP/WS, app restart, WS query cost,
-no canonical/AI on denial, storage fault, LOCAL_DEV compatibility.
-
-PASS — po końcowym review dodatkowy focused run:
-test_security_runtime.py + two_processes + managed_secure_endpoints
-9 passed, 13.11 s; ponownie zmierzone audio 203.70 ms, zero pool checkouts.
-Dodatkowo finalny test guarded migration/backup/restore wzmocniono NIEPUSTYMI
-owned canonical fixtures (2 Memories, 1 vector, 1 tombstone) i wykonano ponownie.
-Sprawdzono identyczne canonical fingerprinty przed/po additive security install,
-nie tylko puste tabele. Wynik tego osobnego testu: 1 passed, 1 warning, 11.47 s.
-Po nim ponownie wykonano strict doctor (17 checks) i pełny read-only snapshot main;
-wszystkie fingerprinty i revision pozostały identyczne, security=None.
-
-PASS — root tools/regression:
-.venv/Scripts/python.exe -m pytest tests -q --tb=short
-270 passed, 1 skipped, 2.81 s.
-Skip: test symlink, brak uprawnień tworzenia symlink w tym procesie Windows.
-
-PASS — existing real history/backup/restore and transport integrations:
-test_pre_migration_backup_postgres.py, test_tombstone_backup_postgres.py,
-test_security_uvicorn.py, test_assistant_uvicorn.py, test_speech_uvicorn.py
-17 passed, 2 skipped, 83.42 s.
-Potwierdzono real 0002/0003/0004 dumps, retired ingestion behavior, tamper rejection,
-loopback transport/launcher i disconnect. Dwa skip to real BGE/Qwen opt-ins — nie PASS.
-
-PASS — Android fresh regression i build:
-gradlew.bat testDebugUnitTest assembleDebug --rerun-tasks --console=plain
-BUILD SUCCESSFUL, 45 executed tasks, 26 s.
-Raporty XML: 20 suites, 180 tests, failures=0, errors=0, skipped=0.
-Pierwszy invocation był UP-TO-DATE; celowo uruchomiono ponownie zadania, zamiast
-uznać samo użycie cache za wykonanie nowych testów.
-APK: mobile/android/app/build/outputs/apk/debug/app-debug.apk, 12 627 345 bajtów.
-SHA-256: ac1ed3ba8494b34b9ad14969f5460b6e75d87d77326a94bef1a368adec977f12.
-Nie zmieniano kodu Androida w 4D.2A.
-
-PASS — security/architecture/data-integrity/transaction/error self-review.
-PASS — git diff --check; również no-index check wszystkich nowych 15 plików.
-PASS — unchanged vendor pin/clean vendor; przed poleceniem commit/push index był pusty.
-PASS — strict db_doctor i pełne read-only main snapshots przed/po.
-Upstream warning: deprecated anyio BlockingPortal alias w Starlette TestClient.
-Build warning: istniejący libandroidx.graphics.path.so pakowany bez strippingu.
-Nie wykonano real Whisper/BGE/Qwen inference ani całego zestawu opcjonalnych model
-integrations. Nie oznaczono ich jako PASS. Fizyczny Android smoke nie wykonany;
-aktualne adb devices nie wykryło urządzenia/emulatora. Nie instalowano APK.
-
-10. Główna baza i niezmienność danych
-Przed/po: kompletne snapshoty z transakcji REPEATABLE READ, READ ONLY, rollback,
-engine dispose. Fingerprinty obejmują wszystkie canonical fields, namespace,
-embedding values/metadata/timestamps, ingestion IDs i tombstones.
-Canonical head BEFORE = AFTER = kulai_memory_0004.
-Memory count=9, SHA-256:
-c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
-Vector count=9, SHA-256:
-75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
-Tombstone count=1, SHA-256:
-33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Security snapshot na main = None; żadnych nowych tabel/device/token na main.
-Cały BEFORE/AFTER identyczny po uwzględnieniu opcjonalnego security=None starego
-formatu snapshotu. Nie pominięto istniejących danych przez tę normalizację.
-Strict doctor po zmianie ma 17 checks i PASS.
-Pliki techniczne poza repo: TEMP/kulai-task4d2a-main-before.json oraz -after.json.
-Nie wypisywano treści Memory, embeddingów, tokenów/digestów lub credentials DB.
-Migracje i wszystkie fixture writes dotyczyły wyłącznie marker-verified owned DBs;
-legacy drill używał main jedynie do kontrolnego read-only fingerprint comparison.
-Nie zmieniono vendor, primary migrations, canonical ORM/data/domain, namespace,
-ingestion IDs, idempotency, protocols v1, RAG citations, TTS, provider reuse ani bind.
-Nie uruchomiono backendu na 0.0.0.0 i nie włączano LAN/internetu.
-
-11. Zmodyfikowane/nowe pliki 4D.2A
-Istniejące:
+13. Zmodyfikowane pliki (35)
+Istniejące (20):
 README.md
 backend/README.md
+backend/src/kulai_memory/api/authentication.py
 backend/src/kulai_memory/app_factory.py
-backend/src/kulai_memory/database_safety.py
-backend/tests/test_security_transport.py
-tests/test_tombstone_fingerprint.py
-docs/DATA_SAFETY.md
-docs/LOCAL_ASSISTANT_TRANSPORT.md
-wynik.txt
-
-Nowe:
-backend/security_alembic.ini
-backend/security_migrations/env.py
-backend/security_migrations/versions/kulai_security_0001.py
-backend/src/kulai_memory/security_persistence/__init__.py
-backend/src/kulai_memory/security_persistence/schema_v1.py
-backend/src/kulai_memory/security_persistence/postgres.py
+backend/src/kulai_memory/security/authentication.py
 backend/src/kulai_memory/security_persistence/integrity.py
 backend/src/kulai_memory/security_persistence/migration.py
 backend/src/kulai_memory/security_persistence/runtime.py
-backend/tests/security_postgres_fixtures.py
-backend/tests/security_postgres_worker.py
 backend/tests/integration/test_security_postgres.py
-backend/tests/test_security_runtime.py
-scripts/security_schema.py
+backend/tests/security_postgres_worker.py
+docs/DATA_SAFETY.md
+docs/LOCAL_ASSISTANT_TRANSPORT.md
+mobile/android/app/src/main/java/com/kulai/memory/MainActivity.kt
+mobile/android/app/src/main/java/com/kulai/memory/MemoryClientScreen.kt
+mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryViewModel.kt
+mobile/android/app/src/main/java/com/kulai/memory/transport/MemoryHttpClient.kt
+mobile/android/app/src/main/java/com/kulai/memory/transport/RequestAuthentication.kt
+mobile/android/app/src/main/java/com/kulai/memory/transport/VoiceSocket.kt
 tests/test_security_schema.py
+wynik.txt
+Nowe (15):
+backend/security_migrations/versions/kulai_security_0002.py
+backend/src/kulai_memory/api/pairing_http.py
+backend/src/kulai_memory/pairing/__init__.py
+backend/src/kulai_memory/pairing/domain.py
+backend/src/kulai_memory/security_persistence/pairing.py
+backend/src/kulai_memory/security_persistence/schema_v2.py
+backend/tests/integration/test_pairing_postgres.py
+backend/tests/test_pairing_transport.py
+mobile/android/app/src/main/java/com/kulai/memory/pairing/CredentialVault.kt
+mobile/android/app/src/main/java/com/kulai/memory/pairing/PairingController.kt
+mobile/android/app/src/main/java/com/kulai/memory/pairing/PairingHttpClient.kt
+mobile/android/app/src/main/java/com/kulai/memory/pairing/ServerConnectionScreen.kt
+mobile/android/app/src/main/java/com/kulai/memory/pairing/ServerOrigin.kt
+mobile/android/app/src/test/java/com/kulai/memory/pairing/PairingTest.kt
+scripts/pairing_admin.py
 
-12. Ograniczenia, ryzyka i blokady
-- Kod zweryfikowano, użytkownik polecił commit/push; main migration niewykonana.
-  SECURE na obecnym main prawidłowo odmawia private access; LOCAL_DEV działa dalej.
-- Brak pairing UI, QR, token issuance endpoints, discovery, TLS/WSS/LAN, internet,
-  MCP, multi-user Memory i Memory Intelligence; nic z tego nie zostało rozpoczęte.
-- Source DB jest zaufanym elementem systemu. To nie ochrona przed administratorem
-  mogącym dowolnie modyfikować PG/backup; startup schema checks nie zastępują DB ACL.
-- Stary bearer po revoke nie reaktywuje się przez transakcyjne race, ale posiadanie
-  skradzionego nadal aktywnego bearer pozwala podszyć się pod jego urządzenie.
-- Revocation sprawdzane przy każdej kolejnej ramce/request; admitted operacje nie
-  są retroaktywnie cofane. Idle socket nie ma serwerowego push expiry/revocation.
-- Device revoke jest terminalny w v1; politykę ponownego parowania trzeba zaprojektować
-  jawnie w 4D.2B, zamiast automatycznie re-trustować odwołany UUID.
-- COMMIT transport loss może dać niepewny wynik; brak automatic retries/false success.
-- Manual przyszły restore starszego punktu czasu może cofnąć security state.
-  Wznowienie po main recovery wymaga jawnej polityki revoke/rotation/verification;
-  automatycznego restore main nie wdrażano. Aktualne restore verification i
-  verified-source checks porównują także security i odrzucają stale/mismatched archive.
-- Obecny pomiar to local synthetic stream, bez real models/physical device latency.
-  Nie deklaruje się wyników load testu dużego deploymentu ani jakości mikrofonu/TTS.
-- Brak blokady wymagającej dodatkowego input do implementacji. Jedynie aktywacja
-  storage na main wymaga osobnego review/zgody na przygotowaną procedurę upgrade.
+14. Review, ograniczenia i blokady wdrożenia
+Przeprowadzono self-review security/architecture, permission boundaries, exact ASGI
+exception, lock order, durable deny counters, replay/rollback, cancellation/pool,
+origin/redirect, encrypted persistence i backup/schema compatibility. Testy niezależnie
+sprawdziły te granice; nie twierdzimy, że wykonano zewnętrzny audyt.
+Main SECURE pairing pozostaje niedostępny dopóki użytkownik osobno nie zatwierdzi
+pełnej procedury instalacji security. To zamierzona granica, nie auto-fallback.
+Bearer i receiver capabilities nie są device attestation. Keystore key hardware
+backing nie jest gwarantowane; compromised OS/local admin pozostają poza modelem.
+Idle WS i już admitted operacje zachowują poprzednie v1 revocation semantics.
+Rate limits mogą odmówić podczas przeciążenia; nie stanowią publicznego DDoS ingress.
+Nie ma trwałego loginu poza ważnością tokenu ani refresh credential/recovery replay.
+Pięć minut ogranicza registration/approval/claim; zużyta sesja zachowuje receiver
+capability wyłącznie do własnego status/revoke do jawnego prune, także do pokazania
+Expired/Revoked. Nie pozwala ona odzyskać, wydać ani przedłużyć tokenu.
+Offline local removal/server change może pozostawić server-side orphan; explicit revoke.
+UI pokazuje prywatny client shell po uwierzytelnieniu; szczegółowe scope denial
+pozostaje w wspólnym backend policy (brak multi-project isolation).
+Nie uruchomiono 0.0.0.0, LAN, VPS, TLS termination, proxy/tunelu, discovery, QR,
+MCP, Multi-user Memory ani Memory Intelligence. Backend/DB/model endpoints prywatne.
 
-13. Plan TASK 4D.2B
-1) Review i zatwierdzenie 4D.2A; osobna kontrolowana instalacja security na main,
-   zatrzymani writers, retained backup/actual restore, strict doctor i restart.
-2) Zaprojektować local pairing z jawnie zatwierdzanym PENDING -> TRUSTED,
-   krótkim/jednorazowym challenge, ograniczonym TTL i least-privilege actions.
-   Nie wystawiać obecnego CredentialManager jako anonymous issuer.
-3) Zdefiniować device re-pair/revoke, expiry i rotation semantics; zapewnić obsługę
-   duplicate pairing/retry bez reaktywowania revoked credentials.
-4) Android: pairing screen i platformowo chroniony credential store, osobny publiczny
-   UUID i sekret, nonblocking/thread-safe snapshot w istniejącym CredentialProvider.
-   Nie dodawać secrets do BuildConfig/resources/logs/query.
-5) Przetestować pairing/refusal/restart/expiry/revoke/rotation/concurrency, także
-   oba WS i wszystkie HTTP flows, bez zmiany NOTE/ASK/MEMORY/TTS/protocol v1.
-6) Physical Android smoke na paired SECURE oraz LOCAL_DEV/ADB reverse; sprawdzić
-   reconnect po rotation i brak nowych AI/data operations po odmowie.
-7) QR, LAN/TLS/WSS, discovery, internet i MCP pozostają odrębnymi zakresami;
-   działający persistent store nie jest zgodą na otwarcie sieci.
+15. Plan TASK 4D.3 — bez wdrożenia w tym zadaniu
+1) Zmiany 4D.2B objęto osobnym poleceniem commit/push użytkownika; dalsze zadania
+   i instalacja main wymagają osobno ustalonego zakresu.
+2) Osobno autoryzowana instalacja v1/v2 na main wg backup -> restore verify ->
+   upgrade -> doctor; physical SECURE smoke z docelowym canonical/real providers.
+3) Zaprojektować jawne trusted ingress dla topology Android/Desktop/AI -> HTTPS/WSS
+   -> VPS -> private backend connection. Rozdzielić TLS/proxy validation od identity;
+   nie ufać samym IP/Forwarded i nie wystawiać PostgreSQL/model endpoints.
+4) Ustalić publiczne origin/certificate/Host policies, request-rate limits, proxy
+   timeout/audio streaming/cancellation i replay/load requirements przed deployment.
+5) Wybrać prywatny tunel jako osobną decyzję; inferencja może pozostać na lokalnym GPU.
+6) Rozstrzygnąć osobny refresh credential/protocol: scope-preserving rotation,
+   revocation, offline recovery i durable Android atomic save/ambiguous delivery.
+   Dopóki brak kompletnie przetestowanego protokołu, expiry oznacza re-pair.
+7) Dołożyć instrumented reboot/key invalidation/backup-transfer tests oraz pełny
+   physical NOTE/ASK/MEMORY/TTS przy approved SECURE main, bez zmiany Voice v1/RAG.
+8) Desktop/AI clients mogą wdrożyć ten sam neutralny protokół z własnym storage;
+   multi-device nie wymaga wspólnego tokenu. MCP/QR/discovery osobnymi zakresami.
 
-Sprawdzone primary references:
-https://www.postgresql.org/docs/18/explicit-locking.html
-https://alembic.sqlalchemy.org/en/latest/cookbook.html#using-asyncio-with-alembic
-https://docs.sqlalchemy.org/en/20/dialects/postgresql.html
-Konkretne race, dialect/schema i backup/restore zweryfikowano również empirycznie
-na lokalnym PostgreSQL 18.6, nie tylko na podstawie dokumentacji.
+Primary references sprawdzone podczas pracy:
+https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec
+https://developer.android.com/identity/data/autobackup?hl=en
+Wnioski dotyczące actual AndroidKeyStore/restore/races dodatkowo sprawdzono empirycznie
+na fizycznym Androidzie i owned PostgreSQL; nie polegano wyłącznie na dokumentacji.

@@ -15,9 +15,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kulai.memory.models.MemoryDetail
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import com.kulai.memory.pairing.ServerConnectionScreen
 
 @Composable
 fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermission: () -> Unit) {
+    val connection by viewModel.connection.state.collectAsStateWithLifecycle()
+    var showConnection by remember { mutableStateOf(false) }
+    if (showConnection || !connection.privateAccess) {
+        ServerConnectionScreen(viewModel.connection, BuildConfig.DEBUG) { showConnection = false }
+        return
+    }
     val tab by viewModel.root.tab.collectAsStateWithLifecycle()
     val note by viewModel.state.collectAsStateWithLifecycle()
     val ask by viewModel.assistant.state.collectAsStateWithLifecycle()
@@ -25,7 +32,9 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
     val capture by viewModel.microphone.owner.collectAsStateWithLifecycle()
     val speech by viewModel.speech.state.collectAsStateWithLifecycle()
     val controls = memoryClientControls(note, ask, capture)
-    Scaffold(bottomBar = {
+    Scaffold(topBar = {
+        TextButton(onClick = { showConnection = true }, modifier = Modifier.statusBarsPadding()) { Text("SERVER CONNECTION") }
+    }, bottomBar = {
         NavigationBar {
             MemoryTab.entries.forEach { destination ->
                 NavigationBarItem(selected = tab == destination,

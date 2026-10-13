@@ -195,7 +195,7 @@ def test_strict_doctor_and_snapshot_reject_broken_security_schema(tamper):
         async with owned_store() as (_, _, target, factory, _):
             assert (await run_database_doctor(async_url=target.async_url, require_security=True)).ok
             sql = {"constraint": "ALTER TABLE public.kulai_security_tokens DROP CONSTRAINT ck_security_token_lifetime",
-                   "partial": "DROP TABLE public.kulai_security_tokens",
+                   "partial": "DROP TABLE public.kulai_security_tokens CASCADE",
                    "extra": "ALTER TABLE public.kulai_security_tokens ADD COLUMN plaintext text",
                    "revision": "UPDATE public.kulai_security_version SET version_num='unknown'",
                    "index": "DROP INDEX public.ix_security_tokens_device"}[tamper]
@@ -221,7 +221,7 @@ def test_additive_guarded_migration_backup_restore_and_security_fingerprints(tmp
             after = await database_snapshot_url(target.async_url)
             assert after.memories == before.memories and after.vectors == before.vectors and after.tombstones == before.tombstones
             assert after.revision == before.revision == expected_alembic_heads() == ("kulai_memory_0004",)
-            assert security_migration_heads() == after.security.revision == ("kulai_security_0001",)
+            assert security_migration_heads() == after.security.revision == ("kulai_security_0002",)
             assert backup.source_snapshot == before and backup.path.is_file()
             manager, device, token = await credential(store)
             full = await database_snapshot_url(target.async_url)
@@ -374,7 +374,7 @@ def test_postgres_denials_all_private_routes_without_memory_or_ai(state, capsys)
             async with server(app) as port:
                 if state == "storage_failure":
                     async with factory() as session:
-                        await session.execute(sa.text("DROP TABLE public.kulai_security_tokens")); await session.commit()
+                        await session.execute(sa.text("DROP TABLE public.kulai_security_tokens CASCADE")); await session.commit()
                 async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
                     for method, path in HTTP:
                         result = await client.request(method, path, headers=headers, content=b"PRIVATE_INVALID_BODY")

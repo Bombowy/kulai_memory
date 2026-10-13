@@ -4,8 +4,8 @@ Start with `.venv\Scripts\python.exe scripts\dev.py`. It binds exclusively to
 `127.0.0.1:8000`; the named dev launcher explicitly selects `LOCAL_DEV` when no
 security mode is configured. An existing `KULAI_SECURITY_MODE=SECURE` in environment
 or `backend/.env` remains secure. History/detail return canonical user data only
-after the common access policy. Do not expose the port to a network. LAN/WSS/pairing
-remain future work. No CORS wildcard is added.
+after the common access policy. Do not expose the port to a network. Local pairing
+is described below; LAN/WSS/VPS deployment remains future work. No CORS wildcard is added.
 
 Desktop stays in process. The server performs no audio synthesis and stores neither questions
 nor answers. It uses existing canonical RAG grounding/citation rules, with no
@@ -333,7 +333,8 @@ safe operation stage/type/code; no URL, header, caller request ID, body, digest,
 credential or private exception payload is logged. Debug tracebacks are disabled.
 Android uses the same header policy for all HTTP operations and both WS handshakes,
 binds credentials to one origin and disables redirects. Debug opts into LOCAL_DEV;
-release defaults to SECURE with an empty provider until pairing is implemented.
+release defaults to SECURE; TASK 4D.2B supplies an origin-bound Keystore-backed
+provider. A fresh SECURE client has no credentials until pairing completes.
 
 The security integration suite uses real Uvicorn/HTTP/WS over random loopback ports
 and controlled providers/storage. It performs no main DB writes, migrations or
@@ -357,8 +358,9 @@ Voice resources close before the security pool; disposal drains on cancellation.
 Borrowed readers are not closed by the app. No application authorization cache is
 introduced; prepared SQL statement caching does not cache credential state.
 
-The independent graph is `backend/security_alembic.ini` with revision
-`kulai_security_0001` and `public.kulai_security_version`. The canonical graph/head
+The independent graph is `backend/security_alembic.ini` with its initial revision
+`kulai_security_0001` and `public.kulai_security_version`; TASK 4D.2B extends its
+head to `kulai_security_0002` while accepting valid v1 backups. The canonical graph/head
 stays `kulai_memory_0004`. Devices/tokens live in `public.kulai_security_devices`
 and `public.kulai_security_tokens`, with UUID keys, owner FK, unique SHA-256 digest,
 aware timestamps, validated lifetime/status/action array and nullable project UUID.
@@ -430,3 +432,173 @@ and 10 authentication SQL statements/s. This supports retaining fresh per-frame
 checks in the current local phase. No cache optimization is necessary for this
 measurement; larger deployments need their own measurements. Idle sockets and
 already admitted operations retain the revocation semantics documented in 4D.1.
+# TASK 4D.2B: threat model parowania (przed implementacją)
+
+Trust boundaries: local administrator CLI, untrusted native client, ASGI transport,
+pairing application, PostgreSQL transaction, Android Keystore. The administrator
+may explicitly reveal a short-lived invitation; only a specific session/device can
+be approved. Neither device UUID, device name nor client IP proves identity.
+
+An invitation uses 256 random bits and expires in five minutes. The phone generates
+an independent 256-bit receiver secret, persists it encrypted before registration,
+and proves possession on status/cancel/claim. Only digests enter PostgreSQL. The
+first accepted registration binds the invitation to that receiver and a newly
+allocated PENDING device. Exact retries are idempotent; a different receiver cannot
+reuse the invitation. Administrator approval locks that session and device. Claim
+locks them again, checks expiry/trust and atomically issues one bounded access token
+and consumes the session. No plaintext token is retained for replay. If the claim
+response or local durable save is lost, re-pair and revoke the orphan device.
+
+Threats considered: stolen invitation, guessed public identifiers, receiver
+substitution, replay, approve/claim/revoke races, multiple backend processes,
+malformed/oversized inputs, credential logging, backup export, lost Keystore key,
+cross-origin requests and redirection, storage faults and disconnects. A stolen
+invitation can occupy a pending session; the administrator must compare session,
+device identifiers and receiver verification code shown by both CLI and phone.
+It cannot bypass explicit approval. Failed proofs have a durable attempt budget;
+global fixed-window and active/total session limits bound abuse across processes.
+Attackers can exhaust a known session's budget (availability loss, never trust).
+
+Only exact native POST pairing routes bypass bearer authentication, and only in
+SECURE on actual loopback listener AND loopback peer, with no Origin/proxy headers,
+query parameters or redirects. This is a transport restriction, not device identity.
+VPS/HTTPS requires a future explicit trusted ingress policy; headers cannot enable
+it. No public deployment is introduced here. LOCAL_DEV remains explicitly local.
+
+Android uses AES-GCM with an Android Keystore key and atomic encrypted files in
+noBackupFilesDir. Credential snapshots bind to a canonical configured origin;
+external origins require HTTPS. Platform certificate/hostname verification remains
+enabled. No device attestation or hardware-backed-key guarantee is claimed.
+Access tokens keep the existing one-hour default and maximum bounded lifetime.
+There is no refresh secret or automatic extension in this task: expired credentials
+require pairing again. Existing trusted administrative rotation remains available.
+
+## Pairing contract and administration (TASK 4D.2B)
+
+Pairing is disabled in LOCAL_DEV. SECURE needs verified canonical and security v2
+schemas. A missing/v1 schema never implicitly creates or upgrades tables. These
+exact POST routes are the sole pre-auth exception, with the local ingress checks
+specified in the threat model. Content-Type is JSON, optionally UTF-8 charset;
+duplicate headers/JSON keys, unknown keys, queries and bodies over 4096 bytes are
+refused. Browser Origin and all Forwarded/X-Forwarded headers are refused. Native
+proofs use `Authorization: Pairing <43-character secret>`. Responses use no-store;
+invalid state/proof has one generic error without device enumeration.
+
+| Route | Proof | JSON body | Result |
+| --- | --- | --- | --- |
+| `/api/pairing/request` | invitation secret | `session_id`, `receiver_secret`, `client_id`, `device_label` | Bound PENDING view; exact retry is idempotent |
+| `/api/pairing/status` | receiver secret | `session_id` | Own state, expiry, device/client UUID, label and public comparison code |
+| `/api/pairing/claim` | receiver secret | `session_id` | Once: `device_id`, `token_id`, `access_token`, `expires_at` |
+| `/api/pairing/cancel` | receiver secret | `session_id` | Cancel pending/approved; for claimed session revoke its own device |
+
+Device labels permit 1..48 ASCII letters/digits/spaces/dot/underscore/hyphen. The
+server allocates device UUID separately from the phone's public registration UUID.
+The comparison code is the full SHA-256 receiver-secret digest; possession of that
+public digest cannot authenticate. Administrator compares session, device and code
+with the phone through a trusted channel. Approval is not automatic and cannot
+change invitation permissions. There is no anonymous CredentialManager adapter.
+
+Session TTL: five minutes. Access TTL: one hour by default, administrator configurable
+1..86400 seconds; claim cannot change it. At most eight active sessions and 128 retained
+sessions; eight failed proofs per session; global 120 pre-auth service calls/minute
+across all processes. Android polls PENDING every five seconds and then stops.
+Failed proof counters commit before denial. In-memory caches are not used. Limits
+provide bounded local operation, not public Internet DDoS protection. Known-session
+budget exhaustion can deny a legitimate pairing; create a new invitation after review.
+
+Trusted local CLI (loopback DB and development environment only):
+
+```powershell
+.venv\Scripts\python.exe scripts\pairing_admin.py invite --show-secret --permissions memory.read memory.write assistant.ask assistant.speech_plan
+.venv\Scripts\python.exe scripts\pairing_admin.py pending
+.venv\Scripts\python.exe scripts\pairing_admin.py approve --session-id SESSION_UUID --device-id DEVICE_UUID --verification-code RECEIVER_SHA256
+.venv\Scripts\python.exe scripts\pairing_admin.py reject --session-id SESSION_UUID --device-id DEVICE_UUID
+.venv\Scripts\python.exe scripts\pairing_admin.py devices
+.venv\Scripts\python.exe scripts\pairing_admin.py revoke --device-id DEVICE_UUID
+.venv\Scripts\python.exe scripts\pairing_admin.py prune-expired --confirm
+```
+
+Only `invite --show-secret` prints a one-time invitation. No CLI operation prints a
+long-term access token. Approval requires all three public selectors/code. Pruning
+removes expired invitations and expired terminal sessions with no live trusted token;
+abandoned unclaimed devices are revoked, device/token audit records remain. It frees
+the retention budget; no automatic maintenance occurs on main or during startup.
+
+Transaction lock order: global pairing limiter, session, device, token. Trusted
+credential writes keep the existing device/token order. Claim-vs-revoke linearizes:
+if revoke wins claim fails; if claim wins the committed token becomes inactive when
+device revoke commits. Concurrent claims yield exactly one credential. Interrupted
+or ambiguous commit/delivery requires re-pair; no retry recovers a consumed bearer
+secret. Cancelled/disconnected requests cancel their owned transaction and drain
+the pool. Storage exceptions/parameters never enter public responses or diagnostics.
+
+Android Server Connection validates a canonical origin (no userinfo/path/query/fragment).
+Release requires HTTPS. Debug permits HTTP only on loopback for ADB; it also retains
+the explicit LOCAL_DEV switch. Configure a SECURE local test at `http://127.0.0.1:PORT`
+and use `adb reverse tcp:PORT tcp:PORT`; Host/listener ports must agree. APPLY SERVER
+replaces the local connection record and requires a fresh pairing for the selected
+origin. Before changing origin, unpair/revoke old access; if offline, use administrator
+CLI to remove orphaned server access later.
+
+The phone saves receiver state before registration and a claim-intent marker before
+redeeming. It persists the complete encrypted credential before publishing the
+nonblocking snapshot. Registration retries prove both secrets; once registered,
+the encrypted invitation is removed and only the receiver proof remains. Interrupted
+claim or failed credential save never unlocks private functions. On app restart,
+the client checks its own session/token state before publishing credentials. Expiry
+clears the snapshot, no refresh is claimed. HTTP 401 / WS refusal uses common
+RequestAuthentication callbacks and verifies revocation; it cannot switch to LOCAL_DEV.
+Local unpair always removes the secret; server cancellation is best-effort and offline
+removal may need explicit administrator revocation. Loss of Keystore key/ciphertext
+requires pairing again. System clock error can deny access early; server time remains
+authoritative for expiry and approval.
+
+Storage is a single AES-GCM encrypted AtomicFile under noBackupFilesDir, not ordinary
+SharedPreferences; explicit fd sync and read-after-write verify replacement before
+publishing a credential. Ciphertext version is authenticated as AAD. Android backup is
+disabled and that directory is excluded from automatic backup/transfer. See the
+[Keystore key-generation contract](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec)
+and [Android backup exclusions](https://developer.android.com/identity/data/autobackup?hl=en).
+FLAG_SECURE protects sensitive screens. JVM tests use injected crypto/storage ports;
+actual AndroidKeyStore persistence was also tested on a physical SM-S938B (Android 16).
+No device attestation, hardware-key guarantee or protection against a compromised
+OS/administrator is asserted.
+
+### Validation and manual installation
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION='1'
+backend\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_pairing_postgres.py -q
+backend\.venv\Scripts\python.exe -m pytest backend/tests --ignore=backend/tests/integration -q
+cd mobile/android
+.\gradlew.bat testDebugUnitTest assembleDebug --rerun-tasks --console=plain
+```
+
+Integration mutations/migrations/restore go only to marker-owned temporary databases.
+Physical smoke used an isolated owned DB, synthetic Memory/AI runtime and a random
+loopback port: PENDING restart, receiver comparison, explicit approval, Paired restart,
+authenticated MEMORY, administrator revoke and refusal with no extra private data
+call, local unpair and restoration of LOCAL_DEV/ADB 8000. Device reboot and physical
+voice NOTE/ASK/TTS with real models were not run in that pairing smoke. Backend
+protocol/regression tests cover those existing contracts independently.
+
+Main installation is NOT part of this change. After separate user authorization,
+stop writers/clients/admin commands; strict doctor -> new full backup -> actual
+restore verification -> immediate source/archive revalidation -> guarded upgrade
+using `security_schema.py upgrade --confirm-main-security-schema --backup-output`
+outside the repo -> strict doctor and security check -> restart SECURE. The same
+procedure accepts an absent security schema (installs v1+v2) or valid v1 (adds v2).
+Existing canonical/device/token fingerprints must match; no destructive downgrade
+is supported. Historical canonical-only/v1 backups retain explicit absence markers.
+
+The five-minute TTL governs registration, approval and redemption. A consumed
+session retains a restricted receiver capability for its own status/revocation,
+including an expired/revoked indication, until explicit administrator pruning.
+It cannot issue/recover/refresh a token after consumption or invitation expiry.
+
+Future VPS topology is Android/Desktop/AI -> HTTPS/WSS -> VPS -> private backend
+connection. Pairing proofs, device identities and the application service are not
+IP/USB dependent. The ingress policy must explicitly validate trusted TLS termination,
+Host/origin and proxy identity before enabling a public route. This task does not
+trust forwarded headers or deploy LAN, a tunnel, TLS, discovery, QR or MCP. PostgreSQL,
+Memory and model endpoints remain private; GPU inference need not move to the VPS.

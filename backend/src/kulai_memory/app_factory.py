@@ -16,6 +16,8 @@ from .settings import get_settings
 from .security import Authenticator, AuthorizationPolicy, SecurityConfig, SecurityMode, SecurityReader
 from .security.storage import DenyAllSecurityReader
 from .api.authentication import AuthenticationMiddleware
+from .api.pairing_http import create_pairing_router
+from .pairing.domain import PairingService
 from .security_persistence.runtime import PostgresSecurityRuntime, ReaderBinding
 
 
@@ -24,7 +26,8 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
                security_reader: SecurityReader | None = None,
                authenticator: Authenticator | None = None,
                authorization_policy: AuthorizationPolicy | None = None,
-               security_runtime_factory: Callable[[], PostgresSecurityRuntime] | None = None) -> FastAPI:
+               security_runtime_factory: Callable[[], PostgresSecurityRuntime] | None = None,
+               pairing_service: PairingService | None = None) -> FastAPI:
     """Build the generated host application."""
 
     settings = get_settings()
@@ -49,7 +52,7 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
         openapi_url="/openapi.json" if config.mode is SecurityMode.LOCAL_DEV else None,
         redoc_url="/redoc" if config.mode is SecurityMode.LOCAL_DEV else None,
         routers=(create_health_router(), memory_router, create_memory_http_router(), create_assistant_ws_router(),
-                 create_speech_http_router()),
+                 create_speech_http_router(), create_pairing_router(service=pairing_service)),
     )
     # PL: logger vendor ufa nagłówkom klienta. EN: replace at the host boundary;
     # log only fixed operation/status fields, without modifying the submodule.

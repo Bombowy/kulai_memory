@@ -11,6 +11,9 @@ from kulai_memory.database_safety import (
 )
 from kulai_memory.security import CredentialManager, SecurityError
 from kulai_memory.security_persistence.postgres import PostgresSecurityStore
+from kulai_memory.security_persistence.pairing import PostgresPairingStore
+from kulai_memory.pairing.domain import PairingService, PairingError
+from kulai_memory.security.authentication import utc_now
 
 
 async def run():
@@ -39,9 +42,17 @@ async def run():
             elif action == "revoke_device":
                 await manager.revoke_device(UUID(data["device_id"]))
                 output = {"ok": True}
+            elif action == 'pairing_claim':
+                pairing = PairingService(PostgresPairingStore(async_sessionmaker(engine, expire_on_commit=False)), clock=utc_now)
+                result = await pairing.claim(UUID(data['session_id']), data['proof'])
+                output = {'ok': True, 'token_id': str(result.token_id)}
+            elif action == 'pairing_request':
+                pairing = PairingService(PostgresPairingStore(async_sessionmaker(engine, expire_on_commit=False)), clock=utc_now)
+                result = await pairing.request(UUID(data['session_id']), data['invitation'], data['proof'], UUID(data['client_id']), 'Android test')
+                output = {'ok': True, 'device_id': str(result.device_id)}
             else:
                 raise SecurityError()
-        except SecurityError:
+        except (SecurityError, PairingError):
             output = {"ok": False}
         print(json.dumps(output), flush=True)
     finally:

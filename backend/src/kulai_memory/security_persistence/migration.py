@@ -13,7 +13,7 @@ from kulai_memory.database_safety import (
 )
 from kulai_memory.backup_service import VerifiedBackupResult, create_verified_backup, revalidate_verified_backup
 from .integrity import inspect_security_schema
-from .schema_v1 import SECURITY_REVISION
+from .schema_v2 import SECURITY_HEAD
 
 INI = Path(__file__).resolve().parents[3] / "security_alembic.ini"
 
@@ -22,10 +22,10 @@ def security_migration_heads() -> tuple[str, ...]:
     return tuple(ScriptDirectory.from_config(Config(str(INI))).get_heads())
 
 
-def _upgrade(connection) -> None:
+def _upgrade(connection, revision: str = SECURITY_HEAD) -> None:
     config = Config(str(INI))
     config.attributes["connection"] = connection
-    command.upgrade(config, SECURITY_REVISION)
+    command.upgrade(config, revision)
 
 
 async def upgrade_owned_security(owned: OwnedTemporaryDatabase, *, config: DbConfig) -> None:
@@ -52,7 +52,8 @@ async def upgrade_security_with_verified_backup(output: Path, *, config: DbConfi
         await require_owned_database(owned, config=config)
     backup = await create_verified_backup(output, config=config, app_env=app_env, owned=owned)
     target = database_config_for_database(owned.name, config=config) if owned else config
-    if backup.source_snapshot.security is not None:
+    previous = backup.source_snapshot.security
+    if previous is not None and previous.revision == (SECURITY_HEAD,):
         raise DatabaseSafetyError("Security schema is already installed.")
     await revalidate_verified_backup(backup, config=target)
     engine = create_async_engine(target.async_url, echo=False, hide_parameters=True)
@@ -62,7 +63,7 @@ async def upgrade_security_with_verified_backup(output: Path, *, config: DbConfi
             await connection.execute(text("SET LOCAL lock_timeout = '5s'"))
             await connection.execute(text("SELECT pg_advisory_xact_lock(49142001)"))
             state = await inspect_security_schema(connection)
-            if state.present or not state.valid:
+            if not state.valid or state.revision != (previous.revision[0] if previous else None):
                 raise DatabaseSafetyError("Security schema changed before upgrade.")
             async def unchanged():
                 return (await memory_fingerprint(connection) == backup.source_snapshot.memories
@@ -70,9 +71,17 @@ async def upgrade_security_with_verified_backup(output: Path, *, config: DbConfi
                     and await tombstone_fingerprint(connection) == backup.source_snapshot.tombstones)
             if not await unchanged():
                 raise DatabaseSafetyError("Source changed before security upgrade.")
+            if previous is not None:
+                from .integrity import security_snapshot
+                if await security_snapshot(connection) != previous:
+                    raise DatabaseSafetyError('Security state changed before upgrade.')
             await connection.run_sync(_upgrade)
             if not await unchanged():
                 raise DatabaseSafetyError("Canonical state changed during security upgrade.")
+            if previous is not None:
+                updated = await security_snapshot(connection)
+                if updated.devices != previous.devices or updated.tokens != previous.tokens:
+                    raise DatabaseSafetyError('Existing security state changed during upgrade.')
             state = await inspect_security_schema(connection)
             if not state.present or not state.valid:
                 raise DatabaseSafetyError("Security schema verification failed.")

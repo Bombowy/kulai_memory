@@ -3,6 +3,9 @@ package com.kulai.memory
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import com.kulai.memory.audio.AndroidVoiceAudioRecorder
 import com.kulai.memory.audio.MicrophoneGate
 import com.kulai.memory.cache.PendingAudioCacheStore
@@ -10,57 +13,67 @@ import com.kulai.memory.transport.OkHttpVoiceSocketFactory
 import com.kulai.memory.transport.MemoryHttpClient
 import com.kulai.memory.transport.RequestAuthentication
 import com.kulai.memory.transport.AuthenticationMode
-import com.kulai.memory.transport.CredentialProvider
+import com.kulai.memory.pairing.*
 import com.kulai.memory.speech.AndroidTtsBoundary
 import com.kulai.memory.speech.OfflineLocalSpeechEngine
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 class VoiceMemoryViewModel(application: Application) : AndroidViewModel(application) {
+    private val appContext = application
+    private var microphonePermissionGranted = false
     private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(210, TimeUnit.SECONDS).callTimeout(240, TimeUnit.SECONDS).build()
-    private val credentials = CredentialProvider { null } // TASK 4D.2: inject paired credential snapshot.
-    private val authentication = RequestAuthentication(BuildConfig.MEMORY_HTTP_BASE_URL,
-        AuthenticationMode.valueOf(BuildConfig.SECURITY_MODE), credentials)
-    private val socketFactory = OkHttpVoiceSocketFactory(
-        client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build(), authentication)
-    private val api = MemoryHttpClient(BuildConfig.MEMORY_HTTP_BASE_URL, client, authentication)
     val microphone = MicrophoneGate()
-    private val controller = VoiceMemoryController(
-        scope = viewModelScope,
-        endpoint = BuildConfig.VOICE_WS_URL,
-        socketFactory = socketFactory,
-        recorder = AndroidVoiceAudioRecorder(application),
-        cacheStore = PendingAudioCacheStore(application.cacheDir),
-        microphoneGate = microphone,
-    )
-    val assistant = MemoryAssistantController(viewModelScope, api, BuildConfig.ASSISTANT_WS_URL,
-        socketFactory, AndroidVoiceAudioRecorder(application), microphone)
-    val history = MemoryHistoryController(viewModelScope, api)
-    val speech = MemorySpeechController(viewModelScope, api, OfflineLocalSpeechEngine { callback ->
-        AndroidTtsBoundary(application.applicationContext, callback)
-    })
-    val root = MemoryClientController(viewModelScope, controller, assistant, history, microphone, speech)
+    val connection: PairingController = PairingController(viewModelScope, androidConnectionStore(application),
+        BuildConfig.MEMORY_HTTP_BASE_URL, BuildConfig.SECURITY_MODE == "LOCAL_DEV", BuildConfig.DEBUG,
+        apiFactory = { PairingHttpClient(it, client) }, onConnectionChanged = { origin, localDev ->
+            features.root.shutdown()
+            client.dispatcher.cancelAll()
+            features = Features(origin, localDev)
+            features.root.setMicrophonePermission(microphonePermissionGranted)
+        })
+    private var features: Features by mutableStateOf(Features(BuildConfig.MEMORY_HTTP_BASE_URL, BuildConfig.SECURITY_MODE == "LOCAL_DEV"))
+    val root get() = features.root
+    val assistant get() = features.assistant
+    val history get() = features.history
+    val speech get() = features.speech
+    val state get() = features.note.state
 
-    val state = controller.state
-
-    init {
-        controller.startup()
-        speech.startup()
+    private inner class Features(originValue: String, localDev: Boolean) {
+        private val origin = ServerOrigin(originValue, BuildConfig.DEBUG)
+        private val authentication = RequestAuthentication(origin.value,
+            if (localDev) AuthenticationMode.LOCAL_DEV else AuthenticationMode.SECURE, connection, connection::authenticationRejected)
+        private val socketFactory = OkHttpVoiceSocketFactory(client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build(), authentication)
+        private val api = MemoryHttpClient(origin.value, client, authentication)
+        val note = VoiceMemoryController(viewModelScope, origin.webSocket("ws/memory"), socketFactory,
+            AndroidVoiceAudioRecorder(appContext), PendingAudioCacheStore(appContext.cacheDir), microphoneGate = microphone)
+        val assistant = MemoryAssistantController(viewModelScope, api, origin.webSocket("ws/assistant"), socketFactory,
+            AndroidVoiceAudioRecorder(appContext), microphone)
+        val history = MemoryHistoryController(viewModelScope, api)
+        val speech = MemorySpeechController(viewModelScope, api, OfflineLocalSpeechEngine { callback ->
+            AndroidTtsBoundary(appContext.applicationContext, callback)
+        })
+        val root = MemoryClientController(viewModelScope, note, assistant, history, microphone, speech)
+        init { note.startup(); speech.startup() }
     }
+    init { connection.startup() }
 
-    fun setMicrophonePermission(granted: Boolean) =
+    fun setMicrophonePermission(granted: Boolean) {
+        microphonePermissionGranted = granted
         root.setMicrophonePermission(granted)
+    }
 
     fun record() = root.record()
 
-    fun stop() = controller.stopRecording()
+    fun stop() = features.note.stopRecording()
 
     fun retrySave() = root.retrySave()
 
     fun retryNote() = root.retryNote()
 
     override fun onCleared() {
+        connection.shutdown()
         root.shutdown()
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()

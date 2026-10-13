@@ -5,12 +5,18 @@ from collections.abc import Awaitable, Callable
 
 from kulai_db import DbConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy import text
 
 from kulai_memory.database_safety import DoctorReport, database_config, run_database_doctor
 from kulai_memory.backup_service import drain_before_cancellation
 from kulai_memory.security.models import CredentialState, SecurityError
 from kulai_memory.security.storage import SecurityReader
 from .postgres import PostgresSecurityStore
+from .pairing import PostgresPairingStore
+from .integrity import inspect_security_schema
+from .schema_v2 import SECURITY_HEAD
+from kulai_memory.pairing.domain import PairingService
+from kulai_memory.security.authentication import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +42,7 @@ class PostgresSecurityRuntime:
         self._engine: AsyncEngine | None = None
         self._store: PostgresSecurityStore | None = None
         self.ready = False
+        self.pairing_service: PairingService | None = None
         self._lifecycle_lock = asyncio.Lock()
 
     async def startup(self) -> None:
@@ -53,7 +60,16 @@ class PostgresSecurityRuntime:
             self._engine = self._engine_factory(config.async_url, echo=False, hide_parameters=True,
                 pool_size=config.pool_size, max_overflow=config.max_overflow, pool_pre_ping=True,
                 connect_args={"server_settings": {"statement_timeout": "4000", "lock_timeout": "3000", "search_path": "pg_catalog,public"}})
-            self._store = PostgresSecurityStore(async_sessionmaker(self._engine, expire_on_commit=False))
+            factory = async_sessionmaker(self._engine, expire_on_commit=False)
+            self._store = PostgresSecurityStore(factory)
+            async with self._engine.connect() as connection:
+                await connection.execute(text('SET TRANSACTION READ ONLY'))
+                state = await inspect_security_schema(connection)
+                await connection.rollback()
+            if not state.valid or not state.present:
+                raise SecurityError()
+            if state.revision == SECURITY_HEAD:
+                self.pairing_service = PairingService(PostgresPairingStore(factory), clock=utc_now)
             self.ready = True
         except asyncio.CancelledError:
             await self._close()
@@ -77,6 +93,7 @@ class PostgresSecurityRuntime:
 
     async def _close(self) -> None:
         self.ready = False
+        self.pairing_service = None
         self._store = None
         engine, self._engine = self._engine, None
         if engine is not None:

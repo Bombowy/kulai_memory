@@ -27,3 +27,17 @@
     backup, actual restore verification, immediate archive/source revalidation,
     a transactional additive upgrade and strict post-upgrade doctor. Startup
     performs no DDL, and a failed upgrade retains its backup.
+15. Security revision `kulai_security_0002` adds pairing sessions and a durable
+    fixed-window request counter. Complete fingerprints cover every field of both
+    tables, including proof digests and counters. Historical v1 security backups
+    explicitly have `pairings=None` and `pairing_rate=None`; canonical-only historical
+    backups still have `security=None`. Restore verification never invents records.
+16. A guarded v1-to-v2 upgrade verifies unchanged canonical/device/token fingerprints
+    in the DDL transaction. Writers, pairing clients and administrators must be stopped
+    during the separately authorized installation. Restoring an older security backup
+    can rewind revocation and proof counters; main restore therefore requires an explicit
+    recovery decision and subsequent review/revocation of affected credentials.
+17. Administrator-only expired-session pruning never removes a live trusted token's
+    receiver capability. It revokes abandoned unclaimed devices and leaves durable
+    device/token records intact. This is an explicit state change covered by backups;
+    authentication, startup and ordinary snapshots never prune automatically.

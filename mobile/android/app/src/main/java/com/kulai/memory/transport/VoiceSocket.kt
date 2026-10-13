@@ -46,7 +46,7 @@ class OkHttpVoiceSocketFactory(
                 override fun cancel() = Unit
             }
         }
-        val adapter = OkHttpVoiceSocket(onEvent)
+        val adapter = OkHttpVoiceSocket(onEvent) { authentication.rejected(request) }
         adapter.bind(client.newWebSocket(request, adapter))
         return adapter
     }
@@ -54,6 +54,7 @@ class OkHttpVoiceSocketFactory(
 
 private class OkHttpVoiceSocket(
     private val onEvent: (SocketEvent) -> Unit,
+    private val onRejected: () -> Unit,
 ) : VoiceSocket, WebSocketListener() {
     @Volatile
     private var socket: WebSocket? = null
@@ -75,10 +76,12 @@ private class OkHttpVoiceSocket(
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        if (code == 1008) onRejected()
         onEvent(SocketEvent.Closed(code))
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        if (response?.code == 401 || response?.code == 403) onRejected()
         onEvent(SocketEvent.Failed)
     }
 

@@ -4,11 +4,13 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import java.util.UUID
+import java.time.Instant
 
 enum class AuthenticationMode { LOCAL_DEV, SECURE }
 
 /** PL: identyfikator nie jest sekretem. EN: opaque secret is never printable. */
-class DeviceCredential(val deviceId: UUID, private val accessToken: String) {
+class DeviceCredential(val deviceId: UUID, private val accessToken: String,
+    val serverOrigin: String? = null, val expiresAt: Instant = Instant.MAX) {
     init { require(Regex("[A-Za-z0-9_-]{43}").matches(accessToken)) { "Invalid credentials." } }
     internal fun bearerValue(): String = "Bearer $accessToken"
     override fun toString(): String = "DeviceCredential([redacted])"
@@ -26,8 +28,14 @@ class RequestAuthentication(
     serverOrigin: String,
     private val mode: AuthenticationMode = AuthenticationMode.SECURE,
     private val credentials: CredentialProvider = CredentialProvider { null },
+    private val onRejected: (UUID) -> Unit = {},
 ) {
     private val origin = serverOrigin.toHttpUrl()
+
+    fun rejected(request: Request) {
+        val device = request.header("X-Kulai-Device-ID") ?: return
+        try { onRejected(UUID.fromString(device)) } catch (_: Exception) { }
+    }
 
     fun authorize(request: Request): Request {
         try {
@@ -47,6 +55,8 @@ class RequestAuthentication(
                 if (mode != AuthenticationMode.LOCAL_DEV) throw AuthenticationException()
                 return request
             }
+            if (credential.expiresAt <= Instant.now() || credential.serverOrigin != null &&
+                credential.serverOrigin != origin.toString().removeSuffix("/")) throw AuthenticationException()
             return request.newBuilder().header("Authorization", credential.bearerValue())
                 .header("X-Kulai-Device-ID", credential.deviceId.toString()).build()
         } catch (_: Exception) {

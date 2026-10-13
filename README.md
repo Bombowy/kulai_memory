@@ -7,7 +7,9 @@ The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reade
 only after strict schema verification. TASK 4D.2A adds an independent security
 migration graph; canonical head stays `kulai_memory_0004`. `scripts/dev.py` preserves
 loopback `LOCAL_DEV` and ADB reverse. Main security migration requires explicit
-review and verified backup/restore; pairing and TLS/LAN remain future work.
+review and verified backup/restore. TASK 4D.2B adds local administrator-approved
+Android pairing, Keystore credential storage and security head `kulai_security_0002`.
+TLS/LAN/VPS deployment remains future work; no main migration is installed here.
 See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).
 
 ## Reproducibility
@@ -405,8 +407,8 @@ closes cleanly after a saved or empty note.
 The largest binary frame is 256 KiB and total audio is limited to 19,200,000
 bytes (10 minutes). After a recoverable `memory.save_failed`, `memory.retry`
 reuses the transcript, ingestion ID, and session ID without running Whisper
-again. There is no partial STT. This adapter remains localhost-only and has no
-authentication until LAN/WSS pairing is added in TASK 4D.
+again. There is no partial STT. This adapter remains localhost-only and uses the
+shared HTTP/WS authentication policy described above.
 
 ## Local server history and Memory assistant
 
@@ -505,8 +507,8 @@ database failure uses `RETRY SAVE` without replaying audio or rerunning STT.
 
 This alpha does not retain retry state across process death. History/assistant
 state is in-memory. There is no arbitrary-language TTS, lifecycle mutation UI, LAN transport,
-WSS, authentication, multi-turn, partial STT, or public-storage audio.
-LAN/WSS and authentication/pairing belong to TASK 4D.
+WSS, multi-turn, partial STT, or public-storage audio. Authentication and local
+pairing are implemented in TASK 4D; public ingress remains a separate task.
 
 ## Local embedding foundation
 
