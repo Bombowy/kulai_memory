@@ -262,8 +262,10 @@ maximum issuance TTL 30 days. There is no refresh token or network issuance API.
 defines device trust/revocation, token creation/revocation and atomic rotation.
 Rotation preserves device, actions and project, revokes the predecessor and inserts
 one successor atomically. The included `InMemorySecurityStore` is a process-only
-reference/test implementation. Restart loses all state. No PostgreSQL table or
-migration is added; production persistence and pairing remain TASK 4D.2.
+reference/test implementation. Restart loses its state. TASK 4D.2A supplies the
+persistent PostgreSQL adapter; TASK 4D.2B supplies administrator-approved pairing
+and Android encrypted storage, described below. Their security migrations remain
+independent of the canonical Memory migration graph and require explicit installation.
 The host borrows the reader, and never closes externally owned storage.
 
 | Mode | Private operations | Boundary |

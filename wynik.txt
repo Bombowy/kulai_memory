@@ -349,5 +349,17 @@ MCP, Multi-user Memory ani Memory Intelligence. Backend/DB/model endpoints prywa
 Primary references sprawdzone podczas pracy:
 https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec
 https://developer.android.com/identity/data/autobackup?hl=en
+Zamknięcie 4D.2B przed TASK 4D.3A (2026-10-13):
+Implementacja została już zatwierdzona i wypchnięta jako c66c40988b1f851c89647f952a952d8150fcd205.
+Ponowny preflight: Git/upstream bez rozbieżności; vendor pin bez zmian.
+Strict doctor PASS; pełny read-only main snapshot wykonano przed testami.
+Krytyczne security/pairing/runtime/transport/cancellation i real PostgreSQL:
+204 passed, 1 warning, 125.19 s, wyłącznie process-owned temporary databases.
+Android fresh testDebugUnitTest + assembleDebug: BUILD SUCCESSFUL,
+194 testy, 0 failures/errors, 21 suites. Nie powtarzano fizycznego smoke w tym preflight.
+Poprawiono historyczne opisy CredentialProvider i procesu-only store w dokumentacji.
+Osobny commit zamknięcia zawiera wyłącznie te opisy i wyniki powtórzonej walidacji.
+Nie zainstalowano migracji security na main.
+
 Wnioski dotyczące actual AndroidKeyStore/restore/races dodatkowo sprawdzono empirycznie
 na fizycznym Androidzie i owned PostgreSQL; nie polegano wyłącznie na dokumentacji.

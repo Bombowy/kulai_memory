@@ -16,7 +16,7 @@ class DeviceCredential(val deviceId: UUID, private val accessToken: String,
     override fun toString(): String = "DeviceCredential([redacted])"
 }
 
-/** Thread-safe, nonblocking snapshot. Pairing/secure storage will implement this port in TASK 4D.2. */
+/** PL: bez I/O w transportach. EN: pairing/vault publishes a thread-safe credential snapshot. */
 fun interface CredentialProvider {
     fun current(): DeviceCredential?
 }
