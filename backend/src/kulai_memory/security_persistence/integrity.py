@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import timezone
 import hashlib
 import json
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from kulai_memory.security.models import SecurityError
 from .schema_v1 import DEVICE_TABLE, TOKEN_TABLE, VERSION_TABLE, SECURITY_REVISION
 from .schema_v2 import PAIRING_TABLE, RATE_TABLE, SECURITY_HEAD
+from .schema_v3 import SESSION_TABLE, REFRESH_TABLE, SECURITY_HEAD as SESSION_HEAD
 
 EXPECTED_COLUMNS = {
     DEVICE_TABLE: {"id": ("uuid", False), "status": ("text", False), "created_at": ("timestamptz", False)},
@@ -61,6 +63,34 @@ PAIRING_CONSTRAINTS = {
     RATE_TABLE: {('p', 'PRIMARY KEY (id)'), ('c', 'CHECK (((id = 1) AND (attempts >= 0) AND (attempts <= 120)))')},
 }
 
+SESSION_COLUMNS = {
+    SESSION_TABLE: {'id': ('uuid', False), 'device_id': ('uuid', False), 'pairing_id': ('uuid', False),
+        'created_at': ('timestamptz', False), 'absolute_expires_at': ('timestamptz', False),
+        'revoked_at': ('timestamptz', True), 'actions': ('_text', False),
+        'access_ttl_seconds': ('int4', False), 'generation': ('int4', False)},
+    REFRESH_TABLE: {'id': ('uuid', False), 'session_id': ('uuid', False), 'access_id': ('uuid', False),
+        'digest': ('text', False), 'issued_at': ('timestamptz', False), 'expires_at': ('timestamptz', False),
+        'consumed_at': ('timestamptz', True)},
+}
+SESSION_CONSTRAINTS = {
+    SESSION_TABLE: {
+        ('p', 'PRIMARY KEY (id)'), ('u', 'UNIQUE (device_id)'), ('u', 'UNIQUE (pairing_id)'),
+        ('f', f'FOREIGN KEY (device_id) REFERENCES {DEVICE_TABLE}(id) ON DELETE RESTRICT'),
+        ('f', f'FOREIGN KEY (pairing_id) REFERENCES {PAIRING_TABLE}(id) ON DELETE RESTRICT'),
+        ('c', "CHECK (((absolute_expires_at > created_at) AND (absolute_expires_at <= (created_at + '90 days'::interval))))"),
+        ('c', 'CHECK (((access_ttl_seconds >= 1) AND (access_ttl_seconds <= 3600) AND (generation >= 0) AND (generation <= 4096)))'),
+        ('c', next(d for k, d in EXPECTED_CONSTRAINTS[TOKEN_TABLE] if k == 'c' and 'cardinality' in d)),
+    },
+    REFRESH_TABLE: {
+        ('p', 'PRIMARY KEY (id)'), ('u', 'UNIQUE (access_id)'), ('u', 'UNIQUE (digest)'),
+        ('f', f'FOREIGN KEY (session_id) REFERENCES {SESSION_TABLE}(id) ON DELETE RESTRICT'),
+        ('f', f'FOREIGN KEY (access_id) REFERENCES {TOKEN_TABLE}(id) ON DELETE RESTRICT'),
+        ('c', "CHECK ((digest ~ '^[0-9a-f]{64}$'::text))"),
+        ('c', "CHECK (((expires_at > issued_at) AND (expires_at <= (issued_at + '30 days'::interval))))"),
+        ('c', 'CHECK (((consumed_at IS NULL) OR (consumed_at >= issued_at)))'),
+    },
+}
+
 
 @dataclass(frozen=True, slots=True)
 class SchemaState:
@@ -85,10 +115,11 @@ async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
     if (VERSION_TABLE, 'r') not in present:
         return SchemaState(True, False)
     revisions = tuple((await connection.execute(text(f"SELECT version_num FROM public.{VERSION_TABLE} ORDER BY version_num"))).scalars())
-    if revisions not in ((SECURITY_REVISION,), (SECURITY_HEAD,)):
+    if revisions not in ((SECURITY_REVISION,), (SECURITY_HEAD,), (SESSION_HEAD,)):
         return SchemaState(True, False)
-    v2 = revisions == (SECURITY_HEAD,)
-    expected_columns = {**EXPECTED_COLUMNS, **(PAIRING_COLUMNS if v2 else {})}
+    v3 = revisions == (SESSION_HEAD,)
+    v2 = revisions in ((SECURITY_HEAD,), (SESSION_HEAD,))
+    expected_columns = {**EXPECTED_COLUMNS, **(PAIRING_COLUMNS if v2 else {}), **(SESSION_COLUMNS if v3 else {})}
     if present != {(name, 'r') for name in expected_columns}:
         return SchemaState(True, False)
     names = ','.join("'" + name + "'" for name in expected_columns)  # Constants, never request input.
@@ -122,7 +153,8 @@ async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
         if not validated or deferrable:
             return SchemaState(True, False)
         constraints[table].add((kind, definition))
-    expected = {name: set(values) for name, values in {**EXPECTED_CONSTRAINTS, **(PAIRING_CONSTRAINTS if v2 else {})}.items()}
+    expected = {name: set(values) for name, values in {**EXPECTED_CONSTRAINTS,
+        **(PAIRING_CONSTRAINTS if v2 else {}), **(SESSION_CONSTRAINTS if v3 else {})}.items()}
     if int(await connection.scalar(text("SHOW server_version_num"))) >= 180000:
         for name, columns in expected_columns.items():
             expected[name].update(("n", f"NOT NULL {column}") for column, (_, nullable) in columns.items() if not nullable)
@@ -143,6 +175,17 @@ async def inspect_security_schema(connection: AsyncConnection) -> SchemaState:
               AND pg_get_indexdef(i.indexrelid) =
                 'CREATE INDEX ix_security_pairings_expiry ON public.kulai_security_pairings USING btree (expires_at)')
         """))
+    if v3:
+        for name, definition in {
+            'ix_security_refreshes_session': 'CREATE INDEX ix_security_refreshes_session ON public.kulai_security_refreshes USING btree (session_id)',
+            'ux_security_refreshes_active': 'CREATE UNIQUE INDEX ux_security_refreshes_active ON public.kulai_security_refreshes USING btree (session_id) WHERE (consumed_at IS NULL)',
+        }.items():
+            indexed = indexed and await connection.scalar(text('''
+                SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class r ON r.oid=i.indexrelid
+                  JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public'
+                  AND r.relname=:name AND i.indisvalid AND i.indisready
+                  AND pg_get_indexdef(i.indexrelid)=:definition)
+            '''), {'name': name, 'definition': definition})
     return SchemaState(True, bool(indexed), revisions[0])
 
 
@@ -159,6 +202,8 @@ class SecuritySnapshot:
     tokens: SecurityFingerprint
     pairings: SecurityFingerprint | None = None
     pairing_rate: SecurityFingerprint | None = None
+    sessions: SecurityFingerprint | None = None
+    refreshes: SecurityFingerprint | None = None
 
 
 async def _fingerprint(connection: AsyncConnection, table: str) -> SecurityFingerprint:
@@ -169,7 +214,8 @@ async def _fingerprint(connection: AsyncConnection, table: str) -> SecurityFinge
         for key, value in row._mapping.items():
             if hasattr(value, "utcoffset"):
                 value = value.astimezone(timezone.utc).isoformat()
-            elif key in {"id", "device_id", "project_id", "client_id", "token_id"} and value is not None:
+            elif value is not None and (isinstance(value, UUID) or key in {'id', 'device_id', 'project_id', 'client_id', 'token_id'}):
+                # PL/EN: retain v1/v2 canonical encoding, including the rate counter's integer id.
                 value = str(value)
             values[key] = value
         payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -187,5 +233,7 @@ async def security_snapshot(connection: AsyncConnection) -> SecuritySnapshot | N
         return None
     return SecuritySnapshot((state.revision,), await _fingerprint(connection, DEVICE_TABLE),
         await _fingerprint(connection, TOKEN_TABLE),
-        await _fingerprint(connection, PAIRING_TABLE) if state.revision == SECURITY_HEAD else None,
-        await _fingerprint(connection, RATE_TABLE) if state.revision == SECURITY_HEAD else None)
+        await _fingerprint(connection, PAIRING_TABLE) if state.revision in (SECURITY_HEAD, SESSION_HEAD) else None,
+        await _fingerprint(connection, RATE_TABLE) if state.revision in (SECURITY_HEAD, SESSION_HEAD) else None,
+        await _fingerprint(connection, SESSION_TABLE) if state.revision == SESSION_HEAD else None,
+        await _fingerprint(connection, REFRESH_TABLE) if state.revision == SESSION_HEAD else None)

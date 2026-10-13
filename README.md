@@ -9,6 +9,10 @@ migration graph; canonical head stays `kulai_memory_0004`. `scripts/dev.py` pres
 loopback `LOCAL_DEV` and ADB reverse. Main security migration requires explicit
 review and verified backup/restore. TASK 4D.2B adds local administrator-approved
 Android pairing, Keystore credential storage and security head `kulai_security_0002`.
+TASK 4D.3A adds rotating refresh credentials, finite persistent sessions and independent
+security head `kulai_security_0003`, with automatic Android renewal and replay revocation.
+See [session renewal](docs/SESSION_RENEWAL_PROTOCOL.md) and the
+[remote architecture / 4D.3B plan](docs/REMOTE_ACCESS_ARCHITECTURE.md).
 TLS/LAN/VPS deployment remains future work; no main migration is installed here.
 See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).
 

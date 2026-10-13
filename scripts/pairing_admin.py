@@ -19,6 +19,8 @@ from kulai_memory.pairing.domain import PairingService, PairingError
 from kulai_memory.security_persistence.pairing import PostgresPairingStore
 from kulai_memory.security_persistence.integrity import inspect_security_schema
 from kulai_memory.security_persistence.schema_v2 import SECURITY_HEAD
+from kulai_memory.security_persistence.schema_v3 import SECURITY_HEAD as SESSION_HEAD
+from kulai_memory.security_persistence.sessions import PostgresSessionStore
 
 
 def parser():
@@ -53,9 +55,10 @@ async def run(args):
     try:
         async with engine.connect() as connection:
             state = await inspect_security_schema(connection)
-            if not state.valid or state.revision != SECURITY_HEAD:
+            if not state.valid or state.revision not in (SECURITY_HEAD, SESSION_HEAD):
                 raise PairingError()
-        store = PostgresPairingStore(async_sessionmaker(engine, expire_on_commit=False))
+        adapter = PostgresSessionStore if state.revision == SESSION_HEAD else PostgresPairingStore
+        store = adapter(async_sessionmaker(engine, expire_on_commit=False))
         service = PairingService(store, clock=utc_now)
         if args.command == 'invite':
             invite = await service.invite(actions=frozenset(Action(a) for a in args.permissions),

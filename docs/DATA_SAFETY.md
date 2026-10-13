@@ -37,6 +37,14 @@
     during the separately authorized installation. Restoring an older security backup
     can rewind revocation and proof counters; main restore therefore requires an explicit
     recovery decision and subsequent review/revocation of affected credentials.
+17. Security v3 adds finite device sessions and consumed refresh digest history.
+    Complete fingerprints include every session/refresh field; older schemas explicitly
+    have `sessions=None` and `refreshes=None`. Guarded v1/v2-to-v3 upgrade preserves
+    all existing device/token/pairing/rate fingerprints and the canonical head/data.
+18. A database recovery may resurrect consumed or revoked credentials. Keep ingress
+    closed until a separately authorized recovery procedure revokes restored active
+    sessions and affected legacy access credentials. Require new pairing before
+    reopening access; never equate a matching backup fingerprint with fresh authority.
 17. Administrator-only expired-session pruning never removes a live trusted token's
     receiver capability. It revokes abandoned unclaimed devices and leaves durable
     device/token records intact. This is an explicit state change covered by backups;

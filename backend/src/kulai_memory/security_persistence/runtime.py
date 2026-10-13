@@ -15,6 +15,9 @@ from .postgres import PostgresSecurityStore
 from .pairing import PostgresPairingStore
 from .integrity import inspect_security_schema
 from .schema_v2 import SECURITY_HEAD
+from .schema_v3 import SECURITY_HEAD as SESSION_HEAD
+from .sessions import PostgresSessionStore
+from kulai_memory.security.sessions import SessionService
 from kulai_memory.pairing.domain import PairingService
 from kulai_memory.security.authentication import utc_now
 
@@ -43,6 +46,7 @@ class PostgresSecurityRuntime:
         self._store: PostgresSecurityStore | None = None
         self.ready = False
         self.pairing_service: PairingService | None = None
+        self.session_service: SessionService | None = None
         self._lifecycle_lock = asyncio.Lock()
 
     async def startup(self) -> None:
@@ -68,7 +72,11 @@ class PostgresSecurityRuntime:
                 await connection.rollback()
             if not state.valid or not state.present:
                 raise SecurityError()
-            if state.revision == SECURITY_HEAD:
+            if state.revision == SESSION_HEAD:
+                self._store = PostgresSessionStore(factory)
+                self.pairing_service = PairingService(self._store, clock=utc_now)
+                self.session_service = SessionService(self._store)
+            elif state.revision == SECURITY_HEAD:
                 self.pairing_service = PairingService(PostgresPairingStore(factory), clock=utc_now)
             self.ready = True
         except asyncio.CancelledError:
@@ -94,6 +102,7 @@ class PostgresSecurityRuntime:
     async def _close(self) -> None:
         self.ready = False
         self.pairing_service = None
+        self.session_service = None
         self._store = None
         engine, self._engine = self._engine, None
         if engine is not None:

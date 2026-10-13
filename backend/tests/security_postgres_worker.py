@@ -14,6 +14,8 @@ from kulai_memory.security_persistence.postgres import PostgresSecurityStore
 from kulai_memory.security_persistence.pairing import PostgresPairingStore
 from kulai_memory.pairing.domain import PairingService, PairingError
 from kulai_memory.security.authentication import utc_now
+from kulai_memory.security.sessions import SessionService
+from kulai_memory.security_persistence.sessions import PostgresSessionStore
 
 
 async def run():
@@ -50,6 +52,10 @@ async def run():
                 pairing = PairingService(PostgresPairingStore(async_sessionmaker(engine, expire_on_commit=False)), clock=utc_now)
                 result = await pairing.request(UUID(data['session_id']), data['invitation'], data['proof'], UUID(data['client_id']), 'Android test')
                 output = {'ok': True, 'device_id': str(result.device_id)}
+            elif action == 'renew':
+                service = SessionService(PostgresSessionStore(async_sessionmaker(engine, expire_on_commit=False)))
+                result = await service.renew(UUID(data['session_id']), UUID(data['device_id']), UUID(data['refresh_id']), data['refresh'])
+                output = {'ok': result.credential is not None}
             else:
                 raise SecurityError()
         except (SecurityError, PairingError):

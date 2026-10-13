@@ -33,8 +33,13 @@ class RequestAuthentication(
     private val origin = serverOrigin.toHttpUrl()
 
     fun rejected(request: Request) {
-        val device = request.header("X-Kulai-Device-ID") ?: return
-        try { onRejected(UUID.fromString(device)) } catch (_: Exception) { }
+        try {
+            val device = request.header("X-Kulai-Device-ID") ?: return
+            // PL/EN: a delayed denial of a predecessor must not invalidate the replacement.
+            val active = credentials.current()
+            if (active != null && request.header("Authorization") != active.bearerValue()) return
+            onRejected(UUID.fromString(device))
+        } catch (_: Exception) { }
     }
 
     fun authorize(request: Request): Request {

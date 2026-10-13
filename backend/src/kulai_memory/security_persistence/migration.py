@@ -13,7 +13,7 @@ from kulai_memory.database_safety import (
 )
 from kulai_memory.backup_service import VerifiedBackupResult, create_verified_backup, revalidate_verified_backup
 from .integrity import inspect_security_schema
-from .schema_v2 import SECURITY_HEAD
+from .schema_v3 import SECURITY_HEAD
 
 INI = Path(__file__).resolve().parents[3] / "security_alembic.ini"
 
@@ -80,7 +80,9 @@ async def upgrade_security_with_verified_backup(output: Path, *, config: DbConfi
                 raise DatabaseSafetyError("Canonical state changed during security upgrade.")
             if previous is not None:
                 updated = await security_snapshot(connection)
-                if updated.devices != previous.devices or updated.tokens != previous.tokens:
+                if (updated.devices != previous.devices or updated.tokens != previous.tokens
+                        or previous.pairings is not None and updated.pairings != previous.pairings
+                        or previous.pairing_rate is not None and updated.pairing_rate != previous.pairing_rate):
                     raise DatabaseSafetyError('Existing security state changed during upgrade.')
             state = await inspect_security_schema(connection)
             if not state.present or not state.valid:

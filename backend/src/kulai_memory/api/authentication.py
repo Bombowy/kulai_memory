@@ -176,7 +176,8 @@ class AuthenticationMiddleware:
                 return
             # PL/EN: exact pre-auth exception; no prefix, GET, WS or proxy bypass.
             from .pairing_http import PAIRING_PATHS
-            if scope['type'] == 'http' and scope.get('method') == 'POST' and scope.get('path') in PAIRING_PATHS:
+            from .session_http import REFRESH_PATH
+            if scope['type'] == 'http' and scope.get('method') == 'POST' and scope.get('path') in PAIRING_PATHS | {REFRESH_PATH}:
                 peer = scope.get('client')
                 if (self.config.mode is not SecurityMode.SECURE or scope.get('query_string')
                         or not peer or not loopback(peer[0]) or _header(scope, b'sec-websocket-protocol') is not None):

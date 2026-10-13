@@ -221,7 +221,7 @@ def test_additive_guarded_migration_backup_restore_and_security_fingerprints(tmp
             after = await database_snapshot_url(target.async_url)
             assert after.memories == before.memories and after.vectors == before.vectors and after.tombstones == before.tombstones
             assert after.revision == before.revision == expected_alembic_heads() == ("kulai_memory_0004",)
-            assert security_migration_heads() == after.security.revision == ("kulai_security_0002",)
+            assert security_migration_heads() == after.security.revision == ("kulai_security_0003",)
             assert backup.source_snapshot == before and backup.path.is_file()
             manager, device, token = await credential(store)
             full = await database_snapshot_url(target.async_url)

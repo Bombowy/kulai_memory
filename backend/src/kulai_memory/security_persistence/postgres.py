@@ -114,9 +114,13 @@ class PostgresSecurityStore:
     async def rotate_token(self, token_id: UUID, replacement: TokenRecord, *, now: datetime) -> None:
         async with self._transaction() as session:
             original = await self._lock_token(session, token_id, trusted=True)
+            await self._allow_token_rotation(session, original)
             if (not original.active(now) or replacement.device_id != original.device_id
                     or replacement.actions != original.actions or replacement.project_id != original.project_id
                     or replacement.issued_at != now or replacement.revoked_at is not None):
                 raise SecurityError()
             await session.execute(sa.update(tokens).where(tokens.c.id == token_id).values(revoked_at=now))
             await session.execute(sa.insert(tokens).values(**_values(replacement)))
+
+    async def _allow_token_rotation(self, session: AsyncSession, original: TokenRecord) -> None:
+        """PL/EN: session adapters may require their atomic family renewal instead."""

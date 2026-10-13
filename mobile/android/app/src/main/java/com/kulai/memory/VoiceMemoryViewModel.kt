@@ -32,6 +32,10 @@ class VoiceMemoryViewModel(application: Application) : AndroidViewModel(applicat
             client.dispatcher.cancelAll()
             features = Features(origin, localDev)
             features.root.setMicrophonePermission(microphonePermissionGranted)
+        }, renewalBusy = {
+            microphone.owner.value != null || features.assistant.state.value.voiceBusy ||
+                features.note.state.value.phase in setOf(VoiceMemoryPhase.CONNECTING, VoiceMemoryPhase.READY,
+                    VoiceMemoryPhase.RECORDING, VoiceMemoryPhase.WAITING_FOR_TRANSCRIPT, VoiceMemoryPhase.SAVING)
         })
     private var features: Features by mutableStateOf(Features(BuildConfig.MEMORY_HTTP_BASE_URL, BuildConfig.SECURITY_MODE == "LOCAL_DEV"))
     val root get() = features.root

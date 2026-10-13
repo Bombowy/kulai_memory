@@ -11,7 +11,7 @@ from kulai_memory.pairing.domain import (
     Invitation, PairingView, PairingState, PairingError, CredentialFactory,
     MAX_ACTIVE, MAX_SESSIONS, MAX_ATTEMPTS, REQUESTS_PER_MINUTE, digest,
 )
-from kulai_memory.security.models import Action, DeviceStatus, IssuedCredential
+from kulai_memory.security.models import Action, DeviceStatus, IssuedCredential, TokenRecord
 from .postgres import PostgresSecurityStore, _values, _token
 from .schema_v1 import devices, tokens
 from .schema_v2 import pairings, rate
@@ -120,11 +120,26 @@ class PostgresPairingStore(PostgresSecurityStore):
                 return self._view(row, now, 'revoked')
             view = self._view(row, now, device.status.value)
             if row['state'] == 'claimed' and device.status is DeviceStatus.TRUSTED:
-                record = (await session.execute(sa.select(tokens).where(tokens.c.id == row['token_id']))).mappings().one()
-                if not _token(record).active(await self._now(session)):
-                    from dataclasses import replace
-                    view = replace(view, state=PairingState.REVOKED if record['revoked_at'] is not None else PairingState.EXPIRED)
+                view = await self._claimed_view(session, row, view)
             return view
+
+    async def _claimed_view(self, session: AsyncSession, row: Mapping[str, Any], view: PairingView) -> PairingView:
+        from dataclasses import replace
+        record = (await session.execute(sa.select(tokens).where(tokens.c.id == row['token_id']))).mappings().one()
+        if not _token(record).active(await self._now(session)):
+            return replace(view, state=PairingState.REVOKED if record['revoked_at'] is not None else PairingState.EXPIRED)
+        return view
+
+    def _claim_ttl(self, row: Mapping[str, Any]) -> timedelta:
+        return timedelta(seconds=row['token_ttl_seconds'])
+
+    async def _after_claim(self, session: AsyncSession, row: Mapping[str, Any],
+                           record: TokenRecord, credential: IssuedCredential) -> IssuedCredential:
+        """PL/EN: extension inside the SAME transaction, never a second issuance path."""
+        return credential
+
+    async def _retain_pairing(self, session: AsyncSession, row: Mapping[str, Any]) -> bool:
+        return False
 
     async def decide(self, session_id: UUID, device_id: UUID, *, approve: bool) -> None:
         async with self._transaction() as session:
@@ -159,16 +174,17 @@ class PostgresPairingStore(PostgresSecurityStore):
             await self._lock_device(session, row['device_id'], trusted=True)
             if await self._now(session) >= row['expires_at']:
                 return None
-            record, credential = factory(row['device_id'], frozenset(Action(a) for a in row['actions']), timedelta(seconds=row['token_ttl_seconds']))
+            ttl = self._claim_ttl(row)
+            record, credential = factory(row['device_id'], frozenset(Action(a) for a in row['actions']), ttl)
             if (record.device_id != row['device_id'] or record.actions != frozenset(Action(a) for a in row['actions'])
                     or record.project_id is not None or record.revoked_at is not None
-                    or record.expires_at - record.issued_at != timedelta(seconds=row['token_ttl_seconds'])
+                    or record.expires_at - record.issued_at != ttl
                     or credential.device_id != record.device_id or credential.token_id != record.id
                     or credential.expires_at != record.expires_at or digest(credential.access_token) != record.digest):
                 raise PairingError()
             await session.execute(sa.insert(tokens).values(**_values(record)))
             await session.execute(sa.update(pairings).where(pairings.c.id == session_id).values(state='claimed', token_id=record.id))
-            return credential
+            return await self._after_claim(session, row, record, credential)
 
     async def pending(self) -> list[PairingView]:
         async with self._transaction(readonly=True) as session:
@@ -190,6 +206,8 @@ class PostgresPairingStore(PostgresSecurityStore):
                 .order_by(pairings.c.id).with_for_update())).mappings())
             removed = 0
             for row in rows:
+                if await self._retain_pairing(session, row):
+                    continue
                 if row['device_id'] is not None:
                     device = await self._lock_device(session, row['device_id'])
                     if row['token_id'] is not None:

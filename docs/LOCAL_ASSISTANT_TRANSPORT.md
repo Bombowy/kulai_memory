@@ -256,7 +256,8 @@ only SHA-256 digests enter storage. This is random-token hashing, not a password
 scheme. Immutable records validate UUIDs, aware timestamps, lifetime and actions.
 Pending devices cannot receive credentials; revoked devices cannot be re-trusted.
 Token validity is `issued_at <= now < expires_at`, with default TTL one hour and
-maximum issuance TTL 30 days. There is no refresh token or network issuance API.
+maximum legacy administrative issuance TTL 30 days. TASK 4D.1 has no refresh API;
+TASK 4D.3A adds a separate finite session capability, described below.
 
 `SecurityReader.lookup` reads a coherent token/device snapshot. `SecurityStore`
 defines device trust/revocation, token creation/revocation and atomic rotation.
@@ -472,14 +473,15 @@ noBackupFilesDir. Credential snapshots bind to a canonical configured origin;
 external origins require HTTPS. Platform certificate/hostname verification remains
 enabled. No device attestation or hardware-backed-key guarantee is claimed.
 Access tokens keep the existing one-hour default and maximum bounded lifetime.
-There is no refresh secret or automatic extension in this task: expired credentials
-require pairing again. Existing trusted administrative rotation remains available.
+The original 4D.2B contract has no refresh secret: its expired access-only credentials
+require pairing again. TASK 4D.3A extends new pairings on security v3 with rotating
+refresh capabilities; existing v1/v2 credentials are never silently upgraded.
 
 ## Pairing contract and administration (TASK 4D.2B)
 
 Pairing is disabled in LOCAL_DEV. SECURE needs verified canonical and security v2
-schemas. A missing/v1 schema never implicitly creates or upgrades tables. These
-exact POST routes are the sole pre-auth exception, with the local ingress checks
+schemas (or verified v3 for session credentials). A missing/v1 schema never implicitly
+creates or upgrades tables. These exact POST routes are pre-auth exceptions, with the local ingress checks
 specified in the threat model. Content-Type is JSON, optionally UTF-8 charset;
 duplicate headers/JSON keys, unknown keys, queries and bodies over 4096 bytes are
 refused. Browser Origin and all Forwarded/X-Forwarded headers are refused. Native
@@ -548,7 +550,8 @@ nonblocking snapshot. Registration retries prove both secrets; once registered,
 the encrypted invitation is removed and only the receiver proof remains. Interrupted
 claim or failed credential save never unlocks private functions. On app restart,
 the client checks its own session/token state before publishing credentials. Expiry
-clears the snapshot, no refresh is claimed. HTTP 401 / WS refusal uses common
+clears the snapshot for the legacy access-only format; v3 session renewal is described
+in the separate protocol below. HTTP 401 / WS refusal uses common
 RequestAuthentication callbacks and verifies revocation; it cannot switch to LOCAL_DEV.
 Local unpair always removes the secret; server cancellation is best-effort and offline
 removal may need explicit administrator revocation. Loss of Keystore key/ciphertext
@@ -589,9 +592,9 @@ stop writers/clients/admin commands; strict doctor -> new full backup -> actual
 restore verification -> immediate source/archive revalidation -> guarded upgrade
 using `security_schema.py upgrade --confirm-main-security-schema --backup-output`
 outside the repo -> strict doctor and security check -> restart SECURE. The same
-procedure accepts an absent security schema (installs v1+v2) or valid v1 (adds v2).
-Existing canonical/device/token fingerprints must match; no destructive downgrade
-is supported. Historical canonical-only/v1 backups retain explicit absence markers.
+procedure now accepts an absent schema or valid v1/v2 and installs through security v3.
+Existing canonical/device/token/pairing/rate fingerprints must match; no destructive
+downgrade is supported. Historical canonical-only/v1/v2 backups retain explicit absence markers.
 
 The five-minute TTL governs registration, approval and redemption. A consumed
 session retains a restricted receiver capability for its own status/revocation,
@@ -604,3 +607,19 @@ IP/USB dependent. The ingress policy must explicitly validate trusted TLS termin
 Host/origin and proxy identity before enabling a public route. This task does not
 trust forwarded headers or deploy LAN, a tunnel, TLS, discovery, QR or MCP. PostgreSQL,
 Memory and model endpoints remain private; GPU inference need not move to the VPS.
+
+## Finite session renewal (TASK 4D.3A)
+
+New pairings on verified security v3 return an access credential plus a separate
+refresh credential. A one-hour access limit, 30-day refresh limit and fixed 90-day
+session deadline apply; shorter administrator-approved access TTLs are retained.
+The renewal operation cannot increase approved actions or select a project. Consumed
+refresh history detects replay and revokes every access in that family. Repeated
+parallel refresh requests may therefore revoke the session; Android coalesces them.
+
+The sole additional pre-auth exception is exact native `POST /api/security/refresh`
+in SECURE on the current validated local transport. All other HTTP/WS policies remain
+unchanged. Access Bearer and refresh capabilities are incompatible formats/types.
+Refresh never invokes AI or Memory. See [the full contract and threat model](SESSION_RENEWAL_PROTOCOL.md)
+for ambiguity, persistence, bounds, physical smoke and separately authorized installation.
+See [remote ingress architecture](REMOTE_ACCESS_ARCHITECTURE.md) before future VPS work.
