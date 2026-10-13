@@ -21,7 +21,7 @@ from backend.tests.integration.test_memory_retrieval_postgres import _observe_re
 from backend.tests.test_desktop_controller import FakeProvider
 from backend.tests.test_memory_ws import _start_message, _stop_message
 from kulai_memory import rag_runtime
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application import Memory
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER
 from kulai_memory.database_safety import database_config_for_database

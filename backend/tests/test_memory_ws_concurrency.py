@@ -5,7 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID, uuid4
 
-from fastapi.testclient import TestClient
+from backend.tests.local_transport import TestClient
 from kulai_db import DbConfig
 from kulai_transcription import (
     AudioInputKind,
@@ -15,7 +15,7 @@ from kulai_transcription import (
     TranscriptionResult,
 )
 
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application import IdempotentMemoryWrite, Memory
 from kulai_memory.database_safety import CheckResult, DoctorReport
 from kulai_memory.server import VoiceMemoryServerRuntime

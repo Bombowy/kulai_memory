@@ -1,9 +1,11 @@
 # Local Memory history, assistant and speech planning transport
 
 Start with `.venv\Scripts\python.exe scripts\dev.py`. It binds exclusively to
-`127.0.0.1:8000`; this development transport has no authentication. History/detail
-intentionally return canonical user data to the local client. Do not expose the
-port to a network. LAN/WSS/auth/pairing remain TASK 4D. No CORS wildcard is added.
+`127.0.0.1:8000`; the named dev launcher explicitly selects `LOCAL_DEV` when no
+security mode is configured. An existing `KULAI_SECURITY_MODE=SECURE` in environment
+or `backend/.env` remains secure. History/detail return canonical user data only
+after the common access policy. Do not expose the port to a network. LAN/WSS/pairing
+remain future work. No CORS wildcard is added.
 
 Desktop stays in process. The server performs no audio synthesis and stores neither questions
 nor answers. It uses existing canonical RAG grounding/citation rules, with no
@@ -111,6 +113,8 @@ Bounded public errors have only `detail`:
 
 | Status | Message |
 | --- | --- |
+| 401 | Authentication required. |
+| 403 | Access denied. |
 | 400 | Invalid assistant request. |
 | 422 | Invalid assistant request. |
 | 404 (detail) | Memory not found. |
@@ -118,7 +122,9 @@ Bounded public errors have only `detail`:
 | 500 | Memory assistant could not complete the operation. |
 
 Validation never echoes query/input and errors contain no content/credentials.
-Normal server logging records request structure, not bodies or Memory content.
+Host logging records only transport/action/status, never URLs, client headers,
+bodies or Memory content. The dev launcher disables access logs and informational
+WebSocket URL logs; proxy header interpretation is also disabled.
 
 ## Final-answer Polish / English speech plan
 
@@ -231,13 +237,106 @@ binary frames, `recording.stop`, optional `memory.retry`; events are
 Save retry uses the same transcript/IDs without repeated STT. Current Android
 Voice Note continues to use this endpoint.
 
-## Future Android 6C.2
+## Android local transport
 
 - HTTP_BASE_URL (debug): `http://127.0.0.1:8000`
 - VOICE_NOTE_WS: `ws://127.0.0.1:8000/ws/memory`
 - VOICE_ASSISTANT_WS: `ws://127.0.0.1:8000/ws/assistant`
 
 Continue `adb reverse tcp:8000 tcp:8000` for a USB-connected debug device.
-6C.2 can add history/detail and text/voice assistant screens and BuildConfig URLs.
-This task changes no Android sources, release networking or security settings.
-It adds no lifecycle endpoints, conversation history or TTS transport.
+Android 6C.2/6C.3 supplies history/detail, text/voice assistant and local PL/EN TTS.
+There are no lifecycle mutation endpoints or persisted assistant conversations.
+
+## Authentication foundation (TASK 4D.1)
+
+The neutral `kulai_memory.security` package has no Memory/RAG, FastAPI, database
+or UI dependency. Device UUIDs and token UUIDs are public identities. Credentials
+are independent 32-byte CSPRNG secrets from Python `secrets.token_urlsafe(32)`;
+only SHA-256 digests enter storage. This is random-token hashing, not a password
+scheme. Immutable records validate UUIDs, aware timestamps, lifetime and actions.
+Pending devices cannot receive credentials; revoked devices cannot be re-trusted.
+Token validity is `issued_at <= now < expires_at`, with default TTL one hour and
+maximum issuance TTL 30 days. There is no refresh token or network issuance API.
+
+`SecurityReader.lookup` reads a coherent token/device snapshot. `SecurityStore`
+defines device trust/revocation, token creation/revocation and atomic rotation.
+Rotation preserves device, actions and project, revokes the predecessor and inserts
+one successor atomically. The included `InMemorySecurityStore` is a process-only
+reference/test implementation. Restart loses all state. No PostgreSQL table or
+migration is added; production persistence and pairing remain TASK 4D.2.
+The host borrows the reader, and never closes externally owned storage.
+
+| Mode | Private operations | Boundary |
+| --- | --- | --- |
+| `LOCAL_DEV` | Missing credentials explicitly permitted; supplied credentials still validated | Numeric loopback listener and peer only |
+| `SECURE` | Bearer credentials required; missing/broken store, timeout or invalid state denies access | Loopback listener remains required in this phase; IP never proves device identity |
+
+`Settings` and `SecurityConfig` default to `SECURE`. The `.env.example` explicitly
+selects `LOCAL_DEV`. The named dev launcher selects local compatibility only when
+neither environment nor `.env` defines a mode. It respects configured `SECURE`.
+An intentional CLI override is `scripts/dev.py --security-mode LOCAL_DEV|SECURE`.
+The launcher always binds `127.0.0.1`, keeps ADB reverse, disables proxy headers,
+access logs and informational WS URL logs. No LAN bind option is added.
+Embedding the ASGI app in another server requires equivalent listener/logging/proxy
+configuration; application middleware cannot remove raw logs produced upstream.
+
+HTTP and native WebSocket clients send `Authorization: Bearer <opaque token>`.
+The optional `X-Kulai-Device-ID` must be a canonical lowercase UUID matching the
+credential owner. Omitting that claim still authenticates the token's registered
+device. This is bearer authentication, not cryptographic proof of physical device
+ownership: possession of a stolen valid bearer token can impersonate that device.
+
+| Route | Required action |
+| --- | --- |
+| `GET /api/memories` | `memory.read` |
+| `GET /api/memories/{id}` | `memory.read` |
+| `POST /api/assistant/ask` | `assistant.ask` |
+| `POST /api/assistant/speech-plan` | `assistant.speech_plan` |
+| `/ws/memory` | `memory.write` |
+| `/ws/assistant` | `assistant.ask` |
+
+ASGI enforcement precedes routing, redirect generation, body validation, runtime
+access, audio allocation and AI operations. Unknown private operations are denied
+by default in SECURE. `/health` remains exactly public GET liveness `{"status":"ok"}`.
+Tokens in query parameters, cookies or WS subprotocols never authenticate. Known
+credential query keys (including encoded keys) and all WS query parameters are
+rejected. Duplicate/malformed Authorization and identity headers are rejected.
+Untrusted Host/Origin and forwarded headers are refused. Native clients have no
+Origin; browser clients need a later explicit origin policy.
+
+HTTP authentication errors are generic 401 with `WWW-Authenticate: Bearer` and
+`Cache-Control: no-store`; policy/transport denials are generic 403. An unauthorized
+WS sends `websocket.close` before accept: real Uvicorn returns HTTP 403 without a
+session/event/body containing Memory data. Established WS credentials are checked
+again before each incoming private frame, including stop/retry; expiry/revocation
+closes with code 1008. Authorizations already admitted to an operation are not
+retroactively rolled back; an idle WS does not have a revocation push/timer yet.
+A committed note survives an indexing disconnect under existing idempotency rules.
+
+Authentication has a five-second timeout. While storage awaits, one receive watcher
+monitors disconnect, buffers at most 64 messages/64 KiB, and replays original input
+after success. Disconnect/cancellation drains both watcher and lookup tasks, without
+starting endpoint work. Normal operations retain their existing cancellation rules.
+Voice Note now also monitors disconnect during processing and save retry; shielded
+Whisper drains before WAV removal, network inference cancels and owned resources
+close once. Authorized REST projections and voice protocols remain unchanged.
+
+The shared action/project policy prepares future resource authorization. Current
+routes address the existing global canonical Memory, so project-scoped tokens and
+client-selected project headers cannot access them. Future project adapters must
+resolve the actual resource project server-side; the header alone is not authority.
+There is no row isolation, account model or per-device ingestion namespace yet.
+
+The host replaces vendor request logging/fallback handlers at composition, without
+modifying the submodule. Logs contain fixed transport/action/status or the existing
+safe operation stage/type/code; no URL, header, caller request ID, body, digest,
+credential or private exception payload is logged. Debug tracebacks are disabled.
+Android uses the same header policy for all HTTP operations and both WS handshakes,
+binds credentials to one origin and disables redirects. Debug opts into LOCAL_DEV;
+release defaults to SECURE with an empty provider until pairing is implemented.
+
+The security integration suite uses real Uvicorn/HTTP/WS over random loopback ports
+and controlled providers/storage. It performs no main DB writes, migrations or
+real model calls. Existing opt-in PostgreSQL/model suites remain separate.
+The pre-accept denial follows the [ASGI WebSocket specification](https://asgi.readthedocs.io/en/latest/specs/www.html#close-send-event);
+token generation follows [Python secrets](https://docs.python.org/3/library/secrets.html).

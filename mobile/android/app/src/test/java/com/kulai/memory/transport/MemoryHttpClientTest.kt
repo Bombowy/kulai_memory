@@ -115,7 +115,8 @@ class MemoryHttpClientTest {
 internal suspend fun withServer(block: suspend (MockWebServer, MemoryHttpClient, OkHttpClient) -> Unit) {
     val server = MockWebServer(); server.start()
     val client = OkHttpClient.Builder().readTimeout(5, TimeUnit.SECONDS).build()
-    try { block(server, MemoryHttpClient(server.url("/").toString(), client), client) }
+    try { block(server, MemoryHttpClient(server.url("/").toString(), client,
+        RequestAuthentication(server.url("/").toString(), AuthenticationMode.LOCAL_DEV)), client) }
     finally { client.dispatcher.cancelAll(); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdown(); server.shutdown() }
 }
 

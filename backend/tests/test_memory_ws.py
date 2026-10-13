@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
+from backend.tests.local_transport import TestClient
 from kulai_transcription import (
     AudioInputKind,
     AudioPathInput,
@@ -19,7 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from kulai_memory.api import memory_ws
 from kulai_memory.api.pcm_wav import OwnedPcmWav
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application import (
     EventSink,
     Memory,

@@ -8,7 +8,7 @@ from backend.tests.assistant_transport_fakes import AsgiSocket
 from backend.tests.test_server_assistant_runtime import Harness
 from backend.tests.test_server_transport import start, stop
 from kulai_memory.api import assistant_ws
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 
 
 @pytest.mark.parametrize("stage", ["recording", "whisper", "rag", "invalid_during_work"])
@@ -94,7 +94,7 @@ def test_http_disconnect_cancels_canonical_request_and_does_not_leak_logs(caplog
             await incoming.put(dict(type="http.request", body=body, more_body=False))
             scope = dict(type="http", asgi={"version": "3.0"}, method="POST", scheme="http",
                          http_version="1.1", path="/api/assistant/ask", raw_path=b"/api/assistant/ask",
-                         root_path="", query_string=b"", headers=[(b"content-type", b"application/json")],
+                         root_path="", query_string=b"", headers=[(b"host", b"127.0.0.1:8000"), (b"content-type", b"application/json")],
                          server=("127.0.0.1", 8000), client=("127.0.0.1", 1234))
             task = asyncio.create_task(app(scope, incoming.get, outgoing.put))
             await entered.wait()

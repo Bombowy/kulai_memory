@@ -104,7 +104,20 @@ ASSISTANT_WS_URL=ws://127.0.0.1:8000/ws/assistant
 The default/release URLs are HTTPS/WSS placeholders. Cleartext is enabled only
 in `src/debug/AndroidManifest.xml`; main/release does not enable it. These
 placeholders do not implement LAN/WSS. Backend remains bound to loopback;
-ADB reverse provides local access. There is no authentication/pairing yet.
+ADB reverse provides local access. Debug explicitly selects `LOCAL_DEV`; release
+selects `SECURE` and refuses private requests without credentials. The shared
+`CredentialProvider` supplies a nonblocking, thread-safe credential snapshot to
+HTTP and both WS clients. Tokens are sent only in `Authorization: Bearer`;
+`X-Kulai-Device-ID` is a public identity claim validated against the token owner.
+No pairing screen or persistent credential storage is implemented yet.
+
+`RequestAuthentication` binds credentials to the configured server origin and
+rejects credentials in URL query parameters. HTTP/WS redirects are disabled.
+Remote cleartext and remote `LOCAL_DEV` are rejected. Loopback HTTP/WS remain
+available for this phase and ADB reverse; TLS/WSS deployment is future work.
+Provider errors and 401/403 produce authored, secret-free errors. Credential
+objects redact their string representation. No token appears in BuildConfig,
+resources or logs; `SECURITY_MODE` contains only the public mode name.
 See [the server contract](../../docs/LOCAL_ASSISTANT_TRANSPORT.md).
 
 Build/install from `mobile/android`:
@@ -135,7 +148,7 @@ Manual smoke after review:
 6. Switch ASK → MEMORY → ASK: the previous answer remains visible.
 
 There is no arbitrary-language TTS, edit/archive/restore/delete, persisted assistant history,
-multi-turn conversation, partial STT, LAN/WSS/auth or public-storage audio.
+multi-turn conversation, partial STT, LAN/WSS/pairing or public-storage audio.
 Physical microphone/permission/device behavior requires the manual smoke;
 automated tests use synthetic data and fake capture plus real OkHttp loopback
 connections. They never ask against private main Memory.

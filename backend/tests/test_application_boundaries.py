@@ -53,6 +53,8 @@ def test_application_core_has_no_transport_ui_or_database_imports() -> None:
                     violations.append(f"{path.name}:{node.lineno}: {module}")
                 if module.startswith(("kulai_memory.api", "kulai_memory.server")):
                     violations.append(f"{path.name}:{node.lineno}: {module}")
+                if module.startswith("kulai_memory.security"):
+                    violations.append(f"{path.name}:{node.lineno}: {module}")
 
     assert violations == []
 
@@ -119,4 +121,18 @@ def test_voice_session_has_no_memory_or_persistence_coupling() -> None:
         if node.module.startswith("kulai_memory.persistence"):
             violations.append(node.module)
 
+    assert violations == []
+
+
+def test_security_core_is_independent_of_memory_transport_and_storage_adapters() -> None:
+    root = APPLICATION_ROOT.parent / "security"
+    forbidden = FORBIDDEN_IMPORT_ROOTS | {"kulai_transcription", "kulai_embeddings", "kulai_llm"}
+    violations = []
+    for path in root.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            modules = ([alias.name for alias in node.names] if isinstance(node, ast.Import) else
+                       [node.module] if isinstance(node, ast.ImportFrom) and node.module else [])
+            for module in modules:
+                if module.split(".", 1)[0] in forbidden or module.startswith("kulai_memory."):
+                    violations.append(f"{path.name}:{node.lineno}: {module}")
     assert violations == []

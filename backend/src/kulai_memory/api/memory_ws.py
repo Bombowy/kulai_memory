@@ -47,6 +47,7 @@ from .memory_ws_protocol import (
     parse_client_command,
 )
 from .pcm_wav import OwnedPcmWav, PcmAudioLimitError, PcmFrameError
+from .cancellation import ClientDisconnected, until_disconnect
 
 
 class ConnectionState(str, Enum):
@@ -161,8 +162,10 @@ class _MemoryWebSocketConnection:
                     await self._handle_text(text)
                 else:
                     await self._protocol_failure()
-        except (WebSocketDisconnect, VoiceSessionEventDeliveryError):
+        except (WebSocketDisconnect, VoiceSessionEventDeliveryError, ClientDisconnected):
             return
+        except ProtocolMessageError:
+            await self._protocol_failure()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -187,13 +190,15 @@ class _MemoryWebSocketConnection:
             if self._state is not ConnectionState.RECORDING:
                 await self._protocol_failure()
                 return
-            await self._stop_and_process()
+            await until_disconnect(self._stop_and_process(), self._websocket.receive,
+                                   protocol_error=ProtocolMessageError)
             return
         if isinstance(command, MemoryRetryCommand):
             if self._state is not ConnectionState.PENDING_SAVE:
                 await self._protocol_failure()
                 return
-            await self._attempt_save()
+            await until_disconnect(self._attempt_save(), self._websocket.receive,
+                                   protocol_error=ProtocolMessageError)
             return
         await self._protocol_failure()
 

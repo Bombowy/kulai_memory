@@ -13,7 +13,7 @@ from backend.tests.integration.test_memory_lifecycle_postgres import snapshot
 from backend.tests.integration.test_memory_retrieval_postgres import _seed_memories
 from backend.tests.test_desktop_controller import FakeProvider
 from backend.tests.test_server_speech import CASES
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER
 from kulai_memory.application.rag import MEMORY_RAG_SYSTEM_PROMPT
 from kulai_memory.application import Memory

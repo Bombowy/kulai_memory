@@ -47,7 +47,8 @@ class AssistantWebSocketMockServerTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val client = OkHttpClient(); val api = FakeMemoryApi()
         val controller = MemoryAssistantController(scope, api, server.url("/ws/assistant").toString().replace("http:", "ws:"),
-            OkHttpVoiceSocketFactory(client), QuestionRecorder(), MicrophoneGate())
+            OkHttpVoiceSocketFactory(client, RequestAuthentication(server.url("/").toString(),
+                AuthenticationMode.LOCAL_DEV)), QuestionRecorder(), MicrophoneGate())
         try {
             controller.setMicrophonePermission(true); controller.startVoiceQuestion()
             withTimeout(5000) { controller.state.first { it.phase == AssistantPhase.RECORDING }; frameReceived.await() }

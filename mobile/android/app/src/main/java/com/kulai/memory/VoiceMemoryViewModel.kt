@@ -8,6 +8,9 @@ import com.kulai.memory.audio.MicrophoneGate
 import com.kulai.memory.cache.PendingAudioCacheStore
 import com.kulai.memory.transport.OkHttpVoiceSocketFactory
 import com.kulai.memory.transport.MemoryHttpClient
+import com.kulai.memory.transport.RequestAuthentication
+import com.kulai.memory.transport.AuthenticationMode
+import com.kulai.memory.transport.CredentialProvider
 import com.kulai.memory.speech.AndroidTtsBoundary
 import com.kulai.memory.speech.OfflineLocalSpeechEngine
 import okhttp3.OkHttpClient
@@ -16,8 +19,12 @@ import java.util.concurrent.TimeUnit
 class VoiceMemoryViewModel(application: Application) : AndroidViewModel(application) {
     private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(210, TimeUnit.SECONDS).callTimeout(240, TimeUnit.SECONDS).build()
-    private val socketFactory = OkHttpVoiceSocketFactory(client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build())
-    private val api = MemoryHttpClient(BuildConfig.MEMORY_HTTP_BASE_URL, client)
+    private val credentials = CredentialProvider { null } // TASK 4D.2: inject paired credential snapshot.
+    private val authentication = RequestAuthentication(BuildConfig.MEMORY_HTTP_BASE_URL,
+        AuthenticationMode.valueOf(BuildConfig.SECURITY_MODE), credentials)
+    private val socketFactory = OkHttpVoiceSocketFactory(
+        client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build(), authentication)
+    private val api = MemoryHttpClient(BuildConfig.MEMORY_HTTP_BASE_URL, client, authentication)
     val microphone = MicrophoneGate()
     private val controller = VoiceMemoryController(
         scope = viewModelScope,

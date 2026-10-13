@@ -27,14 +27,25 @@ fun interface VoiceSocketFactory {
 }
 
 class OkHttpVoiceSocketFactory(
-    private val client: OkHttpClient =
+    client: OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build(),
+    private val authentication: RequestAuthentication = RequestAuthentication("https://127.0.0.1:8000"),
 ) : VoiceSocketFactory {
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
     override fun connect(endpoint: String, onEvent: (SocketEvent) -> Unit): VoiceSocket {
-        val request = Request.Builder().url(endpoint).build()
+        val request = try { authentication.authorize(Request.Builder().url(endpoint).build()) }
+        catch (_: Exception) {
+            onEvent(SocketEvent.Failed)
+            return object : VoiceSocket {
+                override fun sendText(value: String) = false
+                override fun sendBinary(value: ByteArray) = false
+                override fun close(code: Int) = false
+                override fun cancel() = Unit
+            }
+        }
         val adapter = OkHttpVoiceSocket(onEvent)
         adapter.bind(client.newWebSocket(request, adapter))
         return adapter

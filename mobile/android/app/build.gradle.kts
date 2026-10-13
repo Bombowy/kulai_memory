@@ -16,6 +16,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-alpha"
+        buildConfigField("String", "SECURITY_MODE", "\"SECURE\"")
 
         buildConfigField("String", "MEMORY_HTTP_BASE_URL", "\"https://127.0.0.1:8000\"")
         buildConfigField("String", "ASSISTANT_WS_URL", "\"wss://127.0.0.1:8000/ws/assistant\"")
@@ -29,6 +30,7 @@ android {
 
     buildTypes {
         debug {
+            buildConfigField("String", "SECURITY_MODE", "\"LOCAL_DEV\"")
             buildConfigField("String", "MEMORY_HTTP_BASE_URL", "\"http://127.0.0.1:8000\"")
             buildConfigField("String", "ASSISTANT_WS_URL", "\"ws://127.0.0.1:8000/ws/assistant\"")
             buildConfigField(

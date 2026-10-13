@@ -1,14 +1,14 @@
-﻿"""Synthetic speech endpoint and production AI-lane tests; no main data."""
+"""Synthetic speech endpoint and production AI-lane tests; no main data."""
 import asyncio
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from backend.tests.local_transport import TestClient
 
 from backend.tests.speech_fakes import PlannerLLM
 from backend.tests.test_server_assistant_runtime import Harness, Probe
 from backend.tests.test_server_transport import TransportRuntime
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER
 from kulai_memory.application.speech import SpeechError, plan_speech
 from kulai_memory.server.runtime import ServerRuntimeError
@@ -153,7 +153,7 @@ def test_speech_http_disconnect_cancels_planner_no_response_and_runtime_reusable
             await incoming.put(dict(type="http.request", body=json.dumps({"answer": "synthetic"}).encode(), more_body=False))
             scope = dict(type="http", asgi={"version": "3.0"}, method="POST", scheme="http",
                 path="/api/assistant/speech-plan", raw_path=b"/api/assistant/speech-plan", root_path="",
-                query_string=b"", http_version="1.1", headers=[(b"content-type", b"application/json")],
+                query_string=b"", http_version="1.1", headers=[(b"host", b"127.0.0.1:8000"), (b"content-type", b"application/json")],
                 server=("127.0.0.1", 8000), client=("127.0.0.1", 5000))
             request = asyncio.create_task(app(scope, incoming.get, outgoing.put))
             await entered.wait()

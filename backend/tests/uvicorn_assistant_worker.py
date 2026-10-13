@@ -19,7 +19,7 @@ from kulai_provider_ollama_embeddings import provider as bge_module
 from backend.tests.test_server_assistant_runtime import Harness
 from backend.tests.test_server_transport import answered
 from backend.tests.test_desktop_controller import FakeProvider
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.database_safety import OWNED_DATABASE_PREFIXES, database_config_for_database
 from kulai_memory.server.runtime import VoiceMemoryServerRuntime
 from kulai_memory.settings import get_settings

@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .security.configuration import SecurityMode
+
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -19,6 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "KulAI Memory"
     app_env: str = "dev"
     debug: bool = False
+    kulai_security_mode: SecurityMode = SecurityMode.SECURE
     db_host: str = "localhost"
     db_port: int = 5432
     db_user: str = "kulai"

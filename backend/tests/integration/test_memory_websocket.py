@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
-from fastapi.testclient import TestClient
+from backend.tests.local_transport import TestClient
 from kulai_transcription import (
     AudioInputKind,
     TranscriptionCapabilities,
@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.websockets import WebSocketDisconnect
 
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application import TranscriptMemoryIngestionStatus
 from kulai_memory.database_safety import (
     async_database_url,

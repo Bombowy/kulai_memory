@@ -27,21 +27,24 @@ interface MemoryApi {
     suspend fun planSpeech(answer: String): SpeechPlan
 }
 
-enum class HttpFailure { UNAVAILABLE, INVALID_RESPONSE, NOT_FOUND, OPERATION_FAILED }
+enum class HttpFailure { UNAVAILABLE, INVALID_RESPONSE, NOT_FOUND, OPERATION_FAILED, AUTHENTICATION_REQUIRED }
 class MemoryHttpException(val failure: HttpFailure) : Exception(when (failure) {
     HttpFailure.UNAVAILABLE -> "Local server is unavailable."
     HttpFailure.INVALID_RESPONSE -> "The server response was invalid."
     HttpFailure.NOT_FOUND -> "Memory not found."
     HttpFailure.OPERATION_FAILED -> "The memory assistant could not complete the operation."
+    HttpFailure.AUTHENTICATION_REQUIRED -> "Authentication required."
 })
 
 class MemoryHttpClient(
     baseUrl: String,
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(210, TimeUnit.SECONDS)
         .callTimeout(240, TimeUnit.SECONDS).build(),
+    private val authentication: RequestAuthentication = RequestAuthentication(baseUrl),
 ) : MemoryApi {
     private val base = baseUrl.toHttpUrl()
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
 
     override suspend fun listMemories(archived: Boolean, limit: Int, cursor: MemoryHistoryCursor?): MemoryHistoryPage {
         require(limit in 1..100) { "Invalid history request." }
@@ -76,7 +79,9 @@ class MemoryHttpClient(
     }
 
     private suspend fun <T> parse(request: Request, parse: (String) -> T): T {
-        val bytes = body(request)
+        val authorized = try { authentication.authorize(request) }
+        catch (_: AuthenticationException) { throw MemoryHttpException(HttpFailure.AUTHENTICATION_REQUIRED) }
+        val bytes = body(authorized)
         return try {
             withContext(Dispatchers.IO) {
                 val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -99,6 +104,7 @@ class MemoryHttpClient(
                 try {
                     val bytes = response.use {
                         if (!it.isSuccessful) throw MemoryHttpException(when (it.code) {
+                            401, 403 -> HttpFailure.AUTHENTICATION_REQUIRED
                             404 -> HttpFailure.NOT_FOUND
                             503 -> HttpFailure.UNAVAILABLE
                             else -> HttpFailure.OPERATION_FAILED

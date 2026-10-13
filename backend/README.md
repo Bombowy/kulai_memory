@@ -245,7 +245,8 @@ closes the connection without Memory events. A recoverable save failure leaves
 the socket open for `memory.retry`, which reuses the same transcript and IDs.
 The server closes cleanly after `memory.saved`. The adapter is bound only by the
 existing localhost development launcher. Android alpha still uses this unchanged
-v1 endpoint through ADB reverse. LAN/WSS/auth/pairing belong to TASK 4D.
+v1 endpoint through ADB reverse in explicit `LOCAL_DEV`. Authentication is available
+through the security core; LAN/WSS/pairing remain future tasks.
 
 ## Local history and assistant transport
 
@@ -272,4 +273,4 @@ cleanup; no completed event is sent after disconnect.
 
 See [local transport contract](../docs/LOCAL_ASSISTANT_TRANSPORT.md) for schemas,
 cursor semantics, audio bounds, errors and future Android URLs. This phase is
-loopback-only, without authentication, LAN, WSS or new Android UI.
+loopback-only, with explicit `LOCAL_DEV` and `SECURE` modes, without LAN/WSS/pairing.

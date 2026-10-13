@@ -1,474 +1,320 @@
-﻿TASK 6C.3 — Android local Polish/English TTS with canonical server speech planning
-Data: 2026-10-12
-Repo: C:\Bombowy\Projekty\kulai_memory
-Decision: OK DO COMMITA (code/tests review; physical-device acceptance smoke remains).
-Nie wykonano commit ani push.
+TASK 4D.1 — Secure Authentication Foundation
+Projekt: KulAI Memory
+Data: 2026-10-13
+Repozytorium: C:\Bombowy\Projekty\kulai_memory
+Status: zakres fundamentu zaimplementowany i zweryfikowany; gotowy do review użytkownika.
+Nie wykonano commit ani push. Nie wdrożono LAN, TLS/WSS, parowania ani trwałego storage.
 
-1. Start commit/status
-HEAD = origin/main = 1613c29e7bae7ed87b279dd81b139d00885c180c
-feat: add Android history and text/voice Memory assistant
-TASK 6C.2 był committed/pushed przed rozpoczęciem.
-git status --short pusty, main...origin/main, vendor clean.
-Sprawdzono git status/status -sb/log -5/submodule status/vendor status.
-Vendor pin: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Main/schema/local migration head: kulai_memory_0004; strict db_doctor PASS.
-Zapisano complete main snapshot BEFORE. Nie wykonano export_repo.py.
+1. Stan początkowy i ochrona danych
+HEAD: 69114f1a4e1d354c201a648d2505f33ab81b30b7
+feat: add Android offline PL/EN speech with canonical server planning
+Początkowy git status był czysty. TASK 6C.3 był już zatwierdzony przez użytkownika.
+Submodule vendor/kulai_modules: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+Nie zmieniono submodule, istniejących migracji, application Memory/RAG,
+namespace embeddingów, providerów, server/runtime.py ani zasad backup/restore.
+Nie uruchomiono produkcyjnego runtime'u przeciw głównej bazie w testach.
+Nie wykonano migracji ani zapisów do głównej bazy. Nie uruchomiono export_repo.py.
 
-2. Existing speech-core audit
-Przeczytano application/speech.py, rag_runtime.py, server/runtime.py,
-memory_http.py, assistant_contract.py; Desktop speech_runtime/local_tts/controller;
-Android assistant/root/screen/ViewModel/HTTP/parser/models.
-Reusable canonical planner: application.speech.plan_speech.
-Owns policy/structured generation/exact-text validation/adjacent-language merge.
-MemoryRagRuntime.plan_speech reuses its already-owned Qwen and opens no DB.
-Desktop SpeechRuntime/WindowsSpeechProvider own Windows synthesis and temporary WAVs.
-Tych platform adapters nie kopiowano na Android.
-Android nie otrzymuje promptu, language-detection logic, retrieval/context ani citations
-w speech request. Android posiada osobny local engine i MemorySpeechController.
-application.speech, rag_runtime, RAG prompt/grounding, Desktop TTS są bez zmian.
+2. Audyt rzeczywistej architektury przed implementacją
+Przeczytano app_factory.py, settings.py, scripts/dev.py, server/runtime.py,
+memory_http.py, speech_http.py, memory_ws.py, assistant_ws.py, cancellation.py,
+server_access.py, protokoły i fixture'y transportowe/integracyjne.
+Przeanalizowano rzeczywiste OkHttp MemoryHttpClient, OkHttpVoiceSocketFactory,
+VoiceMemoryViewModel, konfigurację debug/release i manifesty Androida.
+Sprawdzono mechanizmy owned WAV, lifecycle runtime'u, provider reuse, AI lane,
+shutdown, drain shielded Whisper, anulowanie sieciowego RAG i transakcji.
+Przeczytano vendor factory/logger/exception handlers bez modyfikowania vendor.
 
-3. Server endpoint contract
-POST /api/assistant/speech-plan
-Request: {"answer":"..."}
-Nonblank str, <=6000 characters; unknown request fields/type/missing fields rejected.
-Response: {"segments":[{"text":"...","language":"pl|en"}]}
-1..64 nonempty segments. Strict projection, no original-answer echo field,
-query/citations/Memory IDs/context/prompts/provider diagnostics.
-from_plan validates exact concatenation again before projecting.
-Safe 400/422: Invalid speech request.
-503: Memory assistant is unavailable.
-500: Speech planning could not be completed.
-Dedicated speech route reuses the existing safe HTTP/cancellation mechanism.
-Existing assistant/history safe messages remain unchanged.
+Prywatne trasy i skutki operacji:
+GET /api/memories — canonical active/archived history; odczyt DB.
+GET /api/memories/{id} — canonical detail; odczyt DB.
+POST /api/assistant/ask — BGE/retrieval/Qwen; prywatna odpowiedź/cytowania.
+POST /api/assistant/speech-plan — final answer/Qwen; prywatny tekst odpowiedzi.
+/ws/memory — PCM/Whisper, canonical ingestion, zapis Memory oraz indeksowanie.
+/ws/assistant — PCM/Whisper/RAG; prywatna odpowiedź/cytowania bez ingestion.
+GET /health — publiczne liveness, wyłącznie {"status":"ok"}.
+Desktop i CLI pracują lokalnie/in-process; nie dodano im endpointów sieciowych.
+Docs/OpenAPI to dodatkowe powierzchnie: wyłączone w SECURE.
 
-4. Server runtime/Qwen reuse
-VoiceMemoryServerRuntime.plan_speech validates input, requires ready runtime
-and delegates to existing MemoryRagRuntime.plan_speech through _run_ai.
-Same AI lane as Whisper/BGE/RAG, no reentrant acquisition.
-Same long-lived Qwen; no provider creation per request/segment.
-No DB transaction/session, no BGE, no Whisper during speech planning.
-Controlled runtime asserts unchanged session/model-call counts.
-Real owned runtime: Qwen clients=1, requests=8 (speech=7, RAG=1), closed=1.
-The same object served six synthetic plans plus canonical RAG -> speech.
-BGE requests during plans=0; Whisper requests=0; DB checkout during Qwen=0.
+Zidentyfikowane obejścia/zagrożenia:
+- Wszystkie prywatne adaptery wcześniej nie miały authentication enforcement.
+- WS przyjmował sesję przed kontrolą tożsamości, także przy niedostępnym runtime.
+- Walidacja body/redirect przed auth mogłaby ujawniać kontrakty i angażować adaptery.
+- Duplicated Authorization, query tokens, cookie/subprotocol tokens i podszywanie
+  się publicznym device ID nie mogą zastępować poprawnego bearer credential.
+- LOCAL_DEV poza loopback, DNS rebinding/Host, browser Origin/CSWSH i nagłówki proxy.
+- Vendor logger ufał X-Request-ID/User-Agent; fallback logował/odzwierciedlał path.
+- Domyślne access/WS info logs upstream mogą zawierać query string.
+- Nieprawidłowy kod wyjątku RAG mógł trafić do diagnostyki bez allowlisty.
+- /ws/memory nie monitorował disconnect podczas transkrypcji/zapisu/retry.
+- Projekt podany przez klienta nie jest dowodem projektu rzeczywistego zasobu.
+- Wykradziony bearer token pozwala podszyć się pod jego właściciela; ID nie jest
+  dodatkowym sekretem ani kryptograficznym dowodem posiadania urządzenia.
 
-5. Server cancellation
-Existing until_disconnect wraps plan_speech without polling/sleeps.
-Real Uvicorn loopback first speech request returns 200.
-Real TCP disconnect during blocked planner cancels work; next ASK returns 200.
-AI callers/tasks and DB checkout return to 0; clients remain reusable.
-Raw ASGI cancellation also cancels planner, without successful stale plan.
-Core logging middleware may classify an already-disconnected ASGI request as its
-safe no-response error; no answer/provider payload is logged or delivered.
-No temporary diagnostics or answer logging were introduced.
+3. Neutralny Security Core
+Nowy pakiet kulai_memory.security, bez importów Memory/RAG, FastAPI, DB lub UI:
+models.py — immutable Device, TokenRecord, Principal, IssuedCredential; walidacja
+UUID, aware timestamps, akcji i okresu ważności; redacted reprezentacje sekretów.
+configuration.py — SecurityMode LOCAL_DEV/SECURE, secure default, timeout auth.
+storage.py — SecurityReader oraz SecurityStore; spójny lookup token/device,
+atomowe create/revoke/rotate i statusy urządzeń; DenyAllSecurityReader.
+authentication.py — Authenticator oraz zaufane lokalne CredentialManager API.
+authorization.py — wspólna polityka action/project niezależna od transportu.
+in_memory.py — referencyjny magazyn procesowy z atomowością także między wątkami.
+__init__.py — neutralne publiczne API.
 
-6. Android speech models
-SpeechLanguage enum: PL / EN only.
-SpeechSegment(text, language), nonempty text.
-SpeechPlan(segments), validate(requested original answer).
-Separate neutral port LocalSpeechEngine and TtsBoundary for platform injection.
-No Qt/SQLAlchemy/DB, no third-language support and no language heuristic.
+Device UUID, token UUID i sekret są rozdzielone. Urządzenia: PENDING, TRUSTED,
+REVOKED. PENDING nie może otrzymać tokenu; REVOKED nie może zostać ponownie zaufane.
+Sekret: secrets.token_urlsafe(32), 256 bitów losowej entropii, 43 znaki base64url.
+Magazyn zachowuje tylko standardowy SHA-256 digest, bez tokenu plaintext.
+Nie tworzono własnego algorytmu kryptograficznego ani podpisywania/JWT.
+Ważność: issued_at <= now < expires_at. Domyślny TTL 1 h, maksymalny TTL 30 dni.
+Authenticator weryfikuje digest, relację token/device, stan zaufania, revocation,
+ważność i opcjonalny claimed device ID. Błędy magazynu również odmawiają dostępu.
+Rotacja atomowo unieważnia stary token i tworzy jednego następcę tego samego
+urządzenia, z niezmienionymi akcjami/projektem. Revoke tokenu jest idempotentne.
+Nie ma publicznego endpointu wydawania/rotacji tokenów ani automatycznego bootstrap.
+Magazyn pamięciowy jest jawnie nietrwały: restart usuwa jego stan. Nie pozorowano
+trwałości. PostgreSQL adapter oraz jego migracja pozostają osobnym zadaniem.
+Storage jest borrowed; właściciel adaptera, nie Memory runtime, odpowiada za close.
 
-7. Exact-plan validation
-Parser uses existing strict JSON DOM and exact keys.
-Response root only segments; segment only text/language.
-Count 1..64; label exactly pl/en; text nonempty; original nonblank <=6000.
-segments.joinToString("") { text } == original answer, character for character.
-Whitespace/newlines/punctuation are preserved.
-Android bounds are conservative UTF-16 counts.
-Malformed UTF-8/JSON, unknown/missing fields/labels, rewritten text or excess
-segments fail safely. No translation/fuzzy repair/full-answer PL fallback.
-HTTP uses the existing cancellation-safe path and explicit UTF-8 JSON.
-Only AssistantAnswer.answer is sent.
+4. HTTP/WS enforcement
+Nowy api/authentication.py zawiera pure ASGI middleware wspólne dla obu transportów.
+Kontrola jest przed routingiem, redirect, walidacją body i uruchomieniem endpointu.
+Po odmowie: zero tworzenia sesji/WAV, wywołań Whisper/BGE/Qwen, canonical read/write.
+Autoryzacja:
+- history/detail -> memory.read
+- /ws/memory -> memory.write
+- text/voice ASK -> assistant.ask
+- speech-plan -> assistant.speech_plan
+Nieznane prywatne operacje w SECURE są deny-by-default.
 
-8. Installed voice selection algorithm
-One TextToSpeech audit after initialization; no startup speak/download.
-Native getVoices -> neutral installed voice metadata.
-Eligible: !isNetworkConnectionRequired, data not marked KEY_FEATURE_NOT_INSTALLED,
-nonblank ID and exact locale.
-Filter pl-PL/en-US, stable sort by ID, first eligible voice.
-PL/EN selected IDs are runtime state and displayed under speech controls.
-Voice network requirement is documented by Android:
-[Voice API](https://developer.android.com/reference/android/speech/tts/Voice).
+Authorization: Bearer <token> działa dla HTTP i natywnych WS z obsługą nagłówków.
+X-Kulai-Device-ID jest opcjonalnym publicznym UUID; podany musi odpowiadać tokenowi.
+Nie używa się IP klienta jako tożsamości. Token innego urządzenia z niezgodnym
+claimed ID, untrusted/revoked device, expired/revoked/unknown token są odrzucane.
+Odrzucane są malformed/duplicate Authorization i identity headers, credential
+query keys (również zakodowane), wszystkie query WS oraz subprotocol credentials.
+Cookie nie uwierzytelnia. Host/Origin i forwarded headers mają jawne odmowy.
+Klienci browser wymagają przyszłej jawnej origin policy; obecne natywne nie mają Origin.
 
-9. Chosen offline voice rules
-Polish: exact pl-PL.
-English: exact en-US.
-No fallback to en-GB, locale language-only, network voice or another language.
-Missing either voice -> TTS unavailable; NOTE/ASK/MEMORY stay usable.
-Voice download is never requested. User installs/configures offline voice data
-manually in Android settings and restarts app to repeat audit.
-Actual phone voice IDs were not fabricated or asserted on this Windows host.
-Tests use explicit fixture IDs offline-pl / offline-en at the platform boundary.
+401: {"detail":"Authentication required."}, WWW-Authenticate: Bearer, no-store.
+403: {"detail":"Access denied."}; brak informacji o Memory/stanie urządzenia.
+WS odmowa przed accept: ASGI websocket.close 1008 -> rzeczywisty handshake HTTP 403.
+Brak eventów sesji i prywatnego payloadu podczas odmowy.
+Już przyjęty WS ponownie sprawdza token przed każdą prywatną ramką, w tym STOP/RETRY;
+wygasanie/unieważnienie daje close 1008, bez nowych operacji prywatnych.
 
-10. TTS engine lifecycle
-VoiceMemoryViewModel owns one MemorySpeechController / OfflineLocalSpeechEngine.
-AndroidTtsBoundary constructs one TextToSpeech with Application Context.
-No Activity reference, provider per segment, GlobalScope or unmanaged scope.
-startup audits voices, with 10 s bound, without synthesis/Qwen.
-onCleared cancels planner/utterances, stops and shuts down native engine once.
-Shutdown is idempotent, including missing voices/init failure.
-Manifest adds only TTS service visibility queries; no permission/network exposure.
-Android requires TTS service queries for modern target SDK:
-[TextToSpeech API](https://developer.android.com/reference/android/speech/tts/TextToSpeech).
+Podczas asynchronicznego lookup jeden watcher wykrywa disconnect. Bufor jest
+ograniczony do 64 wiadomości i 64 KiB; po sukcesie dokładnie odtwarza wejście.
+Domyślny timeout authentication: 5 s. Disconnect/cancellation anuluje i drenuje
+lookup/watcher, zanim endpoint dostanie kontrolę. Nie ma polling ani sleep.
+Dodano monitoring disconnect do /ws/memory podczas processing i save retry.
+Whisper zachowuje shield/drain i dostęp do WAV do zakończenia; sieciowa inference
+jest anulowana. Existing provider reuse i shutdown zamykają owned zasoby raz.
+REST odpowiedzi i protokoły WS v1 (w tym IDs/retry/sequence) pozostają zgodne.
 
-11. Voice verification
-Before every native utterance:
-select exact chosen voice -> verify activeVoiceId equals chosen ID -> speak.
-Select failure, active-ID mismatch, enqueue failure or onError stops safely.
-English is never routed through the Polish fallback.
-Unrecoverable native stop failure shuts down/degrades the engine safely.
+Host usuwa vendor RequestLoggingMiddleware i wyłącza jego fallback handlers przy
+composition; vendor pozostaje nietknięty. Zostaje log transport/action/status oraz
+istniejące bezpieczne stage/type/allowlisted code. Brak URL, headers, request ID
+klienta, token/digest, body i private exception payload w server diagnostics.
+Wyłączono debug tracebacks; nieobsłużony adapter error ma bezpieczny host fallback.
+Kody błędów RAG spoza allowlisty logowane są wyłącznie jako none.
 
-12. Sequential segment playback
-One pending utterance, AtomicReference ownership for cross-thread callbacks.
-Each segment/chunk awaits completion before the next call.
-IDs contain generation + segment index + chunk index.
-UtteranceProgressListener maps onDone/onError/onStop to typed completion.
-Old IDs cannot complete/fail a new generation.
-Logical segment over native getMaxSpeechInputLength is split into exact chunks,
-same language and voice, without splitting surrogate pairs.
-No WAV concatenation, parallel segment playback or files.
-Bounds: utterance 120 s; whole operation 600 s.
-Progress callback API:
-[UtteranceProgressListener](https://developer.android.com/reference/android/speech/tts/UtteranceProgressListener).
+5. Jawne tryby i zgodność development
+Settings i SecurityConfig domyślnie SECURE. Brak configured reader = odmowa dostępu.
+.env.example jawnie wybiera LOCAL_DEV. scripts/dev.py wybiera LOCAL_DEV tylko kiedy
+tryb nie jest skonfigurowany ani w environment, ani w .env. Skonfigurowany SECURE
+nie jest automatycznie obniżany. --security-mode pozwala na świadomy CLI wybór.
+Launcher wypisuje wyłącznie publiczną nazwę trybu i loopback-only.
+W obu trybach bind nadal 127.0.0.1:8000; proxy_headers=False, access_log=False,
+log_level=warning. Nie dodano host/LAN opcji i nie uruchomiono 0.0.0.0.
+LOCAL_DEV dopuszcza brak credential tylko przy loopback listener i peer. Podany
+credential zawsze jest sprawdzany; bad token/store failure nie przechodzi do dev bypass.
+ADB reverse tcp:8000 tcp:8000 oraz dotychczasowe debug URL są zachowane.
 
-13. Speech controller
-Separate MemorySpeechController owns availability, selected voices, autoSpeak,
-phase/error, current speech generation and last consumed answer version.
-Phases: UNAVAILABLE / READY / PLANNING / SPEAKING / STOPPING / ERROR.
-Startup, manual speak, answerRendered, stopAudio, shutdown.
-It has no canonical Memory/RAG mutation path.
-Provider failures use authored Could not speak answer / TTS unavailable.
-Answer and citations stay in the independent Assistant state.
+6. Android
+Nowy neutralny CredentialProvider dostarcza thread-safe, nonblocking snapshot.
+DeviceCredential ma UUID, osobny opaque secret i redacted toString.
+RequestAuthentication jest wspólną polityką HTTP oraz /ws/memory i /ws/assistant.
+Poświadczenia są przypisane do jednej skonfigurowanej server origin; odrzucane są
+query credential keys, obce origin i niebezpieczny remote cleartext/local-dev.
+Token tylko w Authorization, publiczny UUID w X-Kulai-Device-ID. Bez sekretów
+w kodzie, BuildConfig, zasobach, query, diagnostyce lub treści żądań.
+HTTP i WS mają wyłączone followRedirects/followSslRedirects, także same-origin.
+401/403 i brak credentials w SECURE mają authored errors; provider wyjątki nie
+ujawniają sekretów. Brak WS credentials odmawia jeszcze przed otwarciem sieci.
+ViewModel używa jednego provider/policy dla NOTE, ASK, MEMORY oraz speech planning.
+Debug BuildConfig.SECURITY_MODE = LOCAL_DEV; release/default = SECURE.
+Obecny provider jest pusty; nie ma ekranu pairing ani produkcyjnego credential store.
+Transport klonuje konfigurację OkHttp, współdzieląc istniejący pool/dispatcher;
+nie tworzy nowych providerów AI i zachowuje istniejące cancellation/lifecycle.
 
-14. Auto-speak Text ASK
-Default ON checkbox: Speak answers automatically.
-Compose renders answer/sources, then common LaunchedEffect calls root.answerRendered.
-Each successful Assistant answer gets monotonic answerVersion.
-SpeechController consumes each version once; if enabled/available it plans and speaks.
-Text ASK tests use actual MemoryAssistantController coroutine result, root callback,
-fake local engine; exact one plan and speech after rendering.
+7. Faktycznie wykonana walidacja
+Interpreter backendu z PyCharm: backend/.venv/Scripts/python.exe, Python 3.14.5.
+Interpreter narzędzi/root: .venv/Scripts/python.exe, Python 3.13.15.
+FastAPI 0.142.2, Starlette 0.52.1, Uvicorn 0.54.0, websockets 17.2, pytest 8.4.2.
 
-15. Auto-speak Voice ASK exactly once
-Same complete/result/answerVersion/post-render mechanism as Text ASK.
-No voice-specific second trigger.
-Voice socket transcript/RAG completion -> rendered result -> one speech.
-Returning to ASK or repeated render callback does not replay the same answer.
-Auto OFF suppresses both; manual SPEAK still works.
+PASS — finalna pełna regresja backend unit:
+backend/.venv/Scripts/python.exe -m pytest backend/tests --ignore=backend/tests/integration -q --tb=short
+821 passed, 1 upstream DeprecationWarning, 53.16 s.
+Obejmuje nowe security core/transport/cancellation, architectural boundaries,
+existing Memory/RAG/indexing/tombstone/backup/runtime/Desktop/transport/TTS tests.
 
-16. Insufficient
-Canonical insufficient result is spoken normally.
-Server canonical planner returns one PL segment and zero extra Qwen requests.
-Android displays Not enough information and empty sources.
-Real and controlled tests prove fast path and exact original text.
+PASS — finalne kontrolowane integracje rzeczywistego TCP/Uvicorn:
+test_security_uvicorn.py, test_assistant_uvicorn.py, test_speech_uvicorn.py
+11 passed, 2 skipped (real BGE/Qwen/PostgreSQL opt-in), 1 upstream warning, 32.72 s.
+Sprawdzono wszystkie prywatne trasy, real WS pre-accept HTTP 403, poprawne REST/WS,
+rotację, duplicate/missing/invalid/revoked/cross-device headers, query attacks,
+disconnect podczas auth HTTP/WS i ASK oraz subsequent request/reuse/shutdown.
+Nowy security TCP suite używa losowych loopback portów i synthetic runtime/store.
+Nie wykonuje migracji, DB zapisów ani real model requests.
 
-17. Manual SPEAK
-SPEAK uses the last valid canonical AssistantAnswer.answer.
-Auto OFF still permits manual speech.
-After completion/STOP, user can SPEAK again without engine reinitialization.
-No citations/UUID/score/source list sent to planner or native speech.
-Speech never starts into an active microphone capture/replacement operation.
+PASS — root tools + kontrolowane integracje, wcześniejszy kompletny przebieg:
+.venv/Scripts/python.exe -m pytest tests backend/tests/integration/test_assistant_uvicorn.py backend/tests/integration/test_speech_uvicorn.py backend/tests/integration/test_security_uvicorn.py -q --tb=short
+272 passed, 3 skipped, 1 upstream warning, 34.56 s.
+Skipped: test symlink (Symlinks are unavailable to this process) oraz dwa real DB/BGE/Qwen testy.
+Po dodaniu testów launchera: tests/test_dev_security.py — 5 passed, 0.17 s.
+Sprawdzono local default, zachowanie configured SECURE, oba jawne CLI wybory,
+loopback bind, proxy i logging flags bez uruchamiania rzeczywistego main runtime.
 
-18. STOP AUDIO
-Planning: cancel HTTP planner request; initialized native TTS stop.
-Speaking: retire pending utterance, stop native queue and cancel speech job.
-Wait/drain previous job; return READY if engine available.
-Old onDone/onError/onStop ignored.
-Answer/sources unchanged; provider remains reusable after normal STOP.
-Cancelled STOP caller retains the retiring job reference so the next operation
-still waits for drain. No sleep/timer sequencing workaround.
+PASS — Android gradlew.bat testDebugUnitTest assembleDebug --console=plain.
+20 suites, 180 tests, failures=0, errors=0, skipped=0 (z XML raportów Gradle).
+Obejmuje nowe security header/origin/provider/default/redirect/revocation-error
+sprawdzenia oraz wcześniejsze NOTE/ASK/MEMORY/TTS i real OkHttp mock server flows.
+Build assembleDebug: SUCCESSFUL.
+APK: mobile/android/app/build/outputs/apk/debug/app-debug.apk, 12 704 179 bajtów.
+SHA-256: ad47708191c600fb20a7931b756802c413e3c3add6168293e8ddc56d53b74b9a.
 
-19. New-operation replacement
-MemoryClientController coordinates Text ASK / Voice ASK / Voice Note,
-including Note retries, with stopAudio before invoking feature controller.
-It cancels obsolete pending root operations and uses operation-generation ownership.
-No cyclic controller dependencies.
-Barrier tests prove next ASK/socket/note does not start before stopped planner drains.
-History/detail do not stop speech.
-Auto/manual speech is suppressed during active microphone capture to avoid feedback.
+PASS — review bezpieczeństwa i architektury, kontrola zmian i ownership.
+PASS — git diff --check; vendor git status czysty, pin bez zmiany.
+PASS — brak staged zmian, brak commit/push; main...origin/main bez nowego commita.
+PASS — strict database doctor BEFORE i AFTER; complete read-only snapshots identyczne.
 
-20. Stale callback protection
-HTTP/utterance/speech/root generations guard ownership.
-Production OfflineLocalSpeechEngine ignores callbacks whose utterance ID differs.
-Controlled native test: old onDone while new utterance pending does not finish it.
-Closed engine/startup callbacks cannot resurrect state.
-Repeated render of the same answer version causes zero second playback.
-Native stop failure does not leave a usable-looking active engine.
+NIE WYKONANO ponownego smoke na fizycznym telefonie. adb devices nie wykrył żadnego
+urządzenia/emulatora; adb reverse --list zgłosił no devices/emulators found.
+Nie instalowano APK, nie zmieniano ADB reverse i nie generowano nowych main Memory.
+Nie wykonywano opt-in real Whisper/BGE/Qwen/PostgreSQL integration ani migracji.
+Upstream warning dotyczy anyio BlockingPortal alias w Starlette TestClient.
+Nie jest oznaczony jako błąd bezpieczeństwa ani zamieniony w deklarację PASS testów pominiętych.
 
-21. Permission behavior
-TTS does not use RECORD_AUDIO.
-Denied mic permission: Text ASK + SPEAK remain operational.
-Voice Note/Voice ASK remain disabled/rejected through existing gate/permission logic.
-No new permission was added for TTS.
-Physical permission dialog behavior remains part of manual device smoke.
+8. Niezmienność danych głównej bazy — read-only
+Użyto istniejącego database_snapshot_url: spójna transakcja REPEATABLE READ,
+READ ONLY; SELECT pełnych durable rows, SHA-256, rollback i engine dispose.
+Porównano kompletny snapshot, nie tylko liczbę rekordów.
+Migration revision BEFORE = AFTER = kulai_memory_0004.
+Memory: 9 -> 9,
+SHA-256 c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926.
+Vectors: 9 -> 9,
+SHA-256 75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f.
+Tombstones: 1 -> 1,
+SHA-256 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147.
+Żadnych prywatnych treści/embeddingów/metadata nie wypisano do raportu ani logów.
+Techniczne fingerprinty BEFORE/AFTER zapisano poza repo w katalogu TEMP.
 
-22. Zero speech persistence
-Native speak only; no synthesizeToFile call/audio file/cache.
-No speech history, Room, SQLite or DataStore.
-Canonical answers/citations and speech preference/voice IDs are in-memory state.
-Server speech endpoint does no Memory/vector/tombstone writes.
-No main answer/audio was sent automatically to planner or native TTS.
-No audio/provider payload logs.
-
-23. Server tests
-test_server_speech.py: 20 controlled tests.
-Pure PL/EN, both two-language orders, PL/EN/PL and EN/PL/EN.
-Insufficient zero-Qwen, blank/over-limit/type/extra-field validation,
-invalid planner output, safe failures/log privacy, exact text,
-same runtime/client, no sessions/other models, lane and cancellation.
-test_speech_uvicorn.py: actual Uvicorn first request/TCP disconnect/next ASK.
-Both run through production router/cancellation/lane; no TestClient-only success proof.
-
-24. Real Qwen planner tests
-Opt-ins KULAI_RUN_POSTGRES_INTEGRATION=1 and KULAI_RUN_LLM_INTEGRATION=1.
-Owned migrated DB only; qwen3.5:9b explicitly configured/asserted.
-Observed sequences:
-PL
-EN
-PL -> EN
-EN -> PL
-PL -> EN -> PL
-EN -> PL -> EN
-Exact concatenation and full phrase language coverage asserted.
-Requested mixed cases included:
-"To jest test. This is a test."
-"This is a test. To jest test."
-"To jest odpowiedź. This is English. I znowu polski."
-One client also served owned synthetic dragon RAG -> plan, citation exact,
-fixture snapshot unchanged, Qwen checkout=0.
-clients=1 / total requests=8 / speech requests=7 / RAG requests=1 / closed=1.
-Insufficient direct PL request adds zero Qwen calls.
-No BGE/Whisper work during planning; owned fixture indexing/retrieval use shared BGE.
-Final explicit-model focused integration: 1 PASS, 19.30 s.
-
-25. Android parser tests
-SpeechHttpTest: 3 PASS.
-Valid PL/EN/mixed, exact whitespace/newlines/punctuation, UTF-8 bytes and
-answer-only body, actual OkHttp cancellation, invalid input, malformed UTF-8.
-InvalidSpeechPlanTest: 15 PASS.
-Unknown language/key/type, missing field, empty/65 segments, over-limit,
-concat mismatch/translation/change, malformed JSON/trailing input rejected.
-No text repair or PL fallback.
-
-26. TTS fake tests
-LocalSpeechEngineTest: 9 PASS.
-UnavailableLocalSpeechTest: 9 PASS.
-Tests exercise production OfflineLocalSpeechEngine with fake TtsBoundary.
-Init/reuse/deterministic selection, missing PL/EN, network-only/uninstalled voices,
-wrong locale, explicit verified routing and exact PL/EN/PL + EN/PL/EN order,
-sequential await, stale callbacks, native bounds/surrogates,
-voice mismatch/set/enqueue failure, onError/stop/repeat and shutdown once.
-Fake boundary IDs are diagnostics for tests, not phone voice claims.
-
-27. Speech controller tests
-MemorySpeechControllerTest: 14 PASS.
-Manual/repeat, auto exactly once/off, insufficient,
-planning/native failure with answer unchanged,
-unavailable, STOP planning/speaking, noncooperative drain,
-cancelled STOP caller ownership, shutdown, input bounds and startup no synthesis.
-MemorySpeechRootTest: 9 PASS.
-Actual Text/Voice result paths and common render callback, no duplicate,
-mic denial, failed assistant zero speech, unavailable/error result preserved,
-new Text/Voice/Note waits stop, stale native callback,
-tabs keep speech running and no replay, active capture suppression.
-
-28. Previous Android regressions
-All previous 115 tests remain PASS.
-NOTE stable ingestion UUID/private cache/RETRY NOTE/RETRY SAVE/index retry/
-no repeated STT/cache cleanup/strict v1/disconnect remain semantically intact.
-History/paging/detail/assistant protocols/cancellation/state/permission still PASS.
-Old Note/assistant WS protocol production files unchanged.
-Only assistant answerVersion was added for post-render speech ownership.
-Fake MemoryApi fixture implements the additive planSpeech port.
-
-29. Backend regressions
-Relevant transport suite with PostgreSQL/Ollama/LLM/Whisper opt-ins:
-132 PASS, 0 failures, 0 skipped, 205.07 s.
-Includes history/detail, HTTP ASK, /ws/assistant, /ws/memory, runtime/provider reuse,
-AI lane, disconnect, real owned PostgreSQL/BGE/Qwen/Whisper/Uvicorn,
-canonical speech units and new speech endpoint/integration.
-Backend full on backend configured SDK:
-693 PASS, 124 SKIP (opt-in integrations not enabled there), 0 failures, 79.63 s.
-New real speech integration also re-run with explicit qwen3.5:9b assertion: PASS.
-One baseline Starlette/AnyIO deprecation warning.
-Application boundaries PASS; no vendor/application/RAG/WS/migration modifications.
-
-30. Android total
-174 PASS, 0 failures/errors/skips.
-Previous 115 + 59 new speech tests.
-JVM platform boundary tests; not physical acoustic/Compose pixel tests.
-Final reports in mobile/android/app/build/test-results/testDebugUnitTest.
-Scoped jobs/calls cancelled cleanly in test shutdown; no unmanaged scope.
-
-31. assembleDebug
-BUILD SUCCESSFUL, final Android gate 6 s.
-gradlew.bat testDebugUnitTest assembleDebug
-processReleaseMainManifest and generateReleaseBuildConfig also PASS.
-No new runtime dependency/model weights/voice binary.
-Manifest TTS query compiles into debug and release metadata.
-
-32. APK path/SHA
-C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
-Size: 12703757 bytes.
-SHA-256: 03fef8c37ba4615d046ddeca09c3497677e55d34fcf0e28d9c11f3f3d55a95d1
-APK/build artifacts ignored, not added to Git.
-
-33. Release cleartext proof
-Main manifest still does not enable usesCleartextTraffic.
-Only debug override enables it.
-Merged release manifest checked: no usesCleartextTraffic=true.
-Default/release HTTP/WS URLs remain HTTPS/WSS placeholders.
-Main manifest addition is queries intent android.intent.action.TTS_SERVICE only.
-No backend bind/LAN/TLS/auth changes.
-
-34. Complete main snapshot BEFORE/AFTER
-BEFORE == AFTER EXACTLY, full DatabaseSnapshot equality including fingerprints.
-Revision: ["kulai_memory_0004"]
-Memories: count=9
-SHA-256=c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
-Vectors: count=9
-SHA-256=75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
-Tombstones: count=1
-SHA-256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Main READ ONLY for doctor/snapshot. No automated private RAG/STT/TTS/answer export.
-Owned integration asserts empty source snapshot unchanged during synthetic plans,
-then expected synthetic fixture setup followed by unchanged RAG+speech snapshot.
-No real main Memory content/answer/audio appears in this report.
-
-35. db_doctor
-Strict PASS BEFORE and AFTER; current/main/head kulai_memory_0004.
-No migration/schema/model/vector namespace changes.
-
-36. git diff --check
-PASS after final report write.
-No staging, commit or push.
-
-37. Vendor
-Clean: git -C vendor/kulai_modules status --porcelain empty.
-Pin unchanged: 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
-Reusable speech planner/provider lifecycle reused without vendor changes.
-
-38. Exact changed files (29)
-README.md
-docs/LOCAL_ASSISTANT_TRANSPORT.md
-backend/src/kulai_memory/api/memory_http.py
-backend/src/kulai_memory/api/speech_http.py
+9. Zmodyfikowane pliki
+Implementacja istniejąca:
 backend/src/kulai_memory/app_factory.py
-backend/src/kulai_memory/server/runtime.py
-backend/tests/test_server_speech.py
-backend/tests/integration/test_server_speech_plan.py
-backend/tests/integration/test_speech_uvicorn.py
-backend/tests/uvicorn_assistant_worker.py
-mobile/android/README.md
-mobile/android/app/src/main/AndroidManifest.xml
-mobile/android/app/src/main/java/com/kulai/memory/MemoryAssistantController.kt
-mobile/android/app/src/main/java/com/kulai/memory/MemoryClientController.kt
-mobile/android/app/src/main/java/com/kulai/memory/MemoryClientScreen.kt
-mobile/android/app/src/main/java/com/kulai/memory/MemorySpeechController.kt
+backend/src/kulai_memory/settings.py
+backend/src/kulai_memory/api/memory_http.py
+backend/src/kulai_memory/api/memory_ws.py
+backend/.env.example
+scripts/dev.py
+mobile/android/app/build.gradle.kts
 mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryViewModel.kt
-mobile/android/app/src/main/java/com/kulai/memory/models/SpeechModels.kt
-mobile/android/app/src/main/java/com/kulai/memory/protocol/MemoryJson.kt
 mobile/android/app/src/main/java/com/kulai/memory/transport/MemoryHttpClient.kt
-mobile/android/app/src/main/java/com/kulai/memory/speech/AndroidTtsBoundary.kt
-mobile/android/app/src/main/java/com/kulai/memory/speech/LocalSpeechEngine.kt
-mobile/android/app/src/test/java/com/kulai/memory/AssistantTestFixtures.kt
-mobile/android/app/src/test/java/com/kulai/memory/SpeechTestFakes.kt
-mobile/android/app/src/test/java/com/kulai/memory/MemorySpeechControllerTest.kt
-mobile/android/app/src/test/java/com/kulai/memory/MemorySpeechRootTest.kt
-mobile/android/app/src/test/java/com/kulai/memory/speech/LocalSpeechEngineTest.kt
-mobile/android/app/src/test/java/com/kulai/memory/transport/SpeechHttpTest.kt
+mobile/android/app/src/main/java/com/kulai/memory/transport/VoiceSocket.kt
+
+Nowa implementacja:
+backend/src/kulai_memory/api/authentication.py
+backend/src/kulai_memory/security/__init__.py
+backend/src/kulai_memory/security/models.py
+backend/src/kulai_memory/security/configuration.py
+backend/src/kulai_memory/security/storage.py
+backend/src/kulai_memory/security/authentication.py
+backend/src/kulai_memory/security/authorization.py
+backend/src/kulai_memory/security/in_memory.py
+mobile/android/app/src/main/java/com/kulai/memory/transport/RequestAuthentication.kt
+
+Nowe testy/fixtures:
+backend/tests/local_transport.py
+backend/tests/test_security_core.py
+backend/tests/test_security_transport.py
+backend/tests/test_security_cancellation.py
+backend/tests/integration/test_security_uvicorn.py
+mobile/android/app/src/test/java/com/kulai/memory/transport/RequestAuthenticationTest.kt
+tests/test_dev_security.py
+
+Istniejące testy/fixtures: jawny LOCAL_DEV z rzeczywistymi adresami ASGI loopback
+(zamiast specjalnego testserver/testclient bypass); dodatkowa kontrola granic:
+backend/tests/test_application_boundaries.py
+backend/tests/assistant_transport_fakes.py
+backend/tests/test_memory_ws.py
+backend/tests/test_memory_ws_concurrency.py
+backend/tests/test_server_transport.py
+backend/tests/test_server_speech.py
+backend/tests/test_assistant_disconnect.py
+backend/tests/uvicorn_assistant_worker.py
+backend/tests/integration/test_memory_websocket.py
+backend/tests/integration/test_server_assistant_postgres.py
+backend/tests/integration/test_server_speech_plan.py
+mobile/android/app/src/test/java/com/kulai/memory/AssistantWebSocketMockServerTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/VoiceWebSocketMockServerTest.kt
+mobile/android/app/src/test/java/com/kulai/memory/transport/MemoryHttpClientTest.kt
+
+Dokumentacja i raport:
+README.md
+backend/README.md
+mobile/android/README.md
+docs/LOCAL_ASSISTANT_TRANSPORT.md
 wynik.txt
 
-39. Known limitations
-Only Polish/English, exact pl-PL/en-US offline voices; no en-GB fallback/config UI.
-Uses the installed default Android TTS engine and its advertised offline metadata.
-Actual phone voice IDs/acoustic quality/offline behavior require device review.
-No automatic voice download; install packs manually and restart app.
-TTS startup/missing voices can leave an answer available for manual SPEAK.
-Preference/answers/history/voice IDs are in-memory, no process-death retention.
-Android uses conservative UTF-16 length <=6000.
-Per-utterance/whole-operation timeouts may safely stop unusually slow long speech.
-Speech is suppressed while microphone capture or new-operation stop/drain is active.
-No arbitrary languages, partial STT/TTS, multi-turn, LAN/WSS/auth or speech storage.
-Canonical RAG reviewed score cutoff/reranker remains outside this task.
+10. Ograniczenia i rozstrzygnięcia review
+- To foundation, bez produkcyjnego pairing/persistent security storage. W zwykłym
+  SECURE bez wstrzykniętego reader private requests są prawidłowo niedostępne.
+- InMemorySecurityStore jest procesowy; nie współdzieli state między workerami,
+  nie zachowuje rotation/revocation po restarcie. Nie ma hardcoded bootstrap secrets.
+- Aktualna canonical Memory jest globalnym zasobem. Per-device actions są obsługiwane;
+  project scope jest przygotowany w core, ale project-scoped credentials i client
+  project headers są odrzucane przez obecne trasy. Nie ma pozornej row isolation.
+- Sprawdzenie device ID wykrywa niezgodną deklarację właściciela, lecz bearer nie
+  potwierdza fizycznego urządzenia. Nie zaimplementowano proof-of-possession.
+- HTTP authorizes przy admission; WS przy handshake i kolejnych ramkach. Już
+  dopuszczone operacje nie są retroaktywnie cofane. Idle WS nie ma push revocation
+  ani timera zamykającego w chwili expiry; następna ramka jest kontrolowana.
+- Canonical COMMIT wykonany przed disconnect indeksowania pozostaje trwały,
+  zgodnie z istniejącym ingestion/idempotency. Nie dodano fałszywego rollback/Undo.
+- Obecna faza dopuszcza cleartext wyłącznie lokalnie; TLS/WSS jest oddzielnym taskiem.
+- ASGI middleware nie potrafi usuwać logów wygenerowanych wcześniej przez dowolny
+  zewnętrzny proxy/server. Własny launcher ma bezpieczne flags; przyszły hosting
+  musi zachować równoważną konfigurację loggerów, trusted proxies i bind.
+- LOCAL_DEV jest świadomym anonymous dev exception dla loopback, nie uwierzytelnieniem
+  opartym na IP. Browser access wymaga oddzielnej, jawnej origin policy.
+- Konfiguracje desktop/DB/model, Canonical Memory, embeddings/namespace, migration
+  graph, tombstones, ingestion IDs, protocol v1, TTS i backup invariants zachowane.
+- Nie dodano zewnętrznych zależności, kont użytkowników, MCP ani Memory Intelligence.
 
-40. Physical-device smoke — po review, przed final acceptance
-These instructions were not executed automatically against private main/device audio.
+11. Plan TASK 4D.2
+1) Zdefiniować trwały PostgreSQL SecurityStore z oddzielnymi security tabelami,
+   spójnym token/device lookup i atomowymi transakcjami rotate/revoke/trust.
+   Osobny projekt migracji, backup/restore oraz przegląd przed użyciem na main;
+   bez modyfikowania canonical Memory i bez migracji uruchamianych automatycznie.
+2) Zaprojektować jawne, zatwierdzane parowanie urządzenia: ograniczony czas,
+   jednorazowe challenge, jawne nadanie trust i ograniczonych actions. Nie udostępniać
+   obecnego lokalnego CredentialManager jako unauthenticated provisioning endpoint.
+3) Wpiąć pairing oraz magazyn chroniony mechanizmem platformowym Android do istniejącego
+   CredentialProvider; przechowywać secret oddzielnie od publicznego device UUID.
+   Snapshot dostarczać bez blokowania UI, rotować i czyścić po revoke/expiry.
+4) Dodać lifecycle trwałego security adaptera w composition root, z jasnym ownership
+   i cancellation, niezależnie od Memory/RAG/application i providerów AI.
+5) Dodać testy restart/multi-worker, concurrent rotate/revoke, rollback, brak secret
+   logging i parowanie/odparowanie; fixture DB tylko w bezpiecznym owned środowisku.
+6) Wykonać manual physical Android smoke NOTE/ASK/MEMORY/TTS w LOCAL_DEV oraz flow
+   paired SECURE po wdrożeniu storage. Zweryfikować reconnect po rotacji/revocation.
+7) TLS/WSS, LAN/discovery, QR i zdalny dostęp realizować zgodnie z osobnym zakresem;
+   nie traktować gotowego core jako zgody na wystawienie serwera w sieci.
 
-Terminal 1 (PowerShell):
-cd C:\Bombowy\Projekty\kulai_memory
-.\.venv\Scripts\python.exe scripts\dev.py
-
-Terminal 2 (PowerShell):
-cd C:\Bombowy\Projekty\kulai_memory
-adb reverse tcp:8000 tcp:8000
-adb reverse --list
-cd mobile\android
-.\gradlew.bat assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
-
-A. Installed offline voice audit:
-Open ASK. Under Polish / English speech inspect:
-PL (offline): chosen voice ID
-EN (offline): chosen voice ID
-Both must be present. If TTS unavailable, inspect Android Text-to-speech settings,
-manually install/configure offline Polish (Poland) and English (United States)
-voice data, then restart app. App does not trigger downloads.
-Optional offline proof: disable device network while retaining USB/ADB reverse;
-native speech should still work.
-
-B. Text ASK, checkbox ON:
-Gdzie mieszka mój zielony smok? Odpowiedz najpierw po polsku, potem po angielsku.
-Expected: canonical answer/citations render -> Preparing speech -> PL voice -> EN.
-Listen to pronunciation and compare the displayed chosen voice IDs.
-No citations/UUID/score should be spoken.
-
-C. Reverse:
-Where does my green dragon live? Answer first in English, then in Polish.
-Expected: answer/citations -> EN voice -> PL.
-Also review a three-part bilingual answer if available: PL -> EN -> PL.
-
-D. Auto OFF:
-Uncheck Speak answers automatically. Ask again.
-Expected: answer appears, no auto playback; SPEAK reads it manually.
-
-E. STOP AUDIO:
-During preparing/speaking press STOP AUDIO.
-Expected: speech interrupted, answer/citations remain, SPEAK works again.
-Start a new ASK during speech: old speech stops before new operation starts.
-
-F. Voice ASK:
-With checkbox ON, ASK BY VOICE and ask the dragon question.
-STOP QUESTION -> transcript -> answer/citations -> one automatic playback.
-No double speech on return to ASK.
-
-G. Deny microphone:
-Revoke RECORD_AUDIO permission in App settings if already granted.
-Text ASK + SPEAK still work; both voice starts disabled.
-History/detail still work.
-
-H. Tabs/lifecycle:
-Start speech -> MEMORY/detail -> ASK: speech may continue, no duplicate replay.
-STOP AUDIO on return. New Voice Note must stop old speech before capture.
-Close app during planning/speaking; no late playback/service leak.
-Actual physical smoke/voice names are pending user review, not represented as PASS.
-
-41. Proposed TASK 4D
-Design LAN access with WSS/TLS, authentication and device pairing.
-Protect HTTP history/detail/ASK/speech-plan and both WS endpoints consistently.
-Define device trust/revocation and release configuration while retaining loopback dev.
-No TASK 4D implementation/network exposure was added here.
-
-42. Proposed commit message
-feat: add Android offline PL/EN speech with canonical server planning
-
-43. Decision
-OK DO COMMITA for code/tests review.
-Canonical planner and one Qwen reused; exact text/correct offline routing/order,
-auto Text/Voice once, manual/STOP/replacement/cancellation, no persistence and
-answer/citation preservation are implemented and tested.
-Android 174 PASS/build PASS; real server speech/RAG client reuse PASS;
-backend transport 132 PASS; backend full 693 PASS/124 opt-in SKIP.
-Main complete snapshot identical; doctor PASS; diff check PASS; vendor clean.
-Final physical-device acceptance still requires the explicit smoke above.
-Nie wykonano commit ani push.
+Źródła standardów sprawdzone podczas pracy:
+https://asgi.readthedocs.io/en/latest/specs/www.html — WS close przed accept i disconnect.
+https://docs.python.org/3/library/secrets.html — standardowy CSPRNG do tokenów.
+Sprawdzano również rzeczywiste lokalne wersje adapterów i ich zachowanie testami.

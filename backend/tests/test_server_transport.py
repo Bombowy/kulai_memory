@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from fastapi.testclient import TestClient
+from backend.tests.local_transport import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.tests.desktop_rag_fakes import FakeDesktopRag
@@ -16,7 +16,7 @@ from backend.tests.test_memory_ws import FakeRuntime
 from kulai_memory.api import pcm_wav
 from kulai_memory.api.assistant_contract import AssistantResponse
 from kulai_memory.api.cancellation import ClientDisconnected, until_disconnect
-from kulai_memory.app_factory import create_app
+from backend.tests.local_transport import create_local_app as create_app
 from kulai_memory.application import Memory
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER, MemoryCitation
 from kulai_memory.history_persistence import read_memory_detail, read_memory_history

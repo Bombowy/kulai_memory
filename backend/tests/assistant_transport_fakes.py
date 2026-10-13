@@ -14,7 +14,7 @@ class AsgiSocket:
     async def connect(self):
         scope = dict(type="websocket", asgi={"version": "3.0"}, scheme="ws", http_version="1.1",
                      path=self.path, raw_path=self.path.encode(), root_path="", query_string=b"",
-                     headers=[], server=("127.0.0.1", 8000), client=("127.0.0.1", 1234), subprotocols=[])
+                     headers=[(b"host", b"127.0.0.1:8000")], server=("127.0.0.1", 8000), client=("127.0.0.1", 1234), subprotocols=[])
         await self.incoming.put({"type": "websocket.connect"})
         async def send(message):
             await self.outgoing.put(message)

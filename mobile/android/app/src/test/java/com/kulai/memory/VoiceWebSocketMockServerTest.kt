@@ -197,7 +197,9 @@ class VoiceWebSocketMockServerTest {
         val controller = VoiceMemoryController(
             scope = scope,
             endpoint = endpoint,
-            socketFactory = OkHttpVoiceSocketFactory(),
+            socketFactory = OkHttpVoiceSocketFactory(authentication =
+                com.kulai.memory.transport.RequestAuthentication(server.url("/").toString(),
+                    com.kulai.memory.transport.AuthenticationMode.LOCAL_DEV)),
             recorder = recorder,
             cacheStore = PendingAudioCacheStore(temporaryFolder.root),
         )

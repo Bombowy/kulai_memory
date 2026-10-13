@@ -2,6 +2,12 @@
 
 KulAI Studio project `kulai_memory`.
 
+TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
+The ASGI app defaults to `SECURE` and denies private operations without a configured
+credential reader. `scripts/dev.py` explicitly preserves loopback `LOCAL_DEV` and
+ADB reverse unless a security mode is already configured. Pairing, durable security
+storage and TLS/LAN are future work. See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#authentication-foundation-task-4d1).
+
 ## Reproducibility
 
 - Source template: `blank`

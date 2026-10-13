@@ -48,7 +48,8 @@ class _SafeRoute(APIRoute):
             except ServerRuntimeError:
                 return JSONResponse(status_code=503, content={"detail": "Memory assistant is unavailable."})
             except Exception as exc:
-                code = exc.code if isinstance(exc, MemoryRagError) else "none"
+                codes = {"rag.retrieval_failed", "rag.generation_failed", "rag.invalid_citations"}
+                code = exc.code if isinstance(exc, MemoryRagError) and exc.code in codes else "none"
                 stage = {"rag.retrieval_failed": "rag_retrieval",
                          "rag.generation_failed": "rag_generation",
                          "rag.invalid_citations": "rag_citations"}.get(code, self.operation_stage)
