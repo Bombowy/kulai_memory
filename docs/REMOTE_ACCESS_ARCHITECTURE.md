@@ -1,9 +1,97 @@
-# Remote access architecture — TASK 4D.3A / plan 4D.3B
+# Remote access architecture — implemented ingress TASK 4D.3B.1
 
-This is a reviewed deployment plan, not an installed gateway. The present backend
-still binds numeric loopback, rejects proxy headers/browser Origin and permits
-pairing/refresh only in SECURE through its validated local transport. No DNS, public
-listener, firewall rule, tunnel or certificate was installed by TASK 4D.3A.
+The opt-in `kulai_memory.remote_ingress` package now implements a real loopback
+TLS/mTLS listener with HTTP and WSS, invoking the existing FastAPI application
+directly in the same process. It requires managed SECURE security, canonical head
+`kulai_memory_0004` and security head `kulai_security_0003`. Default local transport
+and LOCAL_DEV/ADB reverse remain unchanged. No public listener, VPS, Nginx,
+WireGuard, DNS, firewall or main migration is installed. Sections describing those
+components remain deployment requirements, not evidence of implementation.
+
+## Implemented boundary and local verification
+
+Uvicorn 0.54.0 supplies the H11 and WebSockets SansIO parsers. Small protocol
+adapters read `transport.get_extra_info('ssl_object')` in `connection_made`, after
+OpenSSL completes the handshake. The server SSLContext requires a client
+certificate, a private CA and TLS 1.2/1.3. The adapter requires the configured
+exact DNS SAN, valid certificate times and optionally a SHA-256 leaf pin; CN and
+wildcards do not substitute for the SAN. Unknown peers are disconnected.
+[Python transport SSL information](https://docs.python.org/3.14/library/asyncio-protocol.html#asyncio.BaseTransport.get_extra_info),
+[Python certificate verification](https://docs.python.org/3.14/library/ssl.html#ssl.SSLContext.verify_mode).
+
+An internal peer object is bound to that TLS transport and to one application
+binding. The outer ASGI guard creates a per-request admission object bound to the
+same scope, after Host/scheme/route/header and live read-only schema checks. The
+AuthenticationMiddleware recognizes only that internal object, then runs its
+original Authenticator/AuthorizationPolicy. Pairing and refresh retain their
+exact capability contracts. No internal credential, HMAC header, proxy assertion
+or second bearer system is introduced. There is no plaintext localhost hop.
+
+Remote configuration is disabled by default. Enabled LOCAL_DEV, injected in-memory
+auth sources, missing schema and mismatched heads refuse startup before listening.
+Live schema/storage failures latch the remote boundary closed; restoring the DB
+does not reopen the existing lifespan. An operator must stop and explicitly start
+a fresh ingress process after verification. There is no autostart or automatic
+recovery/re-pairing. A restored backup still requires separately approved credential
+revocation before that manual restart; this task does not implement that recovery tool.
+
+The public Host is compared with an explicitly configured HTTPS origin, independently
+of the private ingress certificate hostname. All browser Origin, proxy/verified
+headers, contradictory duplicates and non-allowlisted routes are denied. The public
+origin must be a bare HTTPS origin without credentials, path, query or fragment.
+Only the listed Memory/assistant/pairing/refresh and two WS contracts are exposed;
+even `/health` is excluded. No requests are redirected or retried.
+
+Limits: 64 KiB HTTP bodies (4 KiB capability bodies), 8 KiB/64 headers,
+256 KiB binary WS messages, 16 KiB text messages and at most eight pending WS
+messages. Uvicorn supplies socket backpressure; a queue overflow aborts the
+connection. HTTP/body/idle/WS budgets are bounded (240/15/240/900 seconds by
+default). The underlying asyncio TLS handshake is also bounded by its library
+timeout. Original 600-second PCM byte limits and Voice Note v1 remain in force.
+Private raw Uvicorn access/error diagnostics are disabled; application diagnostics
+retain their existing fixed operation/status categories.
+
+Run real, synthetic HTTPS/WSS tests using the backend interpreter:
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION='1'
+backend\.venv\Scripts\python.exe -m pytest backend/tests/test_remote_ingress.py backend/tests/integration/test_remote_ingress_tls.py backend/tests/integration/test_remote_ingress_lifecycle.py -q
+```
+
+Tests generate temporary CA/server/client certificates using test-only cryptography,
+use real TCP/OpenSSL handshakes, and remove PKI after server shutdown. Security and
+canonical writes use marker-owned PostgreSQL, real canonical repositories and
+synthetic inference. The 19.2 MB audio case is an accelerated volume test, not a
+ten-minute wall-clock endurance or physical Android/Internet/WireGuard test.
+
+For an interactive synthetic listener:
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION='1'
+backend\.venv\Scripts\python.exe -m backend.tests.remote_ingress_fixture
+```
+
+The fixture prints temporary paths and a random loopback PORT, never credential
+contents. Its private local `command.json` accepts `invite`, `pending`, `approve`
+(exact session/device/full verification code) and `finish`. `result.json` may hold
+a short-lived synthetic invitation. HTTPS clients load the printed CA and gateway
+certificate/key, connect to `https://127.0.0.1:PORT`, and send `Host: memory.test`.
+WSS clients connect with that same CA/client identity and Host. Finish/Ctrl+C closes
+the listener and deletes the owned database and temporary PKI/control files.
+
+`scripts/remote_ingress.py --enable --certificate <server.pem> --private-key
+<server.key> --client-ca <gateway-ca.pem> --expected-gateway-identity <gateway-DNS-SAN>
+--public-origin https://<configured-public-domain>` is a separate explicit backend
+launcher, restricted to numeric loopback. It performs no DDL. Use only synthetic
+configuration for this task; main currently requires separately approved schema
+installation. Installing `backend[remote]` selects the reviewed Uvicorn 0.54.0;
+other protocol versions fail closed pending review.
+
+Android is unchanged and never receives the gateway private key or test CA. A future
+public Nginx TLS gateway will hold the mTLS client identity; release Android will
+use ordinary HTTPS/WSS and its existing per-origin bearer/session credentials.
+The existing factory defaults and `scripts/dev.py --security-mode LOCAL_DEV` remain
+local and use the unchanged local Host/listener checks.
 
 ## 1. Architecture
 
@@ -76,10 +164,10 @@ public origin, and cryptographically authenticated gateway identity. Unknown Hos
 must fail before forwarding. Native Android/Desktop clients omit browser Origin;
 future browser clients need an explicit allowlist and CSRF/CORS assessment.
 
-The present middleware accepts only a loopback Host/listener with matching ports.
-Simply putting nginx in front does not enable remote mode. 4D.3B must add and test
-an explicit verified-ingress adapter without weakening LOCAL_DEV or creating a
-loopback-header bypass. Client IP may help rate limiting/diagnostics, never identity.
+The default middleware still accepts only a loopback Host/listener with matching
+ports. The implemented opt-in in-process ingress has a separate TLS-bound admission
+branch; a header or IP cannot select it. Simply putting nginx in front of a LOCAL_DEV
+listener remains unsafe and is not a deployment procedure.
 
 ## 6. Forwarded headers
 
@@ -98,13 +186,11 @@ client/server certificates, exact SAN verification, certificate rotation and exp
 revocation. Configure verification in both directions; nginx upstream client keys
 are gateway secrets with restricted storage. [NGINX upstream TLS verification](https://docs.nginx.com/nginx/admin-guide/security-controls/securing-http-traffic-upstream).
 
-Select an ASGI/TLS ingress adapter that exposes the **verified** peer certificate
-identity from its own TLS stack. The app must not derive that identity from arbitrary
-headers. If a separate local TLS terminator is used, its authenticated transfer to
-ASGI needs a separately reviewed cryptographic attestation or equivalent authenticated
-channel; a plain `X-Verified` header plus loopback is not acceptable. WireGuard peer
-authentication is useful transport protection, but does not itself make arbitrary
-HTTP metadata trusted. 4D.3B must resolve and test this adapter before any public access.
+The implemented adapter exposes the verified peer from OpenSSL through an internal
+ASGI capability in the same process, as described above. If a future deployment adds
+a separate local TLS terminator/process, its transfer to ASGI needs a separately
+reviewed authenticated channel; plain `X-Verified` plus loopback is unacceptable.
+WireGuard alone does not make HTTP metadata trusted.
 
 ## 8. REST, WSS and streaming
 

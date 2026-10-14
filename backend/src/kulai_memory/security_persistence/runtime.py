@@ -48,6 +48,8 @@ class PostgresSecurityRuntime:
         self.pairing_service: PairingService | None = None
         self.session_service: SessionService | None = None
         self._lifecycle_lock = asyncio.Lock()
+        self._remote_closed = False
+        self._validated_revision = None
 
     async def startup(self) -> None:
         async with self._lifecycle_lock:
@@ -72,6 +74,7 @@ class PostgresSecurityRuntime:
                 await connection.rollback()
             if not state.valid or not state.present:
                 raise SecurityError()
+            self._validated_revision = state.revision
             if state.revision == SESSION_HEAD:
                 self._store = PostgresSessionStore(factory)
                 self.pairing_service = PairingService(self._store, clock=utc_now)
@@ -90,10 +93,39 @@ class PostgresSecurityRuntime:
         store = self._store
         if not self.ready or store is None:
             raise SecurityError()
-        result = await store.lookup(digest)
+        try:
+            result = await store.lookup(digest)
+        except Exception:
+            self._remote_closed = True
+            raise SecurityError() from None
         if not self.ready:
             raise SecurityError()
         return result
+
+    @property
+    def remote_ready(self) -> bool:
+        return (self.ready and not self._remote_closed and self._validated_revision == SESSION_HEAD
+                and isinstance(self._store, PostgresSessionStore) and self.session_service is not None)
+
+    async def require_remote_ready(self) -> None:
+        """Actual read-only catalog validation, never a sidecar environment claim."""
+        try:
+            if not self.remote_ready or self._engine is None:
+                raise SecurityError()
+            async with asyncio.timeout(5):
+                async with self._engine.connect() as connection:
+                    try:
+                        await connection.execute(text('SET TRANSACTION READ ONLY'))
+                        heads = tuple((await connection.execute(text(
+                            'SELECT version_num FROM public.alembic_version ORDER BY version_num'))).scalars())
+                        state = await inspect_security_schema(connection)
+                        if heads != ('kulai_memory_0004',) or not state.valid or state.revision != SESSION_HEAD:
+                            raise SecurityError()
+                    finally:
+                        await connection.rollback()
+        except Exception:
+            self._remote_closed = True  # Restart/manual launcher required after failure.
+            raise SecurityError() from None
 
     async def shutdown(self) -> None:
         async with self._lifecycle_lock:
@@ -101,6 +133,7 @@ class PostgresSecurityRuntime:
 
     async def _close(self) -> None:
         self.ready = False
+        self._validated_revision = None
         self.pairing_service = None
         self.session_service = None
         self._store = None

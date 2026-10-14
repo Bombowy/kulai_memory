@@ -145,9 +145,10 @@ class AuthenticationMiddleware:
     """
 
     def __init__(self, app: ASGIApp, *, config: SecurityConfig,
-                 authenticator: Authenticator, policy: AuthorizationPolicy) -> None:
+                 authenticator: Authenticator, policy: AuthorizationPolicy, remote_binding=None) -> None:
         self.app, self.config = app, config
         self.authenticator, self.policy = authenticator, policy
+        self.remote_binding = remote_binding
 
     async def _deny(self, scope: Scope, receive: Receive, send: Send, *, status: int = 401) -> None:
         try:
@@ -171,7 +172,9 @@ class AuthenticationMiddleware:
             return
         buffered: deque[Message] = deque()
         try:
-            if not _transport_allowed(scope):
+            remote = self.remote_binding is not None and self.remote_binding.admitted(scope)
+            if (self.remote_binding is not None and not remote or
+                    self.remote_binding is None and not _transport_allowed(scope)):
                 await self._deny(scope, receive, send, status=403)
                 return
             # PL/EN: exact pre-auth exception; no prefix, GET, WS or proxy bypass.
@@ -180,7 +183,8 @@ class AuthenticationMiddleware:
             if scope['type'] == 'http' and scope.get('method') == 'POST' and scope.get('path') in PAIRING_PATHS | {REFRESH_PATH}:
                 peer = scope.get('client')
                 if (self.config.mode is not SecurityMode.SECURE or scope.get('query_string')
-                        or not peer or not loopback(peer[0]) or _header(scope, b'sec-websocket-protocol') is not None):
+                        or (not remote and (not peer or not loopback(peer[0])))
+                        or _header(scope, b'sec-websocket-protocol') is not None):
                     await self._deny(scope, receive, send, status=403)
                     return
                 scope['security_pairing_local'] = True

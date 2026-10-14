@@ -21,6 +21,7 @@ from .api.session_http import create_session_router
 from .security.sessions import SessionService
 from .pairing.domain import PairingService
 from .security_persistence.runtime import PostgresSecurityRuntime, ReaderBinding
+from .remote_ingress import RemoteIngressConfig, RemoteIngressError
 
 
 def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
@@ -30,7 +31,8 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
                authorization_policy: AuthorizationPolicy | None = None,
                security_runtime_factory: Callable[[], PostgresSecurityRuntime] | None = None,
                pairing_service: PairingService | None = None,
-               session_service: SessionService | None = None) -> FastAPI:
+               session_service: SessionService | None = None,
+               remote_ingress_config: RemoteIngressConfig | None = None) -> FastAPI:
     """Build the generated host application."""
 
     settings = get_settings()
@@ -40,6 +42,14 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
     if security_runtime_factory is not None and (authenticator is not None or security_reader is not None):
         raise ValueError("Configure one authentication source.")
     managed = config.mode is SecurityMode.SECURE and authenticator is None and security_reader is None
+    remote = None
+    if remote_ingress_config is not None and not isinstance(remote_ingress_config, RemoteIngressConfig):
+        raise RemoteIngressError()
+    if remote_ingress_config is not None and remote_ingress_config.enabled:
+        from .remote_ingress.boundary import RemoteBinding
+        if not managed or pairing_service is not None or session_service is not None:
+            raise RemoteIngressError()
+        remote = RemoteBinding(remote_ingress_config, config)
     binding = ReaderBinding() if managed else None
     memory_router = (
         create_memory_ws_router()
@@ -61,6 +71,7 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
     # PL: logger vendor ufa nagłówkom klienta. EN: replace at the host boundary;
     # log only fixed operation/status fields, without modifying the submodule.
     app.user_middleware = [m for m in app.user_middleware if m.cls is not RequestLoggingMiddleware]
+    app.state.remote_ingress_binding = remote
     if binding is not None:
         original_lifespan = app.router.lifespan_context
 
@@ -70,6 +81,9 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
             active_app.state.security_runtime = security
             try:
                 await security.startup()
+                if remote is not None:
+                    remote.runtime = security
+                    await remote.require_ready()
                 if security.ready:
                     binding.reader = security
                     async with original_lifespan(active_app) as state:
@@ -78,11 +92,16 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
                     # PL/EN: no AI startup/reconciliation while security is unavailable.
                     yield
             finally:
+                if remote is not None:
+                    remote.runtime = None
                 binding.reader = None
                 await security.shutdown()
 
         app.router.lifespan_context = lifespan
     app.add_middleware(AuthenticationMiddleware, config=config,
         authenticator=authenticator or Authenticator(security_reader or binding or DenyAllSecurityReader()),
-        policy=authorization_policy or AuthorizationPolicy())
+        policy=authorization_policy or AuthorizationPolicy(), remote_binding=remote)
+    if remote is not None:
+        from .remote_ingress.boundary import RemoteIngressGuard
+        app.add_middleware(RemoteIngressGuard, binding=remote)
     return app

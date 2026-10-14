@@ -34,9 +34,11 @@ app restart with unfinished intent it requires pairing again. A connection failu
 proven to precede request headers can retain the old credential and retry with bounded
 backoff. No Memory write or NOTE is replayed to recover authentication.
 
-Current ingress remains SECURE plus the validated local transport/Host policy. Refresh
-gets one exact POST exception, never a prefix or a general issuance endpoint. HTTPS
-through a cryptographically verified VPS ingress is a future deployment change.
+Default ingress remains SECURE plus the validated local transport/Host policy.
+TASK 4D.3B.1 adds an opt-in in-process mTLS ingress with TLS-derived ASGI admission
+and live schema guards; see REMOTE_ACCESS_ARCHITECTURE.md. Refresh retains one exact
+POST capability exception, never a prefix or a general issuance endpoint. The VPS
+gateway/private tunnel remains a future deployment change.
 IP addresses and proxy headers do not prove identity. Restoring an old PostgreSQL
 backup can resurrect consumed/revoked credentials; recovery must revoke restored
 sessions before serving traffic. Schema migrations never run on application startup.

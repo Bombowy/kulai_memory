@@ -12,8 +12,10 @@ Android pairing, Keystore credential storage and security head `kulai_security_0
 TASK 4D.3A adds rotating refresh credentials, finite persistent sessions and independent
 security head `kulai_security_0003`, with automatic Android renewal and replay revocation.
 See [session renewal](docs/SESSION_RENEWAL_PROTOCOL.md) and the
-[remote architecture / 4D.3B plan](docs/REMOTE_ACCESS_ARCHITECTURE.md).
-TLS/LAN/VPS deployment remains future work; no main migration is installed here.
+[remote architecture and implemented mTLS ingress](docs/REMOTE_ACCESS_ARCHITECTURE.md).
+TASK 4D.3B.1 implements opt-in loopback TLS/mTLS with same-process trusted ASGI,
+HTTPS/WSS, strict gateway SAN/Host checks and SECURE/schema deployment guards.
+VPS/Nginx/WireGuard deployment remains future work; no main migration is installed here.
 See the [security contract](docs/LOCAL_ASSISTANT_TRANSPORT.md#persistent-postgresql-security-store-task-4d2a).
 
 ## Reproducibility
