@@ -1,0 +1,10 @@
+# Dedicated kulai-memory tunnel. No SaveConfig, PostUp or routing/NAT hooks.
+[Interface]
+Address = @@VPS_WG_IP@@/32
+ListenPort = @@WG_UDP_PORT@@
+PrivateKey = <VPS_PRIVATE_KEY_FROM_PROTECTED_STORAGE>
+
+[Peer]
+PublicKey = <WINDOWS_PUBLIC_KEY>
+AllowedIPs = @@WINDOWS_WG_IP@@/32
+# No Endpoint: Windows behind NAT initiates.

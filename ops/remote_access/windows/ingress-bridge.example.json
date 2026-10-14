@@ -1,0 +1,16 @@
+{
+  "ingress": {
+    "public_origin": "https://<PUBLIC_DOMAIN>",
+    "expected_gateway_identity": "<GATEWAY_CLIENT_DNS_SAN>",
+    "certificate": "C:/ProgramData/KulAI-Memory/tls/ingress.pem",
+    "private_key": "C:/ProgramData/KulAI-Memory/tls/ingress.key",
+    "client_ca": "C:/ProgramData/KulAI-Memory/tls/gateway-ca.pem",
+    "gateway_sha256": "<GATEWAY_LEAF_SHA256_LOWERCASE_HEX>"
+  },
+  "bridge": {
+    "listen_address": "<WINDOWS_PRIVATE_WG_IPV4>",
+    "peer_address": "<VPS_PRIVATE_WG_IPV4>",
+    "interface_alias": "kulai-memory",
+    "port": 8443
+  }
+}

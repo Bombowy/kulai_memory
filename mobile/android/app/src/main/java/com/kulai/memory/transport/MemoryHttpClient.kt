@@ -44,7 +44,8 @@ class MemoryHttpClient(
     private val authentication: RequestAuthentication = RequestAuthentication(baseUrl),
 ) : MemoryApi {
     private val base = baseUrl.toHttpUrl()
-    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
+        .retryOnConnectionFailure(false).build()
 
     override suspend fun listMemories(archived: Boolean, limit: Int, cursor: MemoryHistoryCursor?): MemoryHistoryPage {
         require(limit in 1..100) { "Invalid history request." }

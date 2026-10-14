@@ -1,374 +1,312 @@
-TASK 4D.3A — Secure Session Renewal & VPS Readiness
+TASK 4D.3B.2 — NGINX GATEWAY, WIREGUARD TRANSPORT & END-TO-END TESTS
 KulAI Memory — C:\Bombowy\Projekty\kulai_memory
-Data walidacji: 2026-10-13, Europe/Warsaw
+Raport UTC: 2026-10-14T13:33:31+00:00
 
-1. Wynik i granice wykonanych prac
-Zaimplementowano trwałe, ograniczone czasowo sesje urządzeń, osobny refresh
-credential, atomową rotację, wykrywanie replay, endpoint odnowienia i automatyczne
-odnowienie Androida z zaszyfrowanym zapisem obu poświadczeń. Przygotowano threat
-model, kontrakt i architekturę przyszłego VPS/private tunnel.
-Implementację i walidację 4D.3A zakończono bez commit/push. Dnia 2026-10-14
-użytkownik osobno polecił zatwierdzić i wypchnąć te zmiany — patrz punkt 17.
-Nie wykonano DDL ani zapisów na głównej bazie. Nie zainstalowano security na main.
-Nie uruchomiono 0.0.0.0, LAN, VPS, tunelu, produkcyjnego TLS/DNS ani zmian firewalla.
-Nie dodano zależności ani zmian vendor/KulAI Modules.
+1. Faktyczny wynik
 
-2. Preflight i osobne zamknięcie TASK 4D.2B
-Na początku Git był czysty: HEAD/upstream c66c40988b1f851c89647f952a952d8150fcd205,
-feat: add secure Android device pairing with PostgreSQL. Implementacja 4D.2B była
-już zatwierdzona i wypchnięta. Zweryfikowano rzeczywisty kod, a nie tylko raport.
-Przeanalizowano SecurityReader/Store, CredentialManager, Authenticator, pairing,
-ASGI middleware, composition root, migracje, doctor, fingerprinty, backup/restore,
-Android vault/provider/clients i cancellation/lifecycle.
-Ponowny preflight: strict doctor PASS; pełny read-only main snapshot; krytyczne
-security/core/runtime/transport/cancellation/pairing i real PostgreSQL:
-204 passed, 1 warning, 125.19 s. Android fresh testDebugUnitTest + assembleDebug:
-194 testy, 0 failures/errors, 21 suites, BUILD SUCCESSFUL.
-Pełny main snapshot po preflight był identyczny z początkowym.
-Poprawiono dwa historyczne opisy: procesowy InMemory store w dokumentacji oraz
-komentarz CredentialProvider, i zapisano wyniki zamknięcia w poprzednim raporcie.
-Osobny commit zawierający wyłącznie te opisy i raport:
-296c8a6b1cfe36fcda7e5555e41929968cf9705d
-feat: add administrator-approved Android device pairing
-Normalny git push do istniejącego origin/main wykonany; bez force.
-HEAD i upstream na zakończenie walidacji 2026-10-13 były tym commitem; ahead/behind 0/0.
-Żaden kod 4D.3A nie wszedł do tego commita.
+Zaimplementowano działający pakiet konfiguracji i transportu: Nginx HTTPS/WSS
+z verified mTLS upstream, opaque TCP bridge współdzielący proces z verified
+ingress, szablony WireGuard Ubuntu/Windows, dry-run renderer/exact validator,
+Windows adapter/firewall setup/verify/rollback, VPS preflight, certificate checks
+i runbook. Poprawiono konkretny problem automatycznego retry w Androidzie.
+Wykonano real TCP/TLS -> real Nginx -> upstream mTLS -> TCP bridge -> ASGI SECURE
+-> marker-owned PostgreSQL. Inference providers były syntetyczne.
 
-3. Decyzje dotyczące sesji i threat model
-Access: maksymalnie 1 godzina. Krótszy TTL zatwierdzony przy parowaniu pozostaje.
-Refresh: maksymalnie 30 dni od wydania, z rotacją przy każdym odnowieniu.
-Sesja: nieprzesuwalna absolute expiry 90 dni od pierwszego claim.
-Nowe access/refresh są ograniczane datą końca sesji; odnowienia nie przesuwają jej.
-Te wartości ograniczają czas użycia skradzionych bearer credentials, ale refresh
-pozostaje silną capability. Nie jest to sender-constrained/device attestation.
-Każdy sekret powstaje przez standardowy CSPRNG secrets.token_urlsafe(32).
-Access i refresh mają oddzielne UUID i formaty. Refresh: krf1_ + 43 URL-safe znaki;
-access zachowuje dotychczasowe 43 znaki. Standardowy SHA-256 z oddzielną przestrzenią
-refresh; PostgreSQL przechowuje wyłącznie digests, nigdy plaintext sekretów.
-Publiczne device/session/token UUID nie stanowią uwierzytelnienia.
-Uprawnienia są dokładnie zatwierdzonymi actions. Odnowienie nie dodaje scopes,
-nie zmienia urządzenia ani project. Project isolation nie jest implementowana.
-Wzorzec reakcji na refresh replay przeanalizowano wg RFC 9700 §4.14.2; ten protokół
-nie deklaruje kompletnej zgodności z OAuth.
+TASK 4D.3B.2: lokalny kod/pakiet i dostępne testy zakończone. Produkcja: NO-GO.
+Nie wykonano SSH, deploymentu VPS, DNS, firewall/service installation, instalacji
+WireGuard, otwarcia publicznych portów, main DDL ani prawdziwych revocations.
+Nie wykonano commit/push zmian 4D.3B.2.
 
-4. Replay, revocation i transakcje
-PostgresSessionStore rozszerza istniejący store/reader; nie powstaje drugi system
-Bearer authentication. Runtime v3 nadal używa tego samego Authenticator i polityki.
-Pierwszy claim zatwierdzonego parowania zapisuje access, session, refresh i claimed
-w JEDNEJ transakcji. Rotacja konsumuje poprzedni refresh, unieważnia jego access,
-wstawia oba nowe credentials i zwiększa generation, również w jednej transakcji.
-Sekrety odpowiedzi są dostępne dopiero po commit.
-Lock order odnowienia: global rate advisory -> device -> session -> refresh -> access.
-Dotychczasowy pairing zachowuje rate -> pairing -> device; operacje sesji nie
-próbują blokować pairing po zablokowaniu device/session. Współbieżność testowana
-z dwoma osobnymi procesami i osobnymi transakcjami PostgreSQL.
-Poprawnie udowodnione ponowne użycie consumed refresh unieważnia całą rodzinę
-oraz wszystkie jej access tokens. Odmowa wraca PO commit, aby revocation nie była
-cofnięta rollbackiem. Dwie równoczesne próby: jedna rotacja, druga replay i revoke.
-Zły sekret/UUID/claim urządzenia nie cofa cudzej sesji i nie ujawnia jej istnienia.
-Device REVOKED jest stanem terminalnym i odcina wszystkie access/refresh credentials,
-również gdy session.revoked_at pozostaje NULL: sprawdzany jest trwały status device.
-Session-linked access nie może użyć starej administracyjnej rotacji access-only,
-aby odłączyć się od granic swojej rodziny. Historyczny access-only flow pozostaje.
-Reader robi jeden spójny SELECT z device/token/session/refresh i odrzuca consumed,
-revoked/absolute-expired rodziny. Brak DB sesji podczas operacji AI.
-Błędy storage są sanitizowane; nie ma retry transakcji ani logowania parametrów.
+2. Git i zamknięcie 4D.3B.1
 
-5. Schemat, migracje i historyczne dane
-Canonical head: kulai_memory_0004 — bez zmian.
-Independent security head: kulai_security_0003 po kulai_security_0002.
-Nowe tabele: kulai_security_sessions, kulai_security_refreshes.
-Sessions: UUID, device/pairing FK, czas utworzenia/absolute expiry, revoked_at,
-zatwierdzone actions, access TTL i bounded generation.
-Refreshes: UUID, session/access FK, unique digest, issued/expiry, consumed_at.
-Partial unique index gwarantuje jeden unconsumed refresh na sesję; drugi index
-obsługuje rodzinę. CHECK/FK/UNIQUE ograniczają stany i lifetime.
-Doctor sprawdza pełne kolumny, validated/nondeferrable constraints, indeksy,
-brak dodatkowych tabel/triggers/RLS oraz oddzielny version table.
-Pełne fingerprinty obejmują wszystkie pola nowych tabel i historię replay.
-Stare schema v1/v2 pozostają poprawnymi historycznymi formami: nowe pola snapshot
-mają jawne None. Zachowano historyczne kodowanie fingerprintu integer id licznika
-rate jako string — osobny golden regression test chroni istniejące snapshoty.
-Guarded upgrade zachowuje canonical i wszystkie wcześniejsze device/token/pairing/
-rate fingerprinty. Nie zmieniono wcześniejszych definicji/migracji v1/v2.
-Stare access-only credentials nie otrzymują automatycznie refresh capability.
-Prune zachowuje pairing receipt powiązany z v3 family i historię audytu/replay.
-Retencja jest bounded przez 128 pairing records i 4096 rotations/family; przyszła
-jawna procedura archiwizacji jest potrzebna przy wyczerpaniu limitu.
-Wszystkie testowe DDL/mutacje/restore wykonano tylko na marker-owned temporary DB.
-Aplikacja przy starcie nigdy nie wykonuje DDL ani automatycznego upgrade.
+Początek: czysty main...origin/main.
+HEAD przed/po: bd08370e718a5adbe1486502ee6366b3dd42afd6.
+Istniejący commit 4D.3B.1: feat: add verified mTLS remote ingress.
+Rzeczywisty refs/heads/main na origin potwierdzono jako ten sam hash.
+4D.3B.1 był już zatwierdzony i wypchnięty w poprzednim poleceniu użytkownika;
+nie tworzono pustego/ponownego commita ani nie zmieniano historii dla innego tytułu.
 
-6. Refresh API i permission boundary
-Dokładny POST /api/security/refresh jest wąskim wyjątkiem przed Bearer auth,
-wyłącznie SECURE + dotychczasowy zweryfikowany local transport/Host/peer.
-Brak prefix bypass, GET, WS, query, Origin, proxy headers lub publicznego issuer.
-Authorization: Refresh <credential>, JSON dokładnie session_id/device_id/refresh_id,
-canonical lowercase UUID. Brak project/device claim headers, dodatkowych pól,
-duplicate headers/JSON keys, redirect i body >4096 B.
-Wspólny parser bounded_json służy pairing i refresh, bez duplikowania walidacji.
-Sukces: device_id, token_id, access_token, expires_at, session_id, refresh_id,
-refresh_credential, refresh_expires_at, session_expires_at. Cache-Control: no-store.
-Refresh nigdy nie uruchamia Whisper/BGE/Qwen ani prywatnego dostępu do Memory.
-Refresh format nie jest akceptowany jako Bearer do żadnej prywatnej trasy HTTP/WS.
-401 renewal_required wymaga parowania. 429 retry_later oraz brak usługi/schema
-503 unavailable deklarują request_applied:false. Storage/commit uncertainty daje
-503 uncertain bez obietnicy rollbacku. Inne błędy są stałe i nie ujawniają sekretów.
-Global persistent limit: 120 security requests/minute. Rotacja family nie częściej
-niż min(30 s, access TTL/2); maksymalnie 4096 generations. To nie publiczny DDoS ingress.
+Przejrzano actual SSLObject peer identity, scope-bound admission, LOCAL_DEV
+isolation, SECURE/schema guard, bearer/scopes, Host/header/route policy,
+disconnect/logging i Uvicorn0.54.0. Nie osłabiono istniejącego ingress.
+Wymagany pełny ingress suite ma obecnie 68 testów (66 + dwa finalne key tests):
+PASS 68, 1 warning, 124.00 s. Początkowa regresja: PASS 894, 58.86 s.
 
-7. Wynik niepewny i zerwanie sieci
-Serwer nie zapisuje recoverable plaintext refresh/access, nie retransmituje wydania
-i nie udaje idempotentnego odbioru nowego sekretu po utracie odpowiedzi.
-Android zapisuje encrypted renewal intent PRZED wysłaniem. Nowy snapshot publikuje
-po durable atomic replacement obu credentials. Utrata odpowiedzi po możliwym
-wysłaniu, nieznany commit, timeout, malformed success lub błąd zapisu oznaczają
-re-pair. Restart z intent nie wysyła starego refresh ponownie.
-OkHttp ma retryOnConnectionFailure=false i wyłączone redirecty dla capability API.
-Per-call EventListener oznacza requestHeadersStart. Udowodniony failure przed tym
-punktem albo jawna odpowiedź not-applied pozwalają zachować stare credentials
-oraz bounded recovery. Nieznana odpowiedź gateway nie jest dowodem not-applied.
-Nie ma automatycznego replay NOTE/Memory write ani zmian ingestion IDs/idempotency.
+Vendor gitlink/kulai.project.json/checkout:
+720d0f26c75ba4af24d395f98f15a37e4bd5067e; pin niezmieniony, submodule clean.
+Nowe zmiany pozostają niezatwierdzone i bez staging.
 
-8. Android
-Encrypted ConnectionRecord v2 odczytuje v1, obejmuje access + session refresh +
-intent i origin. Android Keystore AES-256-GCM, losowy IV, authenticated envelope.
-Jedna AtomicFile w noBackupFilesDir: fd.sync, sync directory rename, readback
-ciphertext przed publikacją. Brak zwykłych SharedPreferences/secrets w BuildConfig.
-Manifest backup disabled i FLAG_SECURE zachowane; nie implementowano plaintext fallback.
-IO/crypto poza UI thread. CredentialProvider.current jest atomic, nonblocking snapshot.
-Jedna wspólna RequestAuthentication dla HTTP i WS; ViewModel nie weryfikuje tokenów.
-Równoczesne callers łączą się w jedno odnowienie; timeout renew 12 s, wait 15 s.
-Proactive refresh do 5 minut przed expiry, dla krótkich tokens do 1/4 pozostałego TTL.
-Aktywne NOTE/voice ASK odraczają proactive rotation, z kontrolą co najwyżej co 5 s,
-WYŁĄCZNIE do real expiry access. Nie ma przedłużania ważności ani zmian Voice v1.
-Po zakończeniu głosu klient odnawia; expiry/revoke nadal może zamknąć stary WS.
-Bezpieczna recovery po outage: 5/10/20/40/60 s, maksymalnie pięć automatic retries.
-CHECK/RETRY daje kolejną jawną próbę; nowy proces przywraca bounded recovery episode.
-Paired/Expired/Revoked/Unavailable zachowane; failed SECURE nigdy nie przełącza LOCAL_DEV.
-Snapshot/record przypisane do konkretnego canonical server origin. HTTPS/WSS dla
-zewnętrznego origin, normalna weryfikacja certyfikatów/hostname, brak downgrade.
-Spóźniona odmowa starego access request nie odrzuca już opublikowanego successor.
-Utrata klucza/ciphertext lub niepotwierdzony intent wymagają ponownego parowania.
+3. Pełna lista plików i ról
 
-9. Rzeczywiście wykonane testy
-Preflight 4D.2B: 204 critical backend/PostgreSQL PASS, Android 194 PASS + APK build.
-Backend unit/regression:
-backend SDK -m pytest backend/tests --ignore=backend/tests/integration -q --tb=short
-876 passed, 1 warning, 55.05 s.
-Cały backend integration, KULAI_RUN_POSTGRES_INTEGRATION=1:
-backend SDK -m pytest backend/tests/integration -q --tb=short
-171 passed, 30 skipped, 1 warning, 775.23 s.
-SKIP nie jest PASS: osobne live BGE/Qwen/Whisper/TTS opt-ins/audio nie były włączone;
-nie deklaruję nowego smoke rzeczywistych modeli ani pełnego RAG na danych użytkownika.
-Session PostgreSQL osobno: 23 passed, 1 warning, 55.89 s; cała integracja ponownie
-objęła te przypadki oraz benchmark/race/backup/historical schema.
-Po końcowym review fingerprintu/headerów powtórzono odpowiednie transport tests
-oraz rzeczywiste v1/v2/session backup/restore: 52 passed, 1 warning, 35.16 s.
-Root tools/regression po golden compatibility test:
-root SDK -m pytest tests -q --tb=short
-271 passed, 1 skipped, 19.19 s (historyczny test symlink/Windows).
-Android final testDebugUnitTest + assembleDebug:
-BUILD SUCCESSFUL, 203 testy, 0 failures/errors, 22 XML suites, 40 s.
-Nowe Android tests obejmują: 20 równoczesnych callers/1 renew, restart intent,
-safe offline recovery, unknown delivery, failed save, timeout, expiry/revoke,
-AES-GCM roundtrip/atomic failed replacement, redirect refusal, old denial i voice deferral.
-Backend cases: trwałość/restart, rotation/replay, dwa procesy, revoke-vs-renew,
-access/refresh/absolute expiry, scope mismatch/escalation, commit/rollback errors,
-commit ambiguity, HTTP/WS denial, disconnect/pool drain, schema tamper i real restore.
-Bieżące ostrzeżenie: deprecation Starlette/anyio BlockingPortal; nie błąd security.
-Nie sumuję powtarzanych suite jako niezależnych testów.
+NOWE:
+backend/src/kulai_memory/remote_ingress/tcp_bridge.py
+  Bounded opaque TCP forwarding, actual owned ingress socket/runtime, peer/interface
+  validation, monitor, half-close, cancellation i cleanup. Brak dowolnego targetu.
+scripts/remote_bridge.py
+  Explicit config/manual launcher, default dry-run, --enable, brak DDL/autostartu.
+backend/tests/nginx_fixtures.py
+  Real nginx -t + isolated foreground prefix/PID, actual public TLS/mTLS/bridge.
+backend/tests/integration/test_nginx_gateway.py
+  42 rzeczywiste scenariusze Nginx HTTPS/WSS, auth, pairing/refresh, failure/audio.
+backend/tests/integration/test_tcp_bridge.py
+  8 scenariuszy mostu: actual TLS, limity, restart/LOCAL_DEV, monitor failure.
+backend/tests/test_remote_gateway_config.py
+  45 testów konfiguracji, weakened candidates, PS, real offline OpenSSL i dry-run.
+backend/tests/bridge_policy_harness.ps1
+  Mocked OS inventory; administrative writes zawsze rzucają błąd. Netsh tylko read.
+ops/remote_access/README.md
+  Trust model, generowanie, wdrożenie, NAT, firewall, restart/rollback/recovery/checklist.
+ops/remote_access/package.py
+  Strict typed renderer i exact candidate validator, bez auto-fix/system writes.
+ops/remote_access/deployment.example.json
+  Jawne placeholdery zależne od inventory, bez fikcyjnej domeny produkcyjnej.
+ops/remote_access/nginx/kulai-memory.conf.in
+  Actual http-context vhost/default/maps/zones, TLS/mTLS/route/header/limit/log policy.
+ops/remote_access/wireguard/ubuntu.conf.in
+  Dedykowany VPS /32, exact Windows peer /32, brak endpoint/home routing/NAT hooks.
+ops/remote_access/wireguard/windows.conf.in
+  Windows outbound peer, VPS /32, PersistentKeepalive25, placeholder private keys.
+ops/remote_access/windows/ingress-bridge.example.json
+  Explicit cert/key/CA/gateway SAN/pin/public origin i WireGuard IP/interface inputs.
+ops/remote_access/windows/inspect-interface.ps1
+  Read-only actual Up WireGuard/Wintun adapter, local /32, peer route, no default route.
+ops/remote_access/windows/bridge.ps1
+  Default Verify/dry-run; scoped firewall ownership/setup/verify/rollback. Brak portproxy.
+ops/remote_access/ubuntu/preflight.sh
+  Read-only OS/listeners/routes/services/public handshake inventory, bez key/config dump.
+ops/remote_access/ubuntu/wireguard-firewall.nft.in
+  Additive dedicated tunnel table, deny other host ports/forwarding; bez flush ruleset.
+ops/remote_access/check-certificates.ps1
+  OpenSSL chain/EKU/exact SAN/expiry/fingerprint, bez odczytu private keys.
+ops/remote_access/test-nginx-download.ps1
+  Default plan; optional marked-temp download, pinned digest + exact PGP signature.
+mobile/android/app/src/test/java/com/kulai/memory/transport/RemoteDisconnectTest.kt
+  Real MockWebServer failed WS upgrade, dokładnie jedna próba, brak reconnect/replay.
 
-Wczesne iteracje nie były PASS: użycie błędnej nazwy opt-in dało 1 SKIP, poprawiono
-na KULAI_RUN_POSTGRES_INTEGRATION. Jeden stary head assertion oraz fixture odczytu
-Memory wymagały poprawy; final regression zaliczona. Android O_DIRECTORY nie jest
-publiczną stałą tego SDK; użyto Os.open(directory,O_RDONLY) i sprawdzono sync fizycznie.
-
-10. Koszt autoryzacji audio i lifecycle
-Session-aware reader: 128 frames, 131 lookups, 262 SQL statements
-(READ ONLY setup + jeden coherent SELECT/lookup), 281.05 ms w osobnym przebiegu,
-240.92 ms podczas całej integracji; pool checkout=0 po operacji.
-Legacy adapter podczas pełnej integracji: 128 frames/131 lookups/262 SQL,
-309.94 ms; pool checkout=0. To lokalne synthetic timing, nie benchmark publicznego VPS.
-Nie dodano authorization cache. Revoke jest sprawdzany przed każdą prywatną ramką;
-aktywny WS kończy się 1008 po revoke, bez dalszych AI/data calls.
-SessionRuntime używa jednego composition-owned pool; pairing/session services są
-borrowed; shutdown czyści bindings/services i drenuje zasoby. Disconnect podczas
-blocked DB transaction anulował pracę i oddał połączenie.
-
-11. Fizyczny Android smoke — rozróżnienie wersji
-Galaxy S25 Ultra SM-S938B, Android 16, był podłączony podczas właściwego smoke.
-APK z wdrożonym session/vault/renewal code przed końcowym dodatkiem voice deferral:
-SHA256 445bad40184584d5bae41c99c5a53b8ab5874724ea964b231319485208ceaf25.
-adb install -r SUCCESS; bez uninstall/pm clear.
-Synthetic FastAPI/AI + owned PostgreSQL, random loopback port, security v3;
-access TTL 60 s, ADB mapping phone/server ten sam port. Żadne real Memory dane.
-Wykonano: explicit invitation, PENDING, pełne porównanie receiver verification code,
-explicit approve konkretnego device, claim/Paired, encrypted persistence,
-automatic renew generation 0 -> 1, force-stop/restart aplikacji,
-przerwa wyłącznie testowego ADB mapping (~77 s), Unavailable/private lock,
-przywrócenie mapping i automatyczna recovery do Paired, generation do 4.
-MEMORY zrobiło dokładnie jeden poprawnie autoryzowany synthetic list_memories.
-Device revoke wykryto automatycznie: Revoked, zablokowane private functions,
-bez dodatkowych private calls po revoke. Temporary canonical Memory/tombstones=0.
-Encrypted file rw-------: session record 838 B; po unpair/config-only 111 B.
-Zero credential-shaped lines w sprawdzonych logach bieżącego Android procesu.
-Cleanup: local unpair, origin http://127.0.0.1:8000 + LOCAL_DEV, zwykły ADB 8000,
-UI NOTE/Ready. Temporary mapping/usunięte UI dumps/control/owned DB wyczyszczone.
-Fizyczny restart urządzenia, destrukcja Keystore i pełne NOTE/ASK/TTS z realnymi
-modelami/danymi użytkownika: NOT RUN. JVM crypto/key-loss oraz backend protocol
-regressions nie są ich fizycznym odpowiednikiem.
-
-Po końcowym voice-deferral patch zbudowano APK:
-mobile/android/app/build/outputs/apk/debug/app-debug.apk, 12 807 318 B
-SHA256 3f0fcfcf10829d0a09e44803109df077c180a5b39bbad2bfc7728660e801b341.
-203 unit tests PASS. Ponowny smoke TEGO końcowego APK: NOT RUN — adb devices było
-puste, telefon odłączony. Próba install zwróciła no devices/emulators found;
-końcowy APK nie został zainstalowany. Drugą pustą owned fixture zamknięto i DB/control
-usunięto. Voice deferral przetestowano jednostkowo dla zakończenia voice i expiry.
-
-12. Niezmienność głównej bazy / Git / vendor
-Strict doctor przed pracą i po WS/PG/physical/regression: PASS.
-Full read-only snapshots przed/po: identyczne, wszystkie znane canonical/security pola.
-Canonical revision: kulai_memory_0004; security=None przed i po (main bez schematu).
-Memories: count=9
-SHA256 c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
-Vectors: count=9
-SHA256 75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
-Tombstones: count=1
-SHA256 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
-Snapshot artifacts: %TEMP%/kulai-task4d3a-main-before.json i main-after.json.
-Porównanie normalizuje JSON tuple/list, nie fałszuje odczytu ani danych.
-Zachowane namespace/dimension/embedding records, ingestion IDs/tombstones,
-canonical RAG/citations, protokoły REST/Voice v1, provider reuse i backup guards.
-Vendor pin 720d0f26c75ba4af24d395f98f15a37e4bd5067e, submodule clean, bez zmian.
-git diff --check PASS; ostrzeżenia LF->CRLF są zachowaniem konfiguracji Git.
-Kontrola zmienionych/nowych plików: 0 literal bearer/refresh/private-key findings.
-Repo bez nowych sekretów; eksport repo ani źródłowa główna baza nie były mutowane.
-Na zakończenie walidacji working tree obejmował wyłącznie opisane zmiany 4D.3A;
-nie były staged i nie wykonano ich commit/push. Późniejsze polecenie opisano w punkcie 17.
-
-13. Zmienione/dodane pliki TASK 4D.3A
-Backend/domain/transport/persistence:
-backend/src/kulai_memory/security/sessions.py
-backend/src/kulai_memory/security_persistence/schema_v3.py
-backend/security_migrations/versions/kulai_security_0003.py
-backend/src/kulai_memory/security_persistence/sessions.py
-backend/src/kulai_memory/security_persistence/postgres.py
-backend/src/kulai_memory/security_persistence/pairing.py
-backend/src/kulai_memory/security_persistence/runtime.py
-backend/src/kulai_memory/security_persistence/integrity.py
-backend/src/kulai_memory/security_persistence/migration.py
-backend/src/kulai_memory/api/security_contract.py
-backend/src/kulai_memory/api/session_http.py
-backend/src/kulai_memory/api/pairing_http.py
-backend/src/kulai_memory/api/authentication.py
-backend/src/kulai_memory/app_factory.py
-scripts/pairing_admin.py
-Tests/tools:
-backend/tests/test_session_transport.py
-backend/tests/integration/test_sessions_postgres.py
-backend/tests/integration/test_security_postgres.py
-backend/tests/security_postgres_worker.py
-backend/tests/session_phone_fixture.py
-tests/test_security_schema.py
-Android:
-mobile/android/app/src/main/java/com/kulai/memory/pairing/CredentialVault.kt
-mobile/android/app/src/main/java/com/kulai/memory/pairing/PairingController.kt
-mobile/android/app/src/main/java/com/kulai/memory/pairing/PairingHttpClient.kt
-mobile/android/app/src/main/java/com/kulai/memory/transport/RequestAuthentication.kt
-mobile/android/app/src/main/java/com/kulai/memory/VoiceMemoryViewModel.kt
-mobile/android/app/src/test/java/com/kulai/memory/pairing/SessionRenewalTest.kt
-Documentation:
-README.md
-docs/DATA_SAFETY.md
-docs/LOCAL_ASSISTANT_TRANSPORT.md
-docs/SESSION_RENEWAL_PROTOCOL.md
+ZMODYFIKOWANE:
 docs/REMOTE_ACCESS_ARCHITECTURE.md
+  Rzeczywisty stan pakietu, boundary, header policy i instrukcje testów.
+mobile/android/app/src/main/java/com/kulai/memory/transport/MemoryHttpClient.kt
+  retryOnConnectionFailure(false), bez zmian TLS/redirect/per-origin authentication.
+mobile/android/app/src/main/java/com/kulai/memory/transport/VoiceSocket.kt
+  retryOnConnectionFailure(false), bez zmian voice protocol/automatycznego replay.
+mobile/android/app/src/test/java/com/kulai/memory/transport/MemoryHttpClientTest.kt
+  Real disconnect-after-request POST; niepewny wynik nie uruchamia drugiego requestu.
 wynik.txt
+  Niniejszy raport zastępuje stary raport 4D.3A.
 
-14. Znane ograniczenia / wymagane ręczne operacje
-Brak krytycznej blokady implementacji refresh w zatwierdzonym środowisku lokalnym.
-Main SECURE pairing/renewal nie będzie działać do osobno autoryzowanej instalacji
-security; LOCAL_DEV nadal działa. Sam opis procedury nie jest zgodą na DDL.
-Nie ma publicznego ingress/TLS ani kryptograficznego proof-of-possession urządzenia.
-Bearer theft umożliwia użycie ważnych credentials; rotation/replay ograniczają ryzyko,
-ale nie zastępują TLS, zaufania VPS, ochrony OS i świadomego approval.
-Ambiguous commit/delivery celowo wymaga re-pair i admin revoke orphan device.
-Old refresh replay może odciąć również legalnego klienta; dlatego singleflight/no retry.
-Offline recovery jest bounded; po wyczerpaniu automatycznych prób wymaga CHECK/RETRY
-lub restartu. Po refresh/absolute expiry nie ma trwałego logowania.
-Active WS nie otrzymuje nowych handshake headers. Voice deferral chroni normalny
-proactive renew; actual expiry/revoke nadal kończy access i nie replayuje zapisu.
-Directory sync na innych Android/filesystem może odmówić — fail closed; wymagane QA.
-Zegary muszą być prawidłowe; błąd czasu może powodować wcześniejszą odmowę.
-Retencja receipt/history i recovery po DB rewind wymagają osobnej jawnej procedury.
-Restore starej DB może wskrzesić credentials; nie wolno automatycznie otworzyć ingress
-bez revocation odtworzonych aktywnych sesji i dotkniętych legacy credentials.
-Końcowy APK wymaga fizycznego smoke po ponownym podłączeniu telefonu.
-Real-model/internet/gateway/physical reboot tests oznaczone NOT RUN/SKIP, nie PASS.
+4. Architektura i zachowanie tożsamości mTLS
 
-15. Ręczna walidacja i warunki instalacji na main
-Pełne instrukcje oraz IPC smoke: docs/SESSION_RENEWAL_PROTOCOL.md.
-Używać interpreterów skonfigurowanych dla modułu (root .venv / backend .venv).
-KULAI_RUN_POSTGRES_INTEGRATION=1 włącza owned PostgreSQL; nigdy bez marker guards.
-Uruchomić unit/backend integration/root tests i Android gradlew testDebugUnitTest assembleDebug.
-Po podłączeniu telefonu: adb install -r final APK, bez pm clear/uninstall;
-uruchomić backend.tests.session_phone_fixture. Odczytać random PORT/CONTROL,
-adb reverse tcp:PORT tcp:PORT; SECURE origin tego samego portu. Explicit invite,
-compare pełnego code, approve konkretnego device. Sprawdzić renew/restart/outage,
-voice deferral, MEMORY/revoke, następnie unpair, powrót LOCAL_DEV/8000 i finish.
-Synthetic smoke nie dowodzi real RAG/Whisper/TTS. Nie wpisywać testowych Memory na main.
+Android HTTPS/WSS -> Nginx public TLS -> verified upstream TLS + Nginx gateway cert
+-> dedykowany WireGuard -> Windows raw TCP bridge -> owned127.0.0.1:8443 mTLS
+Uvicorn -> scope-bound admission -> istniejący Authenticator/AuthorizationPolicy
+-> FastAPI SECURE -> prywatny PostgreSQL i modele AI.
 
-Instalacja main dopiero po ODRĘBNEJ autoryzacji użytkownika:
-a) zatrzymać writer/clients/admin, strict doctor i pełny read-only snapshot;
-b) retained pełny backup poza repo, rzeczywisty restore verification;
-c) guarded security_schema.py upgrade --confirm-main-security-schema --backup-output
-   z NOWĄ zewnętrzną ścieżką .dump (narzędzie ponownie sprawdza źródło/archive);
-d) atomowy additive upgrade przez v1/v2/v3, strict doctor/security check;
-e) porównać wszystkie preexisting canonical/device/token/pairing/rate fingerprints;
-f) nowe parowanie dla refresh-capable devices, SECURE smoke po osobnej zgodzie.
-Startup niczego nie migruje. Backup zachować także po nieudanym upgrade.
+Publiczny TLS kończy Nginx: VPS widzi treść i credentials. Kompromitacja VPS jest
+istotnym zagrożeniem; nie deklaruje się E2EE phone-to-GPU. Upstream TLS kończy
+dopiero Uvicorn. Most nie parsuje TLS/HTTP/WS, nie czyta Authorization ani nie
+modyfikuje Host. SSLObject ingress nadal zawiera rzeczywisty certyfikat Nginx;
+oryginalny exact gateway SAN/pin i bearer/scopes działają bez zmian. WireGuard/IP
+allowlist nie zastępuje mTLS. Brak X-Verified/HMAC, plaintext hop i drugiego bearer.
 
-16. Plan TASK 4D.3B — VPS Secure Gateway & Private Tunnel
-Szczegółowy dokument: docs/REMOTE_ACCESS_ARCHITECTURE.md (diagram i 13 tematów).
-1) Review/approval 4D.3A, fizyczny smoke final APK; osobna zgoda na security main.
-2) Wybrać VPS/domain i tunnel po pomiarze NAT/UDP; proponowany WireGuard,
-   porównać Tailscale relay/control-plane i restricted reverse SSH forwarding.
-3) Zaprojektować/zaimplementować verified mTLS ingress lub równoważny authenticated
-   adapter. Zweryfikowana tożsamość pochodzi z TLS/channel, nie nagłówka ani IP.
-4) Host/public origin allowlist; wycinać client Forwarded/X-Forwarded/attestation,
-   nie włączać Uvicorn proxy trust przed testem kryptograficznego ingress adaptera.
-5) Przygotować do review DNS/certyfikaty/TLS renewal, tunnel keys/rotation, firewall
-   i gateway routes/limits. Dopiero potem osobna zgoda na faktyczny deployment.
-6) Publiczny wyłącznie HTTPS/WSS gateway. PostgreSQL/Memory backend/GPU models
-   prywatne. VPS nie potrzebuje GPU; lokalny PC pozostaje inference host.
-7) REST no-store, WS Upgrade/backpressure, bounded connect/idle/audio timeouts,
-   per-ingress/per-device admission limits, redacted monitoring i pool metrics.
-8) Sprawdzić pod actual gateway długie NOTE/ASK, voice deferral/expiry/revoke,
-   reconnect/cancellation/ingestion idempotency, brak auto write replay.
-9) Testy outages lokalnego PC/VPS/tunelu, restart/recovery, origin/cert refusal,
-   spoofed proxy headers i błędne upstream certs, bez otwierania model/DB ports.
-10) Wdrożyć i przetestować operator recovery: verified restore przy zamkniętym
-    ingress, jawna revocation odtworzonych sesji/legacy credentials, re-pair.
-11) Dopiero po tych gates osobno autoryzowany deployment i remote physical
-    NOTE/ASK/MEMORY/TTS na zatwierdzonych danych/providers; kontrola main snapshots.
-12) Dokumentacja rollback/recovery/key lifecycle. Desktop/AI clients adoptują ten sam
-    protocol osobno. MCP/QR/discovery/Multi-user/Memory Intelligence poza zakresem.
+Rozważono netsh portproxy: persistent target może przeżyć ingress i nie zapewnia
+wymaganych lifecycle/resource bounds. Wybrany relay ma ten sam proces i faktyczny
+server socket/app/runtime. Nie może przekazywać do dowolnego LOCAL_DEV:8000.
+Bridge startuje dopiero po real require_ready: SECURE, canonical0004/security0003.
+Każde połączenie sprawdza runtime, a Windows adapter/address/route jest sprawdzany
+przed bind i co5 s. Failure monitora zamyka proces, bez auto-recovery/fallback.
+Ingress nadal nasłuchuje tylko numeric loopback; bridge tylko exact private WG IP.
 
-Primary references wykorzystane w dokumentacji:
-RFC 9700 https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2
-WireGuard https://www.wireguard.com/protocol/ i https://www.wireguard.com/quickstart/
-NGINX upstream TLS https://docs.nginx.com/nginx/admin-guide/security-controls/securing-http-traffic-upstream
-NGINX WSS https://nginx.org/en/docs/http/websocket.html
-Tailscale https://tailscale.com/docs/concepts/tailscale-encryption
-Tailscale https://tailscale.com/docs/reference/connection-types
+Most: max32, reader/write buffers64 KiB, copies16 KiB, backpressure, connect5 s,
+idle240 s, lifetime900 s, reverse half-close drain<=2 s, bounded graceful close.
+Stop: zatrzymanie listenera, zamknięcie aktywnych sockets/zadań, dopiero wait_closed.
+Wszystkie ścieżki cancellation/resource cleanup mają testy.
+Oversized WS przez Nginx może zamknąć się jako1006 bez przekazanego1009, jeżeli
+upstream odmawia podczas wysyłania frame przez Nginx. Zawsze disconnect/no write;
+nie oznacza to safe-to-retry NOTE. Limit256 KiB nie został osłabiony.
 
-17. Zatwierdzenie zmian na osobne polecenie użytkownika — 2026-10-14
-Użytkownik polecił commit i push zmian TASK 4D.3A. Ponownie sprawdzono Git status,
-HEAD/upstream po fetch, diff --check oraz czystość i niezmienność vendor pin.
-Zakres odpowiada plikom wymienionym w punkcie 13; nie dodano zmian implementacji
-ani nie powtarzano już zaliczonych testów. Wyniki i NOT RUN z walidacji pozostają aktualne.
-Przygotowano osobny commit: feat: add secure session renewal and VPS readiness,
-do normalnego push na istniejący origin/main, bez force.
-Identyfikator i rezultat push potwierdzają odpowiedź końcowa oraz historia Git.
-To polecenie nie obejmuje instalacji migracji na main, VPS, tunelu ani dostępu LAN.
+5. Nginx, WireGuard i firewall policy
+
+Osobny explicit-IP public vhost oraz rejecting default; wymagany inventory istniejących
+projektów i default owner. Nie nadpisuje się cudzych vhostów/configów. Brak port80
+redirect. Public Host/SNI, exact raw paths/methods, browser Origin denial. Tylko
+Memory/assistant/pairing/refresh/two WS, bez health/docs/openapi/admin/DB/Ollama.
+
+proxy_pass_request_headers off + positive allowlist auth/device/content-type/WS.
+Forwarded/X-Forwarded-*/X-Real-IP/X-Verified*/dowolne assertions są usuwane, nie
+regenerowane. Poprawny bearer z takim nieistotnym nagłówkiem pozostaje poprawny;
+bez bearer nadal odmowa. Direct ingress nadal odrzuca spoofing headers.
+Upstream proxy_ssl_verify on, CA, osobny SAN/SNI ingress, gateway client cert/key,
+TLS1.2/1.3; session reuse off, next_upstream off/tries1, redirect/cache off,
+no buffering/disk spooling, abort propagation i fixed503 bez request_applied:false.
+64 KiB body, 8 KiB header buffers, 4 connections/IP, requests10r/s burst20,
+capabilities30r/m burst10. Idle proxy240 s dopuszcza ciągły10-min PCM;
+ingress WS900/PCM600 i Voice Note v1 pozostają bez zmian.
+Log tylko time/status/bytes/duration; error log null, bez URL/tokenów/treści.
+
+WireGuard: dedicated private IPv4 pair /32, no LAN/default routing, forwarding,
+NAT/masquerade/PostUp. Windows inicjuje do public VPS, keepalive25, VPS bez peer
+Endpoint. Brak real private keys. Prefix wybiera operator po LAN/VPN inventory.
+Windows skrypt: allow exact peer i complement IPv4 block, exact interface/IP/port;
+block ma pierwszeństwo nad cudzym broad allow. Dry-run domyślny, Apply wymaga
+elevation i ShouldProcess. Rollback sprawdza description i wszystkie filters;
+usuwa tylko własne reguły. Brak service/portproxy/global policy writes.
+Ubuntu nft kandydat izoluje dedykowany tunnel/ports, bez flush/replace innych zasad.
+Adapter helper używa RemoteSigned tylko w child process, bez zmiany polityki systemu.
+
+6. Faktycznie wykonane testy
+
+Backend Python3.14.5, tools3.13.15, Uvicorn0.54.0, real lokalny PostgreSQL/pgvector.
+Docker i Linux WSL niedostępne. Użyto REAL official portable Nginx1.30.5 Windows,
+wyłącznie isolated foreground process/prefix/PID i random loopback ports.
+Detached PGP signer: D6786CE303D9A9022998DC6CC8464D549AF75C0A.
+ZIP SHA256: e5afe28b6a50bec92c478bfe1a4d3758206b80fb77159277bc5c4e88955c2a35.
+Sam skrypt reprodukcji download także faktycznie wykonano, bez instalacji usługi.
+Każdy test gateway uruchamia real nginx -t. Public client weryfikuje CA/hostname,
+upstream używa prawdziwego client certificate. PKI wyłącznie w temporary directories.
+
+PASS — finalny pełny nowy zestaw: 95 passed,1 warning,192.10 s:
+  45 config/tools + 8 bridge + 42 REAL Nginx.
+  backend SDK -m pytest backend/tests/test_remote_gateway_config.py
+    backend/tests/integration/test_tcp_bridge.py
+    backend/tests/integration/test_nginx_gateway.py -q --tb=short
+  KULAI_RUN_POSTGRES_INTEGRATION=1; KULAI_TEST_NGINX=<reviewed isolated binary>.
+PASS — final backend unit/security/transport: 939 passed,1 warning,67.31 s.
+PASS — real PG/security/pairing/session/HTTP-WS/canonical:
+  test_security_postgres.py,test_pairing_postgres.py,test_sessions_postgres.py,
+  test_security_uvicorn.py,test_memory_postgres.py:76 passed,1 warning,239.33 s.
+  Audio auth:128 frames,131 lookups,262 SQL,pool_checkout0.
+PASS — root tools:271 passed,1 skipped,4.03 s.
+SKIP — historyczny Windows symlink test; nie zaliczono go jako PASS.
+PASS — Android testDebugUnitTest:205 tests,0 failures,0 errors,0 skipped.
+PASS — Android assembleDebug: BUILD SUCCESSFUL24 s z pierwszym unit run;
+  po dodaniu drugiego disconnect testu ponowny unit build SUCCESSFUL35 s.
+PASS — bash -n VPS preflight, PS AST, pure firewall complement ranges,
+  6 mocked OS inventory dry-runs i5 actual offline OpenSSL chain/EKU/SAN/expiry tests.
+PASS — standard git diff --check, vendor pin, secret scanning i fresh export checks.
+Wcześniejsze nakładające się suite nie są sumowane jako nowe niezależne testy.
+
+Wymagane scenariusze1–26:
+1–5 HTTPS/WSS z/bez bearer, actual Nginx mTLS: PASS.
+6–7 foreign/wrong SAN/expired/EKU gateway cert oraz bad ingress CA/SAN: PASS.
+8 weakened verify-off/plaintext/retry/header/Host/SNI/cache candidates: refused PASS.
+9–11 bad Host/port, raw duplicate Host, bad SNI, proxy-header spoofing i Origin: PASS.
+12 unknown/admin/docs/health/service/encoded routes: PASS.
+13–16 exact approved pairing, single refresh/replay revoke, activeWS revocation: PASS.
+17–19 NOTE binary19.2 MB PCM accelerated, ASK BY VOICE, malformed/oversized frames
+  i HTTP bodies: PASS. Nie jest to10-min wall-clock ani real GPU.
+20 TCP bridge loss podczas recording i disconnect przy NOTE/ASK processing,
+  cancellation/WAV cleanup: PASS.
+21 disconnect po actual refresh commit: PASS, generation1/two refresh rows/one call,
+  zero retry i brak fałszywej deklaracji request_applied:false.
+22–24 real Nginx restart, bridge restart, backend should_exit/unavailable503: PASS.
+25 brak tokens/proofs/body/full URLs w Nginx/app logs: PASS; httpx driver INFO off.
+26 allowlisted routes/non-arbitrary bridge target: PASS komponentowo.
+26 prawdziwa izolacja innych portów przez WireGuard+firewall na2 hostach: NOT RUN.
+Actual per-IP rate/connection limits429: PASS. Public TLS1.2 i1.3: PASS.
+Monitor interface-loss ma simulated check: testuje control flow, nie real WireGuard.
+
+Wczesne FAIL/ABORT, naprawione i ponownie zweryfikowane:
+- Nginx Windows potrzebował quoted UUID regex i temp parent directory.
+- Test speech-plan miał answer niespójny z synthetic providerem; poprawiono testowe
+  wejście, bez zmian API i produkcyjnego zachowania.
+- Stop mostu czekał na Server.wait_closed przed zamknięciem aktywnych sockets:
+  naprawiono kolejność i dodano bounded failure/monitor tests.
+- Cancellation graceful close pozostawiała writer reference: poprawiono cleanup.
+- httpx blokował duplicate Host lokalnie: zastąpiono actual raw TCP/TLS testem.
+- Oversized frame close1009 nie zawsze dociera przez Nginx: wymagana jest odmowa,
+  disconnect i brak dodatkowego Memory; direct ingress ma nadal swój test1009.
+- Jedna zawieszona iteracja została przerwana. Jej dokładna owned DB została
+  sprawdzona (marker, created_at13:04:53 UTC zgodny z owned PKI13:04:50,
+  canonical/vector/tombstone zero, security3, brak aktywnych connections), po czym
+  usunięta standardowym guarded drop bez force. Brak prefix-wide deletion/main target.
+Finalny zestaw nie ma FAIL. Ostrzeżenia: istniejący Starlette anyio BlockingPortal
+deprecation i Android SDK XML version warning. Gradle NO-SOURCE/konfiguracyjny
+SKIPPED nie oznacza pominiętego testu aplikacji.
+
+NOT RUN: rzeczywisty WireGuard Windows↔VPS/NAT, Ubuntu nft syntax/kernel/UFW/systemd,
+real Windows firewall Apply/Rollback i WG adapter binding, public DNS/ACME,
+physical Android LTE/Wi-Fi switching/restart,10-min paced PCM, real GPU,
+production backup/restore/revocation/recovery. Nie deklaruje się produkcyjnego GO.
+
+7. Android remote readiness
+
+ServerOrigin wymusza external HTTPS i wyprowadza WSS. TLS/hostname verification
+pozostają standardowe. CredentialVault encrypted/atomic/per-origin; cross-origin,
+redirect, predecessor denial i refresh uncertainty zachowują dotychczasowe reguły.
+PairingHttpClient już wyłączał retries i redirects. MemoryHttpClient/VoiceSocket
+odziedziczały retryOnConnectionFailure=true; wyłączono w obu wrapperach, także
+dla wstrzykniętego klienta. Real MockWebServer potwierdza pojedynczy POST i WS
+upgrade przy disconnect. Brak automatycznego reconnect/NOTE replay i LOCAL_DEV
+fallback; świadomy NOTE retry zachowuje istniejący ingestion ID. Unavailable nie
+przenosi credentials na inny origin, a uncertain refresh nie jest odtwarzany.
+Nie zmieniono CA/trust store/APK TLS verification ani danych urządzenia.
+Fizycznego telefonu i zmiany Wi-Fi↔LTE nie uznano za wykonane.
+
+8. Main — pełny read-only snapshot przed/po
+
+Strict db_doctor przed/po: PASS. Pełne fingerprinty identyczne:
+revision=[kulai_memory_0004]
+memories.count=9
+memories.sha256=c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
+vectors.count=9
+vectors.sha256=75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
+tombstones.count=1
+tombstones.sha256=33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+security=null — main nadal bez security schema; nie wykonano migracji.
+Canonical code head0004/security0003, vector1024 i namespace kulai_memory.memories.v1
+niezmienione. Voice Note v1, NOTE/ASK/MEMORY/TTS, LOCAL_DEV/ADB reverse zachowane.
+Końcowy main/owned DB/temporary PKI cleanup: PASS: identical main snapshot/doctor; 0 remaining marker-owned databases; owned temporary PKI/config/download directories and processes cleaned.
+
+9. Pozostałe blokady i parametry realnego wdrożenia
+
+Wymagane: Ubuntu/nginx/OpenSSL versions, existing vhost/default/firewall inventory,
+public IP/listen/port/domain/DNS/ACME ownership, protected certificate/key paths/ACL,
+gateway SAN/pin/CA i ingress SAN/CA, private /32 pair wolna od LAN/VPN konfliktów,
+UDP port/NAT pomiary, exact WG adapter/service names, rollback ownership.
+Portable Nginx Windows nie dowodzi Ubuntu/systemd/nft/UFW ani public phone access.
+CA lifecycle/revocation/rotation/expiry, chronione key storage i monitoring wymagają
+operator acceptance. Same-process boundary ufa OS/Python code i kluczom. Uvicorn
+jest przypięty0.54.0; aktualizacja wymaga review i real TLS tests. Limity nie są
+pełną ochroną DDoS; uwzględnić VPS provider i wiele urządzeń za wspólnym NAT.
+Nie ma production recovery/revocation tool. Restore starszej bazy może cofnąć
+revocations: ingress zamknięty do verified restore, jawnej invalidation i re-pair.
+Main security migration i wszystkie realne zmiany wymagają osobnej zgody.
+
+10. Dokładny następny TASK 4D.3B.3
+
+Zakres: Real Two-Host WireGuard & Ubuntu Nginx Acceptance, Recovery Gate.
+A. Read-only real VPS/Windows inventory i potwierdzenie domain/IP/ports/routes/
+   existing projects/firewall/service ownership. Bez nadpisywania cudzych ustawień.
+B. Review candidates, SAN/CA/pin, private-key ACL/storage, renewal/rotation/monitoring.
+   Osobne jawne zatwierdzenie każdego kroku zmieniającego infrastrukturę.
+C. Verified backup + actual owned restore/fingerprints. Przygotować i przetestować
+   recovery credential invalidation tool na owned DB, procedurę main security
+   guarded migration i nowego pairing. Main DDL dopiero po oddzielnej zgodzie.
+D. Po zgodzie dedykowany WireGuard i narrow firewall; prawdziwy handshake/NAT,
+   deny PostgreSQL/Ollama/other ports, restart2 hostów/sleep/no home routing.
+E. Po zgodzie combined Windows SECURE ingress/bridge oraz Ubuntu nginx -t w osobnym
+   vhost; full negative certificates/Host/header/scopes, uncertain refresh,
+   disconnect/restart/rollback i redacted monitoring przed publicznym otwarciem.
+F. Po zgodzie DNS/ACME/public HTTPS/WSS, approved phone pairing i physical
+   LTE/5G↔Wi-Fi NOTE/ASK/MEMORY/TTS,10-min paced PCM, revoke/refresh uncertainty,
+   integrity before/after. Nie używać synthetic loopback jako dowodu Internetu.
+G. Recovery/rollback bez rewind revocations i szkód dla innych projektów.
+   Dopiero po dowodach GO; deployment nadal wymaga jawnej osobnej autoryzacji.
+
+11. Świeży eksport i końcowy Git
+
+kod_repo_do_analizy.txt: 2026-10-14T13:33:31+00:00 UTC; HEAD bd08370e718a5adbe1486502ee6366b3dd42afd6; 339 files; vendor excluded. wynik.txt is delivered separately (standard exporter report filter).
+Sekcje zgodne z aktualnymi plikami; wszystkie nowe pliki obecne; bez .env/keys:
+PASS: all new implementation/templates/tests included, all exported sections match current source files; no private-key blocks or known local credentials.
+Working tree:5 tracked modified +21 new files; HEAD/upstream bez nowych commitów.
+Brak staging/commit/push zmian TASK 4D.3B.2.
+
+12. Późniejsze polecenie zatwierdzenia
+
+Po zakończeniu powyższej walidacji użytkownik wydał osobne polecenie „commit i push”.
+Poprzednie sekcje opisują stan raportu przed tym poleceniem. Kod odpowiada wersji
+z wykonanych testów; ponowny skan zmian nie wykrył sekretów, vendor pin niezmieniony.
+Tytuł zatwierdzenia: feat: add Nginx gateway and WireGuard transport.
+Aktualny hash i stan upstream należy odczytać z Git; nie są samoodwołującą metadaną
+tego samego commita. Polecenie dotyczy kodu i dokumentacji, bez deploymentu.

@@ -14,6 +14,17 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class MemoryHttpClientTest {
+    @Test fun `disconnect after POST body never retries an uncertain operation`() = runBlocking {
+        withServer { server, api, _ ->
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+            server.enqueue(MockResponse().setBody(answerJson()))
+            try { api.askMemory("Synthetic uncertain result"); fail("Uncertain POST was retried") }
+            catch (error: MemoryHttpException) { assertEquals(HttpFailure.UNAVAILABLE, error.failure) }
+            assertEquals("POST", server.takeRequest(5, TimeUnit.SECONDS)!!.method)
+            assertNull(server.takeRequest(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, server.requestCount)
+        }
+    }
     @Test fun `active archived cursor and detail use exact endpoints`() = runBlocking {
         withServer { server, api, _ ->
             server.enqueue(MockResponse().setBody(pageJson()))

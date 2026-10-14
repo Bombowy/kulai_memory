@@ -1,0 +1,16 @@
+{
+  "public_origin": "https://<PUBLIC_DOMAIN>",
+  "public_listen_address": "<DEDICATED_VPS_PUBLIC_IPV4>",
+  "windows_wg_ip": "<WINDOWS_PRIVATE_WG_IPV4>",
+  "vps_wg_ip": "<VPS_PRIVATE_WG_IPV4>",
+  "vps_endpoint": "<PUBLIC_VPS_ENDPOINT_DNS_OR_IPV4>",
+  "ingress_identity": "<INGRESS_DNS_SAN>",
+  "public_certificate": "/etc/kulai-memory/tls/public-fullchain.pem",
+  "public_private_key": "/etc/kulai-memory/tls/public.key",
+  "gateway_certificate": "/etc/kulai-memory/tls/gateway.pem",
+  "gateway_private_key": "/etc/kulai-memory/tls/gateway.key",
+  "ingress_ca": "/etc/kulai-memory/tls/ingress-ca.pem",
+  "access_log": "/var/log/nginx/kulai-memory-safe.log",
+  "wireguard_port": 51820,
+  "bridge_port": 8443
+}

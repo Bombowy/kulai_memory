@@ -1,4 +1,4 @@
-# Remote access architecture — implemented ingress TASK 4D.3B.1
+# Remote access architecture — ingress and gateway package TASK 4D.3B.2
 
 The opt-in `kulai_memory.remote_ingress` package now implements a real loopback
 TLS/mTLS listener with HTTP and WSS, invoking the existing FastAPI application
@@ -6,7 +6,31 @@ directly in the same process. It requires managed SECURE security, canonical hea
 `kulai_memory_0004` and security head `kulai_security_0003`. Default local transport
 and LOCAL_DEV/ADB reverse remain unchanged. No public listener, VPS, Nginx,
 WireGuard, DNS, firewall or main migration is installed. Sections describing those
-components remain deployment requirements, not evidence of implementation.
+components remain deployment requirements, not evidence of production installation.
+
+TASK 4D.3B.2 adds the concrete [remote access package](../ops/remote_access/README.md):
+reviewed Nginx HTTPS/WSS configuration with verified mTLS upstream, a co-hosted opaque
+TCP bridge, exact-peer WireGuard Ubuntu/Windows templates, a dry-run renderer and
+exact candidate validator, Windows adapter/firewall validation and owned rollback,
+read-only VPS inventory, certificate checks and restart/rotation/recovery runbooks.
+No production service/tunnel/firewall/DNS is configured. The combined bridge launcher
+is manual; ingress still binds numeric loopback. Bridge listens only on the explicitly
+verified WireGuard adapter address, filters the VPS peer, owns no arbitrary target,
+and closes with its actual managed SECURE ingress. A five-second adapter monitor
+closes the combined process on interface loss; no automatic insecure recovery.
+
+Real isolated Nginx tests use a separate foreground process/prefix/PID, real public
+test TLS, actual client-certificate upstream through the transparent TCP bridge,
+the original TLS-derived ASGI admission and marker-owned PostgreSQL with synthetic
+providers. Windows portable Nginx is used when Linux/Docker is unavailable; this
+does not verify Ubuntu nft/systemd nor an actual two-host WireGuard tunnel. Exact
+executed results and limitations are recorded in `wynik.txt`.
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION='1'
+$env:KULAI_TEST_NGINX='<reviewed-isolated-nginx-executable>'
+backend\.venv\Scripts\python.exe -m pytest backend/tests/test_remote_gateway_config.py backend/tests/integration/test_tcp_bridge.py backend/tests/integration/test_nginx_gateway.py -q
+```
 
 ## Implemented boundary and local verification
 
@@ -87,9 +111,13 @@ configuration for this task; main currently requires separately approved schema
 installation. Installing `backend[remote]` selects the reviewed Uvicorn 0.54.0;
 other protocol versions fail closed pending review.
 
-Android is unchanged and never receives the gateway private key or test CA. A future
-public Nginx TLS gateway will hold the mTLS client identity; release Android will
-use ordinary HTTPS/WSS and its existing per-origin bearer/session credentials.
+Android never receives the gateway private key or test CA. The public Nginx TLS
+gateway holds the mTLS client identity; release Android uses ordinary HTTPS/WSS
+and its existing per-origin bearer/session credentials. TASK 4D.3B.2 disables
+OkHttp automatic connection retries in both Memory HTTP and voice WS factories,
+with real-socket disconnect regression tests. Pairing/refresh already disabled
+retries. Reconnect/NOTE replay remains an explicit user action with existing
+ingestion identity; no automatic replay or LOCAL_DEV fallback is added.
 The existing factory defaults and `scripts/dev.py --security-mode LOCAL_DEV` remain
 local and use the unchanged local Host/listener checks.
 
@@ -171,13 +199,14 @@ listener remains unsafe and is not a deployment procedure.
 
 ## 6. Forwarded headers
 
-The gateway must strip all client-supplied Forwarded/X-Forwarded-* fields and any
-ingress attestation field, then generate a minimal consistent set. The backend may
-consume these values only after independently authenticating ingress; malformed,
-duplicated or inconsistent Host/proto data must fail closed. An IP allowlist alone
-is insufficient. Keep Uvicorn proxy-header parsing disabled until the new verified
-adapter supplies a well-defined trusted scope. Current requests with proxy headers
-remain denied, including on loopback.
+The implemented gateway uses `proxy_pass_request_headers off` and an explicit
+positive allowlist for Authorization, device identity, content type and necessary
+WebSocket handshake headers. It strips all Forwarded/X-Forwarded-*/X-Real-IP/
+X-Verified* and arbitrary ingress assertions and generates none. Public Host is
+validated before rewriting to the configured canonical authority; upstream SNI
+uses the independent ingress certificate identity. Browser Origin is denied at
+Nginx before stripping. Uvicorn proxy-header parsing remains disabled. Direct
+requests with proxy headers remain denied by ingress, including on loopback.
 
 ## 7. Authenticated upstream
 

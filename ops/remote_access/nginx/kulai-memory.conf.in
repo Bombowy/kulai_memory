@@ -1,0 +1,120 @@
+# Include in http {} after inventory; owns only this dedicated IP:port.
+# Do not overwrite another project's default_server. No port 80 redirect.
+map $http_host $kulai_host_ok {
+    default 0;
+    "@@PUBLIC_AUTHORITY@@" 1;
+@@DEFAULT_AUTHORITY@@
+}
+map $ssl_server_name $kulai_sni_ok { default 0; "@@PUBLIC_HOST@@" 1; }
+map $request_uri $kulai_route {
+    default denied;
+    ~^/api/memories(?:\?[^\x00-\x20]*)?$ get;
+    "~^/api/memories/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$" get;
+    ~^/api/assistant/(?:ask|speech-plan)$ post;
+    ~^/api/pairing/(?:request|status|claim|cancel)$ capability;
+    /api/security/refresh capability;
+    ~^/ws/(?:memory|assistant)$ websocket;
+}
+map "$request_method:$kulai_route" $kulai_method_ok {
+    default 0;
+    "GET:get" 1;
+    "POST:post" 1;
+    "POST:capability" 1;
+    "GET:websocket" 1;
+}
+map "$kulai_route:$http_upgrade" $kulai_upgrade {
+    default "";
+    ~*^websocket:websocket$ websocket;
+}
+map $kulai_upgrade $kulai_connection { default close; websocket upgrade; }
+map $http_origin $kulai_browser { default 1; "" 0; }
+map $kulai_route $kulai_capability_key { default ""; capability $binary_remote_addr; }
+limit_req_zone $binary_remote_addr zone=kulai_requests:1m rate=10r/s;
+limit_req_zone $kulai_capability_key zone=kulai_capabilities:1m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=kulai_connections:1m;
+log_format kulai_safe '$time_iso8601 status=$status bytes=$bytes_sent duration=$request_time';
+
+server {
+    listen @@LISTEN@@ ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    access_log off;
+    error_log @@NULL_DEVICE@@ emerg;
+    return 421;
+}
+
+server {
+    listen @@LISTEN@@ ssl;
+    server_name @@PUBLIC_HOST@@;
+    ssl_certificate "@@PUBLIC_CERT@@";
+    ssl_certificate_key "@@PUBLIC_KEY@@";
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE+AESGCM:ECDHE+CHACHA20;
+    ssl_session_tickets off;
+    server_tokens off;
+    access_log "@@ACCESS_LOG@@" kulai_safe;
+    # Nginx error logs may echo request targets, headers or upstream responses.
+    error_log @@NULL_DEVICE@@ emerg;
+    client_header_timeout 10s;
+    client_body_timeout 15s;
+    send_timeout 240s;
+    keepalive_timeout 15s;
+    reset_timedout_connection on;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 2 4k;
+    client_max_body_size 64k;
+    client_body_buffer_size 64k;
+    limit_req zone=kulai_requests burst=20 nodelay;
+    limit_req zone=kulai_capabilities burst=10 nodelay;
+    limit_req_status 429;
+    limit_conn kulai_connections 4;
+    limit_conn_status 429;
+    add_header Cache-Control "no-store" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    if ($kulai_host_ok = 0) { return 421; }
+    if ($kulai_sni_ok = 0) { return 421; }
+    if ($kulai_browser = 1) { return 403; }
+    if ($kulai_method_ok = 0) { return 404; }
+    error_page 502 503 504 =503 @kulai_unavailable;
+    location @kulai_unavailable {
+        default_type application/json;
+        return 503 '{"detail":"Remote access unavailable."}';
+    }
+    location / {
+        proxy_pass https://@@UPSTREAM@@;
+        proxy_http_version 1.1;
+        proxy_ssl_certificate "@@GATEWAY_CERT@@";
+        proxy_ssl_certificate_key "@@GATEWAY_KEY@@";
+        proxy_ssl_trusted_certificate "@@INGRESS_CA@@";
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 2;
+        proxy_ssl_server_name on;
+        proxy_ssl_name @@INGRESS_IDENTITY@@;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_ssl_session_reuse off;
+        proxy_next_upstream off;
+        proxy_next_upstream_tries 1;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 240s;
+        proxy_send_timeout 240s;
+        proxy_ignore_client_abort off;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_cache off;
+        proxy_no_cache 1;
+        proxy_hide_header Cache-Control;
+        proxy_redirect off;
+        proxy_intercept_errors on;
+        # Positive header allowlist: no arbitrary X-Forwarded-* or X-Verified*.
+        proxy_pass_request_headers off;
+        proxy_set_header Host "@@PUBLIC_AUTHORITY@@";
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Kulai-Device-ID $http_x_kulai_device_id;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_set_header Upgrade $kulai_upgrade;
+        proxy_set_header Connection $kulai_connection;
+        proxy_set_header Sec-WebSocket-Key $http_sec_websocket_key;
+        proxy_set_header Sec-WebSocket-Version $http_sec_websocket_version;
+    }
+}

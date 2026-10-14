@@ -34,7 +34,8 @@ class OkHttpVoiceSocketFactory(
             .build(),
     private val authentication: RequestAuthentication = RequestAuthentication("https://127.0.0.1:8000"),
 ) : VoiceSocketFactory {
-    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
+        .retryOnConnectionFailure(false).build()
     override fun connect(endpoint: String, onEvent: (SocketEvent) -> Unit): VoiceSocket {
         val request = try { authentication.authorize(Request.Builder().url(endpoint).build()) }
         catch (_: Exception) {

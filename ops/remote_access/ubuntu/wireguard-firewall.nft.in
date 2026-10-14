@@ -1,0 +1,19 @@
+# Candidate only. Render placeholders manually after firewall inventory.
+# Additive dedicated table: never flush ruleset or replace another project.
+table inet kulai_memory_wg {
+    chain tunnel_input {
+        type filter hook input priority -10; policy accept;
+        iifname "@@WG_INTERFACE@@" ct state established,related accept
+        iifname "@@WG_INTERFACE@@" drop
+    }
+    chain tunnel_output {
+        type filter hook output priority -10; policy accept;
+        oifname "@@WG_INTERFACE@@" ip daddr @@WINDOWS_WG_IP@@ tcp dport @@BRIDGE_PORT@@ accept
+        oifname "@@WG_INTERFACE@@" drop
+    }
+    chain tunnel_forward {
+        type filter hook forward priority -10; policy accept;
+        iifname "@@WG_INTERFACE@@" drop
+        oifname "@@WG_INTERFACE@@" drop
+    }
+}
