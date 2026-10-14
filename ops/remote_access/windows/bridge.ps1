@@ -23,7 +23,13 @@ function Other-IPv4Ranges([string]$Peer) {
 $interfaceCheck = & (Join-Path $PSScriptRoot 'inspect-interface.ps1') -InterfaceAlias $InterfaceAlias -Address $Address -PeerAddress $PeerAddress | ConvertFrom-Json
 if (-not $interfaceCheck.verified) { throw 'Interface validation failed' }
 if ($Address -notmatch '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)' -or $PeerAddress -notmatch '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)') { throw 'Private IPv4 addresses required' }
-if (@(Get-NetFirewallProfile | Where-Object { -not $_.Enabled -or $_.DefaultInboundAction -ne 'Block' }).Count -gt 0) { throw 'Enabled default-deny firewall profiles required; no automatic repair' }
+# Validate the effective merged policy, including inherited/GPO defaults. The
+# persistent store may say NotConfigured while ActiveStore correctly says Block.
+$profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
+if ($profiles.Count -ne 3 -or @(Compare-Object @('Domain','Private','Public') @($profiles.Name)).Count -ne 0 -or
+    @($profiles | Where-Object { -not $_.Enabled -or $_.DefaultInboundAction -ne 'Block' }).Count -gt 0) {
+    throw 'Complete enabled effective default-deny profiles required; no automatic repair'
+}
 $ranges = @(Other-IPv4Ranges $PeerAddress)
 $existing = @{}
 foreach ($kind in @('Allow','Block')) {

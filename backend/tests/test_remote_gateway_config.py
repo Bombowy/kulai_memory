@@ -102,6 +102,7 @@ def test_windows_firewall_complement_excludes_only_expected_peer():
 @pytest.mark.parametrize('scenario,expected',[
     ('verify','accepted'),('setup','accepted'),('rollback','accepted'),
     ('conflict','refused'),('wrong_filter','refused'),('wrong_adapter','refused'),
+    ('effective_block','accepted'),('effective_allow','refused'),('missing_profile','refused'),
 ])
 def test_windows_bridge_policy_dry_run_with_mocked_os_inventory(scenario,expected):
     if os.name!='nt': pytest.skip('Windows PowerShell not available')

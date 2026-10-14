@@ -4,7 +4,14 @@ $ErrorActionPreference='Stop'
 function Get-NetAdapter { param($Name) [pscustomobject]@{ Status='Up'; InterfaceDescription=$(if ($Scenario -eq 'wrong_adapter') {'Ethernet'} else {'WireGuard Tunnel'}); ifIndex=123 } }
 function Get-NetIPAddress { [pscustomobject]@{ IPAddress='10.203.71.2'; PrefixLength=32 } }
 function Get-NetRoute { [pscustomobject]@{ DestinationPrefix='10.203.71.1/32' } }
-function Get-NetFirewallProfile { [pscustomobject]@{ Enabled=$true; DefaultInboundAction='Block' } }
+function Get-NetFirewallProfile {
+    param($PolicyStore)
+    foreach ($name in @('Domain','Private','Public')) {
+        if ($Scenario -eq 'missing_profile' -and $name -eq 'Public') { continue }
+        $default=if ($Scenario -eq 'effective_allow') {'Allow'} elseif ($Scenario -eq 'effective_block' -and $PolicyStore -ne 'ActiveStore') {'NotConfigured'} else {'Block'}
+        [pscustomobject]@{Name=$name;Enabled=$true;DefaultInboundAction=$default}
+    }
+}
 function Get-NetTCPConnection { if ($Scenario -eq 'conflict') { [pscustomobject]@{LocalAddress='0.0.0.0'} } }
 function Get-NetFirewallRule {
     param($Name,$PolicyStore)

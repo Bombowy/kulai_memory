@@ -1,0 +1,425 @@
+{
+  "started_at": "2026-10-14T16:01:19.066692+00:00",
+  "method": "Standard security path; no auth cache or weakened runtime limits",
+  "main_before": {
+    "revision": [
+      "kulai_memory_0004"
+    ],
+    "memories": {
+      "count": 9,
+      "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+    },
+    "vectors": {
+      "count": 9,
+      "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+    },
+    "tombstones": {
+      "count": 1,
+      "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+    },
+    "security": null
+  },
+  "sizes": [
+    {
+      "seeded_sessions": 10,
+      "samples_requested": 20,
+      "memory_before": {
+        "working_set_bytes": 133980160,
+        "peak_working_set_bytes": 150708224,
+        "private_bytes": 111792128
+      },
+      "metrics": {
+        "access_authentication": {
+          "n": 20,
+          "min_ms": 24.829,
+          "median_ms": 27.453,
+          "p95_ms": 29.9,
+          "max_ms": 30.77,
+          "client_cpu_seconds": 0.2812,
+          "sql_statements": 420,
+          "journal_growth_bytes": 0
+        },
+        "checkpoint_verify": {
+          "n": 20,
+          "min_ms": 21.944,
+          "median_ms": 23.279,
+          "p95_ms": 31.924,
+          "max_ms": 34.724,
+          "client_cpu_seconds": 0.2188,
+          "sql_statements": 400,
+          "journal_growth_bytes": 0
+        },
+        "full_security_fingerprint": {
+          "n": 20,
+          "min_ms": 16.852,
+          "median_ms": 20.479,
+          "p95_ms": 23.323,
+          "max_ms": 24.201,
+          "client_cpu_seconds": 0.1406,
+          "sql_statements": 340,
+          "journal_growth_bytes": 0
+        },
+        "refresh_rotation_and_predecessor_denial": {
+          "n": 4,
+          "min_ms": 92.863,
+          "median_ms": 97.993,
+          "p95_ms": 107.329,
+          "max_ms": 107.329,
+          "client_cpu_seconds": 0.2031,
+          "sql_statements": 300,
+          "journal_growth_bytes": 3149
+        },
+        "approved_pairing_full_workflow": {
+          "n": 3,
+          "min_ms": 296.048,
+          "median_ms": 305.246,
+          "p95_ms": 321.622,
+          "max_ms": 321.622,
+          "client_cpu_seconds": 0.3594,
+          "sql_statements": 633,
+          "journal_growth_bytes": 9468
+        },
+        "revocation_and_immediate_denial": {
+          "n": 3,
+          "min_ms": 90.852,
+          "median_ms": 93.31,
+          "p95_ms": 101.106,
+          "max_ms": 101.106,
+          "client_cpu_seconds": 0.1719,
+          "sql_statements": 186,
+          "journal_growth_bytes": 2367
+        },
+        "checkpoint_write_fsync_commit": {
+          "n": 20,
+          "min_ms": 63.992,
+          "median_ms": 67.965,
+          "p95_ms": 76.331,
+          "max_ms": 77.981,
+          "client_cpu_seconds": 0.4375,
+          "sql_statements": 800,
+          "journal_growth_bytes": 15780
+        }
+      },
+      "pairing_record_policy_limit": 128,
+      "dataset_above_pairing_policy_limit": false,
+      "journal": {
+        "bytes": 31371,
+        "limit_bytes": 16777216,
+        "mean_bytes_per_write_transaction": 789.0,
+        "estimated_write_transactions_from_empty": 21263,
+        "estimated_remaining_write_transactions": 21224,
+        "capacity_method": "Measured record growth extrapolation; not an executed 16 MiB fill test"
+      },
+      "client_cpu_seconds": 1.8125,
+      "memory_after": {
+        "working_set_bytes": 134852608,
+        "peak_working_set_bytes": 151633920,
+        "private_bytes": 111792128
+      },
+      "postgres": {
+        "same_process_cpu_seconds": null,
+        "cpu_readable_processes": 0,
+        "common_processes": 18,
+        "started_processes": 0,
+        "exited_processes": 0,
+        "rss_before_bytes": 317247488,
+        "rss_after_bytes": 317763584,
+        "scope": "All local PostgreSQL processes; CPU delta excludes exited/new PIDs and includes other DB activity"
+      },
+      "gate_final_state": "OPEN",
+      "final_sessions": 13
+    },
+    {
+      "seeded_sessions": 100,
+      "samples_requested": 20,
+      "memory_before": {
+        "working_set_bytes": 135925760,
+        "peak_working_set_bytes": 152707072,
+        "private_bytes": 113246208
+      },
+      "metrics": {
+        "access_authentication": {
+          "n": 20,
+          "min_ms": 32.643,
+          "median_ms": 39.657,
+          "p95_ms": 46.346,
+          "max_ms": 46.707,
+          "client_cpu_seconds": 0.5,
+          "sql_statements": 420,
+          "journal_growth_bytes": 0
+        },
+        "checkpoint_verify": {
+          "n": 20,
+          "min_ms": 35.661,
+          "median_ms": 37.806,
+          "p95_ms": 42.751,
+          "max_ms": 42.78,
+          "client_cpu_seconds": 0.5,
+          "sql_statements": 400,
+          "journal_growth_bytes": 0
+        },
+        "full_security_fingerprint": {
+          "n": 20,
+          "min_ms": 29.829,
+          "median_ms": 33.261,
+          "p95_ms": 45.257,
+          "max_ms": 48.776,
+          "client_cpu_seconds": 0.4062,
+          "sql_statements": 340,
+          "journal_growth_bytes": 0
+        },
+        "refresh_rotation_and_predecessor_denial": {
+          "n": 4,
+          "min_ms": 126.237,
+          "median_ms": 138.108,
+          "p95_ms": 170.609,
+          "max_ms": 170.609,
+          "client_cpu_seconds": 0.3281,
+          "sql_statements": 300,
+          "journal_growth_bytes": 3149
+        },
+        "approved_pairing_full_workflow": {
+          "n": 3,
+          "min_ms": 415.71,
+          "median_ms": 449.829,
+          "p95_ms": 483.254,
+          "max_ms": 483.254,
+          "client_cpu_seconds": 0.6875,
+          "sql_statements": 633,
+          "journal_growth_bytes": 9468
+        },
+        "revocation_and_immediate_denial": {
+          "n": 3,
+          "min_ms": 133.298,
+          "median_ms": 135.67,
+          "p95_ms": 145.798,
+          "max_ms": 145.798,
+          "client_cpu_seconds": 0.2188,
+          "sql_statements": 186,
+          "journal_growth_bytes": 2367
+        },
+        "checkpoint_write_fsync_commit": {
+          "n": 20,
+          "min_ms": 85.104,
+          "median_ms": 93.778,
+          "p95_ms": 105.091,
+          "max_ms": 112.897,
+          "client_cpu_seconds": 1.0156,
+          "sql_statements": 800,
+          "journal_growth_bytes": 15780
+        }
+      },
+      "pairing_record_policy_limit": 128,
+      "dataset_above_pairing_policy_limit": false,
+      "journal": {
+        "bytes": 31371,
+        "limit_bytes": 16777216,
+        "mean_bytes_per_write_transaction": 789.0,
+        "estimated_write_transactions_from_empty": 21263,
+        "estimated_remaining_write_transactions": 21224,
+        "capacity_method": "Measured record growth extrapolation; not an executed 16 MiB fill test"
+      },
+      "client_cpu_seconds": 3.6875,
+      "memory_after": {
+        "working_set_bytes": 136445952,
+        "peak_working_set_bytes": 153227264,
+        "private_bytes": 113250304
+      },
+      "postgres": {
+        "same_process_cpu_seconds": null,
+        "cpu_readable_processes": 0,
+        "common_processes": 18,
+        "started_processes": 0,
+        "exited_processes": 0,
+        "rss_before_bytes": 317976576,
+        "rss_after_bytes": 319229952,
+        "scope": "All local PostgreSQL processes; CPU delta excludes exited/new PIDs and includes other DB activity"
+      },
+      "gate_final_state": "OPEN",
+      "final_sessions": 103
+    },
+    {
+      "seeded_sessions": 1000,
+      "samples_requested": 20,
+      "memory_before": {
+        "working_set_bytes": 142499840,
+        "peak_working_set_bytes": 159281152,
+        "private_bytes": 119263232
+      },
+      "metrics": {
+        "access_authentication": {
+          "n": 20,
+          "min_ms": 119.325,
+          "median_ms": 121.745,
+          "p95_ms": 125.313,
+          "max_ms": 166.836,
+          "client_cpu_seconds": 2.0938,
+          "sql_statements": 420,
+          "journal_growth_bytes": 0
+        },
+        "checkpoint_verify": {
+          "n": 20,
+          "min_ms": 118.11,
+          "median_ms": 124.399,
+          "p95_ms": 132.545,
+          "max_ms": 144.338,
+          "client_cpu_seconds": 2.1719,
+          "sql_statements": 400,
+          "journal_growth_bytes": 0
+        },
+        "full_security_fingerprint": {
+          "n": 20,
+          "min_ms": 115.208,
+          "median_ms": 119.901,
+          "p95_ms": 143.801,
+          "max_ms": 146.229,
+          "client_cpu_seconds": 2.1406,
+          "sql_statements": 340,
+          "journal_growth_bytes": 0
+        },
+        "refresh_rotation_and_predecessor_denial": {
+          "n": 4,
+          "min_ms": 414.178,
+          "median_ms": 463.635,
+          "p95_ms": 560.681,
+          "max_ms": 560.681,
+          "client_cpu_seconds": 1.6719,
+          "sql_statements": 300,
+          "journal_growth_bytes": 3149
+        },
+        "pairing_capacity_denial": {
+          "n": 3,
+          "min_ms": 140.791,
+          "median_ms": 148.898,
+          "p95_ms": 152.165,
+          "max_ms": 152.165,
+          "client_cpu_seconds": 0.3594,
+          "sql_statements": 72,
+          "journal_growth_bytes": 2367
+        },
+        "revocation_and_immediate_denial": {
+          "n": 3,
+          "min_ms": 397.286,
+          "median_ms": 406.537,
+          "p95_ms": 497.263,
+          "max_ms": 497.263,
+          "client_cpu_seconds": 1.0312,
+          "sql_statements": 186,
+          "journal_growth_bytes": 2367
+        },
+        "checkpoint_write_fsync_commit": {
+          "n": 20,
+          "min_ms": 255.966,
+          "median_ms": 271.223,
+          "p95_ms": 293.18,
+          "max_ms": 319.273,
+          "client_cpu_seconds": 4.5469,
+          "sql_statements": 800,
+          "journal_growth_bytes": 15780
+        }
+      },
+      "pairing_record_policy_limit": 128,
+      "dataset_above_pairing_policy_limit": true,
+      "journal": {
+        "bytes": 24270,
+        "limit_bytes": 16777216,
+        "mean_bytes_per_write_transaction": 789.0,
+        "estimated_write_transactions_from_empty": 21263,
+        "estimated_remaining_write_transactions": 21233,
+        "capacity_method": "Measured record growth extrapolation; not an executed 16 MiB fill test"
+      },
+      "client_cpu_seconds": 14.125,
+      "memory_after": {
+        "working_set_bytes": 142512128,
+        "peak_working_set_bytes": 159293440,
+        "private_bytes": 119263232
+      },
+      "postgres": {
+        "same_process_cpu_seconds": null,
+        "cpu_readable_processes": 0,
+        "common_processes": 18,
+        "started_processes": 0,
+        "exited_processes": 0,
+        "rss_before_bytes": 323375104,
+        "rss_after_bytes": 324120576,
+        "scope": "All local PostgreSQL processes; CPU delta excludes exited/new PIDs and includes other DB activity"
+      },
+      "pcm": {
+        "result": "PASS",
+        "paced_seconds": 600.011,
+        "frames": 3000,
+        "pcm_bytes": 19200000,
+        "frame_interval_ms": 200,
+        "auth_lookups": 3003,
+        "auth": {
+          "n": 3003,
+          "min_ms": 115.084,
+          "median_ms": 127.961,
+          "p95_ms": 172.622,
+          "max_ms": 339.84
+        },
+        "send": {
+          "n": 3000,
+          "min_ms": 0.088,
+          "median_ms": 0.208,
+          "p95_ms": 0.435,
+          "max_ms": 1.117
+        },
+        "scheduling_lateness": {
+          "n": 3000,
+          "min_ms": 0.028,
+          "median_ms": 8.026,
+          "p95_ms": 15.054,
+          "max_ms": 40.338
+        },
+        "stop_to_saved_seconds": 0.256,
+        "cpu_seconds": 359.719,
+        "cpu_percent_one_core": 59.93,
+        "memory_before": {
+          "working_set_bytes": 142589952,
+          "peak_working_set_bytes": 159371264,
+          "private_bytes": 119263232
+        },
+        "memory_after": {
+          "working_set_bytes": 143814656,
+          "peak_working_set_bytes": 160542720,
+          "private_bytes": 119078912
+        },
+        "postgres": {
+          "same_process_cpu_seconds": null,
+          "cpu_readable_processes": 0,
+          "common_processes": 19,
+          "started_processes": 0,
+          "exited_processes": 0,
+          "rss_before_bytes": 350748672,
+          "rss_after_bytes": 357257216,
+          "scope": "All local PostgreSQL processes; CPU delta excludes exited/new PIDs and includes other DB activity"
+        },
+        "scope": "real loopback mTLS WSS, owned PostgreSQL, synthetic inference; no VPS/WireGuard"
+      },
+      "gate_final_state": "OPEN",
+      "final_sessions": 1000
+    }
+  ],
+  "main_after": {
+    "revision": [
+      "kulai_memory_0004"
+    ],
+    "memories": {
+      "count": 9,
+      "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+    },
+    "vectors": {
+      "count": 9,
+      "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+    },
+    "tombstones": {
+      "count": 1,
+      "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+    },
+    "security": null
+  },
+  "main_unchanged": true,
+  "finished_at": "2026-10-14T16:12:00.393687+00:00",
+  "result": "PASS"
+}

@@ -1,0 +1,328 @@
+TASK 4D.3C.1 — REAL VPS & WINDOWS PREFLIGHT
+Data: 2026-10-14, Europe/Warsaw. Diagnostyka, testy syntetyczne, bez deploymentu.
+Repo: C:/Bombowy/Projekty/kulai_memory
+
+1. ZAMKNIĘCIE 4D.3B.3 / GIT
+HEAD: 659e5b993b999fe32a03d14405481feb7f56016c
+Branch main, upstream origin/main. Rzeczywisty git ls-remote potwierdził ten sam HEAD.
+Commit: feat: add recovery gate and shared VPS deployment readiness.
+Poprzedni HEAD 4b72e1cc992574faca939298420f2e07e23c3323 jest rodzicem tego commita.
+Working tree był czysty na początku. Nie wykonano ponownego commita ani push tych
+samych zmian. C1 pozostaje do review, bez nowego commita/push.
+
+Review istniejących gate/recovery/CLI/runtime/store, package/validator/Nginx i testów:
+zewnętrzny gate, pending przed COMMIT, fail-closed, brak nagłówka zaufania,
+require SECURE i oba katalogi, retained refresh/replay/audit, oddzielne release.
+Nie osłabiono tych warunków. Nie dodano cache autoryzacji ani zmiany tokenów/API.
+
+Vendor manifest/gitlink/checkout zgodne i czyste:
+720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+git diff --check PASS. Skan znanych wzorców PEM private key/cloud/GitHub/WG keys
+w zmianach B3.3 i C1 nie wykrył sekretów. Nie jest to gwarancja wykrycia każdego
+możliwego sekretu; dodatkowo reviewed placeholders i syntetyczne generowanie PKI.
+
+2. RZECZYWISTY WINDOWS — ODCZYT
+Windows 11 Home, x64, 10.0.26200 / build 26200. Start systemu 2026-10-14 01:35:17.
+Intel Core i5-14400F,10 rdzeni/16 logicznych CPU, RAM34190417920 B (około31.84GiB).
+C: fixed NTFS, healthy, rozmiar 1022116229120 B, wolne przy odczycie ok. 202.5 GB.
+Drugi mały wolumen NTFS bez litery nie jest zatwierdzoną lokalizacją gate.
+Backend SDK Python 3.14.5, Uvicorn 0.54.0 (faktyczny importlib.metadata).
+PostgreSQL service postgresql-x64-18 Running/Auto, server 18.6 / version_num180006.
+pg_dump i pg_restore: 18.6, pliki obecne w PostgreSQL/18/bin.
+
+WireGuard/Wintun: nie znaleziono standardowych plików Program Files/WireGuard,
+usług, sterowników ani adaptera. Nie instalowano niczego. Brak aktywnych VPN
+w bieżącym Get-VpnConnection i tylko Ethernet/Bluetooth/loopback w adapterach.
+Nie jest to dowód braku każdego możliwego niezainstalowanego/wyłączonego klienta VPN.
+
+Ethernet Realtek Up, IPv4 192.168.1.20/24, gateway 192.168.1.1.
+Profil Public, IPv4 Internet, IPv6 NoTraffic. Bluetooth disconnected: APIPA169.254.x/16.
+IPv6 Ethernet/Bluetooth tylko link-local fe80; loopback ::1. Brak globalnego IPv6
+w odczycie. LAN routes 192.168.1.0/24, APIPA169.254/16 i loopback; default0/0 via
+192.168.1.1. Publiczny IP domu, rodzaj NAT/CGNAT i UDP reachability: NOT VERIFIED.
+RFC1918 + prywatny gateway wskazują lokalny routing, nie dowodzą konkretnego NAT.
+
+Nasłuchy istotne: PostgreSQL 0.0.0.0:5432 oraz [::]:5432; Ollama127.0.0.1:11434.
+Porty8000/8443 wolne przed testami, UDP51820 lokalnie nie zajęty przy odczycie.
+Inne usługi hosta istnieją (m.in. localhost8188/8015 oraz wildcard5678 i porty systemu).
+Nie używać ich jako transportu KulAI ani nie przekierowywać całej sieci domowej.
+Nie zmieniano tych usług i nie wystawiano nowego publicznego portu.
+
+GET localhost8000/health: UNAVAILABLE, brak uruchomionego lokalnego FastAPI.
+GET localhost11434/api/version: HTTP200, Ollama0.40.0, listener loopback.
+Settings: app_env=dev; BGE-M3 bge-m3:567m-fp16, vector1024,
+Qwen qwen3.5:9b, Whisper large-v3, TTSenabled. To konfiguracja, nie test inference.
+Nie odczytywano prywatnych treści modeli ani Memories i nie wykonywano inference.
+
+3. FIREWALL / RYZYKA LOKALNE
+Faktyczny ActiveStore: Domain/Private/Public enabled=True, inbound Block,
+outbound Allow. Persistent/default store pokazuje NotConfigured — to inna informacja.
+Brak nazwanych reguł KulAI-Memory-Bridge-v1 (odczyt z ErrorAction Stop, Count0).
+Get-NetFirewallPortFilter: ACCESS DENIED / Windows System Error5.
+Szczegółowe inne allow rules dla PostgreSQL/bridge wymagają osobnego privileged
+read-only odczytu operatora. Nie próbowano podnosić uprawnień ani zmieniać reguł.
+
+PostgreSQL listen_addresses='*' jest potwierdzone. Redacted pg_hba_file_rules:
+tylko local/127.0.0.1/::1, scram-sha-256, brak błędów parsowania.
+HBA odrzuca klientów spoza loopback, lecz nie dowodzi pełnej izolacji sieciowej.
+Nie stwierdzono publicznego Internet exposure na podstawie samego wildcard bind.
+Przed WG trzeba zweryfikować/przy osobnym zatwierdzeniu ograniczyć binding lub
+wykazać dokładne deny firewall na wszystkich nie-loopback interfejsach.
+Walidator all-private-services-loopback ma obecnie znaną negatywną przesłankę.
+
+Naprawiono WYŁĄCZNIE plik skryptu bridge.ps1: read-only kontrola kompletnego
+ActiveStore zamiast nieefektywnego NotConfigured. Guard nadal wymaga wszystkich
+trzech profili enabled + inbound Block. Testy odmowy Allow i brakującego profilu.
+Nie uruchamiano Apply, New/Remove-NetFirewallRule ani systemowego service/portproxy.
+
+Pierwsze bezpośrednie uruchomienie inventory.ps1 blokowała ExecutionPolicy.
+Skrypt wykonano następnie w osobnym procesie z -ExecutionPolicy RemoteSigned;
+nie wykonano Set-ExecutionPolicy i nie zmieniono polityki systemowej ani PATH.
+Uzupełniające JSON kontrole zapewniły dane pomijane przez mieszane formatowanie
+tabel w istniejącym inventory.ps1. Nie kopiowano pełnych command lines ani .env.
+
+4. SECURITY / AUTOSTART / RESTART
+Settings mode=SECURE, lecz kulai_security_mode nie jest ustawiony jawnie w konfiguracji.
+Dev launcher zachowuje opt-in LOCAL_DEV/ADB reverse. Nie znaleziono bieżącego
+python/uvicorn procesu remote_ingress.py/remote_bridge.py ani zwykłego backendu.
+Wstępny wzorzec wykrył własny shell diagnostyczny; skorygowano filtr do rzeczywistych
+python/pythonw/uvicorn executable, bez kopiowania command lines.
+Odczytowy PostgresSecurityRuntime.startup na main: ready=False, remote_ready=False,
+oczekiwana odmowa schema_validation. Nie uruchomiono AI/HTTP listenera dla main.
+
+Nie znaleziono KulAI/WireGuard usług, Run wpisów ani scheduled tasks uruchamiających
+remote. PostgreSQL startuje automatycznie; Ollama ma Startup/Ollama.lnk po logowaniu.
+Nie instalowano autostartu. Stan po normalnym restarcie nie inicjalizuje ani nie
+otwiera remote ingress na podstawie znalezionej konfiguracji.
+Plan Balanced: S3, hibernate/hybrid/FastStartup dostępne; AC sleep0=never,
+DC600s. Sleep/restart/logoff/outage nie wykonywano. Wymagają przyszłego smoke.
+
+5. RECOVERY GATE READINESS
+C:/ProgramData/KulAI-Memory/recovery nie istnieje. KULAI_RECOVERY_GATE nieustawiony.
+C: ma NTFS i pozwala technicznie na restrykcyjne ACL (testowane w owned TEMP).
+ProgramData parent ma także Users read/write; nie należy dziedziczyć tych uprawnień
+do produkcyjnego gate/keys. Konieczny owner docelowego konta usług i DACL tylko
+SID tego konta + SYSTEM + Administrators, sprawdzony istniejącym checkerem.
+Nie zmieniono rzeczywistych ACL i nie utworzono produkcyjnego gate.
+
+PostgreSQL data: C:/Program Files/PostgreSQL/18/data, na tym samym C:.
+Journal poza data_directory jest oddzielony od logical pg_dump. Wykluczenie ze
+wspólnego snapshotu całego wolumenu/hosta: NOT VERIFIED. Znalezione systemowe/cloud
+backup tasks nie określają scope/exclusions. Potrzebna zatwierdzona niezależna
+trwała lokalizacja/polityka backupu albo obowiązkowy nowy CLOSED/full recovery po
+whole-host restore, bez odtworzenia zaufania do starego OPEN seal.
+
+Wszystkie przyszłe lokalne SECURE/admin procesy mogą używać istniejącego
+KULAI_RECOVERY_GATE / --recovery-gate; muszą wskazywać ten sam absolutny katalog.
+Nie jest to obecnie skonfigurowane. Kontrolowany restart po recovery nadal obowiązkowy.
+Backup/actual restore toolchain jest dostępny i rzeczywiście działa na owned DB.
+Backup main i restore konkretnego produkcyjnego archiwum: NOT RUN w tym preflight.
+Nie wykonywano main initialize/recover/release/revocation/DDL.
+
+6. VPS / DOMENA / TOPOLOGIA
+Brak zatwierdzenia SSH do wskazanego hosta i brak jego parametrów. Pytanie o zgodę
+i host/user/port/fingerprint/domenę zostało zadane oddzielnie. Bez odpowiedzi nie
+nawiązywano SSH, nie odczytywano kluczy ani nie zgadywano, który VPS należy do projektu.
+VPS OS/kernel/IP/IPv6/Nginx/OpenSSL/vhost/default/certyfikaty/ACME/firewall/WG/routes/
+systemd/backup: NOT VERIFIED. Istnieje dokładna lista read-only komend i brakujących
+obserwacji w docs/DEPLOYMENT_PREFLIGHT_4D3C1.md, z użyciem istniejącego preflight.sh.
+Pełny nginx -T, klucze, environment i logi nie trafiły do raportu.
+
+Publiczna domena/subdomena, jej dostępność oraz publiczny IP: NOT VERIFIED, nie wymyślano.
+Shared443/default ownership/TLS policy: NOT VERIFIED, shared_ip nie zatwierdzono.
+Przykładowa para10.203.71.1/32 i10.203.71.2/32 jest wolna tylko wobec odczytanych
+tras Windows; to kandydat, NIE produkcyjny przydział. VPS/LAN/router/VPN kolizje
+wymagają potwierdzenia. UDP51820 lokalnie wolny, VPS i operator: NOT VERIFIED.
+Windows inicjuje dedykowany WG do potwierdzonego VPS, peer-only /32, keepalive25,
+bez 0/0/home LAN. Minimalny firewall tylko bridge8443, bez PostgreSQL/Ollama i innych
+usług. Docelowe konta usług i ACL wymagają zatwierdzenia, nie tworzono kont.
+
+7. CERTYFIKATY / PACKAGE / VALIDATOR
+Zachowano publiczny HTTPS/WSS z normalnym Android trust + prywatną offline CA mTLS,
+oddzielnym gateway clientAuth i ingress serverAuth, dokładnymi SAN i weryfikacją
+łańcucha/hostname. Klucze runtime chronione ACL, CA offline/encrypted. Rotation,
+expiry/ACME/rollback w istniejącym CERTIFICATE_LIFECYCLE.md. Nie ma online CRL/OCSP;
+kompromitacja wymaga usunięcia trust/pin i zakończenia istniejących TLS.
+Nie generowano realnych kluczy/certyfikatów. PKI testowa była tylko w owned TEMP.
+
+Poza repo powstały deployment.json, inventory.json i observations.json. Brakujące
+realne parametry są null/NOT VERIFIED; brak fikcyjnego publicznego origin/IP.
+Istniejący validator na tej konfiguracji: BLOCKED, production_go=false, read-only.
+Generacja reviewed produkcyjnych candidates: NOT RUN/BLOCKED bez domeny/VPS/SAN/
+certyfikatów i expanded Nginx. Nie podstawiano testowych adresów dla pozornego PASS.
+Rzeczywista próba package --write-candidates: exit1, odmowa na niekompletnej
+konfiguracji; katalog candidates nie powstał. Brakującego pola nie uznano za PASS.
+Brak realnego expanded config wyklucza deklarację poprawności istniejącego Nginx.
+Nie instalowano candidates w /etc/nginx i nie wykonywano reload.
+
+8. BENCHMARK SECURITY GATE — WYNIKI LICZBOWE PONIŻEJ
+Nowy backend/tests/security_gate_benchmark.py: opt-in, marker-owned PostgreSQL,
+temp PKI/journal, istniejący Authenticator/SessionService i prawdziwy mTLS WSS.
+Seeds10/100/1000 zawierają aktywne sesje i standardowe unikalne credentials;
+bulk fixture enrollment wyłącznie w owned DB przed checkpointem. Nie zmieniano
+produkcyjnych limitów ani formatu tokenu. Rzeczywista polityka MAX_SESSIONS pairing=128.
+1000 jest testem przeciążenia/retencji danych ponad obecny admission limit, nie
+deklaracją, że API pozwala dzisiaj zatwierdzić1000 urządzeń. Przy1000 nowe pairing
+ma odmówić; przy10/100 mierzony pełny zatwierdzony workflow działa.
+Nie dodano cache i nie opóźniono revocation. Odmowa starego access po refresh/revoke
+jest sprawdzana natychmiast po operacji. Walidacja pełnego security i checkpointu
+nie jest mockowana. Pomiar auth store nie obejmuje publicznego VPS/Nginx/WG RTT.
+
+Mierzone: access auth, gate.check, pełny security_snapshot, refresh rotation z
+odmową poprzednika, full pairing lub capacity denial, revocation+denial, fsync/COMMIT,
+liczba SQL, CPU klienta, Windows WorkingSet/Private/Peak oraz zasoby procesów PG.
+CPU PG obejmuje lokalne procesy serwera, może obejmować inną aktywność DB; delta
+dotyczy wspólnych PID, nie pełnej księgowości zakończonych/nowych procesów.
+Host jest normalnie używaną stacją; podczas paced testu wykonano lekkie odczyty
+preflight i krótkie testy skryptów. To nie jest pomiar dedykowanego hosta produkcyjnego.
+
+Journal capacity: ekstrapolacja na podstawie zmierzonego przyrostu bajtów/transakcję,
+nie wykonanie wszystkich operacji do16MiB. Długość rekordów/metadata po recovery
+może być większa niż fresh synthetic gate; nie przenosić liczby bezpośrednio na
+produkcję. Pełne zapełnienie/aging16MiB: NOT RUN. Brak automatycznej kompakcji.
+
+Ocena wąskiego gardła i bezpieczne propozycje do osobnego review:
+- Przy1000 sesji median full fingerprint119.901ms jest bliski pełnemu access auth
+  121.745ms. Auth wykonuje21 statementów na pomiar, fingerprint17. Koszt nie jest
+  zdominowany przez pojedynczy indeksowany lookup tokenu.
+- W600s PCM wykonano3003 delegowane lookupy; Python359.719s CPU,59.93% jednego
+  rdzenia. Per-frame auth p95=172.622ms, max339.84ms wobec200ms typowej ramki.
+  Jeden klient przeszedł, lecz nie testowano kilku jednocześnie. Ponieważ checkpoint
+  mutex serializuje lookupy, dwa strumienie5Hz przy tej wielkości danych wymagają
+  więcej niż zmierzona obsługa jednego strumienia pozwala bezpiecznie założyć.
+- FRAME_SAMPLES3200/16000Hz i FRAME_BYTES6400 w Android AudioContract.kt odpowiadają
+  użytej ramce200ms. To zgodność kodu/formatu, nie fizyczny test telefonu.
+- Do przyszłego review: usunąć powtórne pełne sprawdzenia w obrębie JEDNEJ spójnej
+  transakcji/requestu admission+lookup, bez przekazywania zaufania nagłówkiem;
+  profilować deterministyczną serializację fingerprintu przy zachowaniu dokładnej
+  zgodności historycznych hashów/restore. Każda ramka nadal sprawdza bieżący token,
+  device, family i gate; nie wprowadzać TTL cache principal ani opóźnienia revocation.
+- Osobny review jest wymagany dla bounded odczytu rosnącego journalu/maintenance.
+  Aktualny read weryfikuje cały hash chain; przy journalu bliskim16MiB koszt może być
+  większy niż w tych fresh24-31KiB fixture. Nie usuwano historii ani nie zmieniono
+  gate w celu poprawy liczb. Wykonać aging oraz multi-client test przed production GO.
+- Limit128 rekordów pairing obowiązuje nawet dla zakończonych powiązań z sesjami;
+  nie podniesiono go. Wymaga jawnej polityki retencji/audytu przed większą skalą.
+
+Pierwszy pełny przebieg zatrzymał się na oczekiwanej odmowie invite przy1000.
+Poprawiono harness: mierzy capacity denial, nie podnosi limitu128. Diagnostic
+SecurityError i inicjalny FAIL nie zostały uznane za PASS pełnego benchmarku.
+Ostateczne dane, czas600s i wynik całego przebiegu uzupełniono poniżej z JSON.
+
+9. TESTY / STATUSY
+PASS:42 krytyczne security/recovery/startup/real HTTPS/WSS,72.34s (39 deselected).
+PASS:48 config/PowerShell safety/ActiveStore/offline test-cert tests,6.86s.
+PASS:43 root reproducibility/vendor/schema/tools/export,1.75s.
+PASS:smoke benchmark10 sessions/2 samples bez PCM,8.74s, main unchanged.
+PASS:strict canonical main db_doctor przed testami; rzeczywisty read-only runtime
+odmawia remote bez security schema, tak jak wymagano.
+PASS:git diff --check, vendor unchanged, known-pattern secret scanning.
+SKIP:brak w powyższych wykonanych zestawach; deselected nie oznacza PASS.
+FAIL historyczny:harness oczekiwał nowego pairing przy1000, gdzie polityka128 odmawia;
+skorygowano oczekiwanie pomiaru, nie implementację auth. Finalny wynik poniżej.
+NOT RUN:real VPS/WG dwóch hostów/DNS/firewall Apply/publiczne certyfikaty/reboot/
+sleep/main DDL i revocation/physical LTE Android. Linux Nginx/real expanded config
+nie zostały sprawdzone. Nie przedstawiono localhost testu jako testu WireGuard.
+
+10. MAIN READ-ONLY / NIEZMIENNOŚĆ
+Przed: canonical kulai_memory_0004, security=null.
+Memory9 sha256 c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
+Vector9 sha256 75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
+Tombstone1 sha256 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Security code head kulai_security_0003, main schema NIEOBECNY. Modele/vector1024,
+Voice Note v1, NOTE/ASK/MEMORY/TTS, LOCAL_DEV/ADB i vendor niezmienione.
+Końcowe porównanie pełnych snapshotów i db_doctor zapisano poniżej.
+Po testach nie pozostał żaden katalog kulai-owned-gate-benchmark-* z PKI.
+Katalog serwera pokazuje1 bazę o prefiksie owned backup,0 owned restore; odczyt
+metadanych tej bazy pokazał0 połączeń. Brak wcześniejszego licznika/capability do
+przypisania jej temu taskowi, więc nie usuwano jej ani nie czytano zawartości.
+Nie deklaruje się, że cały serwer nie ma żadnych wcześniejszych owned artefaktów.
+
+11. NASTĘPNY TASK / ROLLBACK / DECYZJA
+Dokładne komendy i15 osobnych punktów zgody: docs/DEPLOYMENT_PREFLIGHT_4D3C1.md.
+Kolejność: inventory/config freeze -> main backup+real owned restore -> gate/ACL/
+independence -> approved guarded security migration -> NOWY post-migration security
+v3 backup/manifest -> private PKI -> WG -> firewall -> real handshake -> controlled
+recovery/release/SECURE ingress+bridge -> existing Nginx candidate integration ->
+negative tests -> osobna zgoda DNS/HTTPS/public enable -> physical approved pairing
+LTE/5G -> performance/recovery -> final GO/NO-GO. Nie wykonano tych realnych zmian.
+
+Rollback: zamknąć tylko KulAI routing, zatrzymać własny bridge/runtime i zachować
+seal/audit. Usuwać tylko własne zweryfikowane rule/tunnel/vhost zmiany po osobnym
+zatwierdzeniu. Nie naruszać innych projektów, nie cofać schema/canonical ani journalu,
+nie odtwarzać aktywności starych credential, nie replayować NOTE/refresh.
+Restore zawsze przy zamkniętym ingress, z verified recovery i nowym pairing.
+
+Decyzja deployment readiness: BLOCKED.
+Znane blokady: brak security schema i gate, brak WG, brak bridge firewall,
+PostgreSQL wildcard binding/isolation review, brak zatwierdzonych realnych VPS/
+domeny/TLS/default/routes i niezależności gate backup. VPS osobno: NOT VERIFIED.
+To zakończony preflight z rzeczywistymi lokalnymi obserwacjami; nie produkcyjny GO.
+Nie wykonano SSH, deploymentu, main migrations/revocation, systemowego firewall/
+DNS/PATH/autostart changes ani produkcyjnego remote start.
+
+12. DANE KOŃCOWE I METADANE — UZUPEŁNIONE Z WYKONANEGO BENCHMARKU
+
+FINAL BENCHMARK: PASS
+UTC start: 2026-10-14T16:01:19.066692+00:00
+UTC finish: 2026-10-14T16:12:00.393687+00:00
+Full data: docs/SECURITY_GATE_BENCHMARK_4D3C1.json
+External operator package: C:\Users\patry\AppData\Local\Temp\kulai-owned-preflight-c1-f85c1262170d4ac68bada722bdd6db05
+
+Sessions | Metric | n | median_ms | p95_ms | SQL total | Journal growth bytes
+10 | access_authentication | 20 | 27.453 | 29.9 | 420 | 0
+10 | checkpoint_verify | 20 | 23.279 | 31.924 | 400 | 0
+10 | full_security_fingerprint | 20 | 20.479 | 23.323 | 340 | 0
+10 | refresh_rotation_and_predecessor_denial | 4 | 97.993 | 107.329 | 300 | 3149
+10 | approved_pairing_full_workflow | 3 | 305.246 | 321.622 | 633 | 9468
+10 | revocation_and_immediate_denial | 3 | 93.31 | 101.106 | 186 | 2367
+10 | checkpoint_write_fsync_commit | 20 | 67.965 | 76.331 | 800 | 15780
+10: journal=31371 B, measured write growth=789.0 B/transaction; estimated empty capacity=21263, remaining=21224
+10: client CPU measurement series=1.8125s, RSS=134852608 B, private=111792128 B, peak=151633920 B; final_sessions=13
+100 | access_authentication | 20 | 39.657 | 46.346 | 420 | 0
+100 | checkpoint_verify | 20 | 37.806 | 42.751 | 400 | 0
+100 | full_security_fingerprint | 20 | 33.261 | 45.257 | 340 | 0
+100 | refresh_rotation_and_predecessor_denial | 4 | 138.108 | 170.609 | 300 | 3149
+100 | approved_pairing_full_workflow | 3 | 449.829 | 483.254 | 633 | 9468
+100 | revocation_and_immediate_denial | 3 | 135.67 | 145.798 | 186 | 2367
+100 | checkpoint_write_fsync_commit | 20 | 93.778 | 105.091 | 800 | 15780
+100: journal=31371 B, measured write growth=789.0 B/transaction; estimated empty capacity=21263, remaining=21224
+100: client CPU measurement series=3.6875s, RSS=136445952 B, private=113250304 B, peak=153227264 B; final_sessions=103
+1000 | access_authentication | 20 | 121.745 | 125.313 | 420 | 0
+1000 | checkpoint_verify | 20 | 124.399 | 132.545 | 400 | 0
+1000 | full_security_fingerprint | 20 | 119.901 | 143.801 | 340 | 0
+1000 | refresh_rotation_and_predecessor_denial | 4 | 463.635 | 560.681 | 300 | 3149
+1000 | pairing_capacity_denial | 3 | 148.898 | 152.165 | 72 | 2367
+1000 | revocation_and_immediate_denial | 3 | 406.537 | 497.263 | 186 | 2367
+1000 | checkpoint_write_fsync_commit | 20 | 271.223 | 293.18 | 800 | 15780
+1000: journal=24270 B, measured write growth=789.0 B/transaction; estimated empty capacity=21263, remaining=21233
+1000: client CPU measurement series=14.125s, RSS=142512128 B, private=119263232 B, peak=159293440 B; final_sessions=1000
+
+PACED PCM: PASS; actual send duration=600.011s; 3000 frames, 19200000 bytes; frame_interval=200ms.
+Real delegated auth lookups=3003; p50=127.961ms, p95=172.622ms, max=339.84ms.
+Stop -> memory.saved=0.256s; exactly one canonical Memory in the owned fixture.
+Client CPU=359.719s (59.93% of ONE core, not total 16-core host).
+Python RSS before/after=142589952/143814656 B; peak=160542720 B.
+PG sum WorkingSet before/after=350748672/357257216 B; includes shared pages more than once.
+PostgreSQL process CPU: NOT VERIFIED (CPU properties unavailable for service PIDs; null was not treated as zero).
+
+Main BEFORE == AFTER: true, all fields and security=null. Final read-only strict doctor PASS; security-required doctor unavailable as expected.
+No production gate/listener/tunnel/firewall/DNS/main data change. C1 test listeners were temporary numeric loopback only.
+Benchmark smoke/failure diagnostics are external artifacts; final full data are the PASS dataset above.
+Git HEAD remains 659e5b993b999fe32a03d14405481feb7f56016c; upstream origin/main. No C1 commit/push.
+Changed/new C1 files:
+backend/tests/bridge_policy_harness.ps1
+backend/tests/security_gate_benchmark.py
+backend/tests/test_remote_gateway_config.py
+docs/DEPLOYMENT_PREFLIGHT_4D3C1.md
+docs/SECURITY_GATE_BENCHMARK_4D3C1.json
+ops/remote_access/windows/bridge.ps1
+wynik_4d3c1.txt
+
+Final export start: 2026-10-14T18:22:39+02:00
+Export HEAD: 659e5b993b999fe32a03d14405481feb7f56016c + uncommitted C1 changes
+Export files: 360
+Benchmark source SHA256: b0172f58d6962fe7900548d153d9df6aa41c01f02c19c75ffaa96f8a6db28066
+Benchmark results SHA256: 8e35ff566b182a47d984f17dc29f7e2729d0888ac47396361092df5ade2f03c0
+Final diff --check PASS. Latest known-pattern secret scan: 46 source/report files, no matches.
+No VPS authorization/host details received; no SSH session was attempted.
