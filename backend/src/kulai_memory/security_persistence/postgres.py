@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
+import os
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -40,12 +41,25 @@ class PostgresSecurityStore:
     PL: blokada urządzenia zawsze poprzedza blokadę tokenu. EN: one lock order.
     """
 
-    def __init__(self, session_factory: SessionFactory) -> None:
+    def __init__(self, session_factory: SessionFactory, *, recovery_gate=None) -> None:
         self._sessions = session_factory
+        self.recovery_gate = recovery_gate
 
     @asynccontextmanager
     async def _transaction(self, *, readonly: bool = False) -> AsyncIterator[AsyncSession]:
         try:
+            gate = self.recovery_gate or getattr(self._sessions, 'kw', {}).get('info', {}).get('recovery_gate')
+            if gate is not None and os.environ.get('KULAI_RECOVERY_GATE'):
+                from pathlib import Path
+                if Path(os.environ['KULAI_RECOVERY_GATE']) != gate.directory:
+                    raise SecurityError()
+            if gate is None and os.environ.get('KULAI_RECOVERY_GATE'):
+                from kulai_memory.security_recovery import RecoveryGate
+                gate = self.recovery_gate = RecoveryGate(os.environ['KULAI_RECOVERY_GATE'])
+            if gate is not None:
+                async with gate.transaction(self._sessions, readonly=readonly) as session:
+                    yield session
+                return
             async with self._sessions() as session:
                 async with session.begin():
                     if readonly:

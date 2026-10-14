@@ -1,0 +1,33 @@
+{
+  "observed_at": null,
+  "nginx_expanded": null,
+  "combined_nginx_t_ok": null,
+  "default_tls_12_13_only": null,
+  "ubuntu_firewall_peer_only": null,
+  "windows_firewall_peer_only": null,
+  "private_services_loopback": null,
+  "private_key_acl_ok": null,
+  "certificate_key_match": null,
+  "gate_outside_database_backup": null,
+  "rollback_reviewed": null,
+  "bridge_interface_and_port_ok": null,
+  "gateway_identity_configured": null,
+  "safe_restart_reviewed": null,
+  "expected_gateway_identity": null,
+  "lan_vpn_routes": null,
+  "backend": {
+    "mode": null,
+    "canonical_head": null,
+    "security_head": null,
+    "revocation_available": null,
+    "gate_state": null,
+    "external_seal_verified": null
+  },
+  "wireguard": {
+    "ubuntu_address": null,
+    "windows_address": null,
+    "ubuntu_allowed_ips": null,
+    "windows_allowed_ips": null,
+    "persistent_keepalive": null
+  }
+}

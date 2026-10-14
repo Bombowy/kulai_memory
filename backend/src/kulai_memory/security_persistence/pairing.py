@@ -66,7 +66,8 @@ class PostgresPairingStore(PostgresSecurityStore):
             now = await self._now(session)
             total = await session.scalar(sa.select(sa.func.count()).select_from(pairings))
             active = await session.scalar(sa.select(sa.func.count()).select_from(pairings).where(
-                pairings.c.expires_at > now, pairings.c.state.in_(['invited', 'pending', 'approved'])))
+                pairings.c.expires_at > now, pairings.c.attempts < MAX_ATTEMPTS,
+                pairings.c.state.in_(['invited', 'pending', 'approved'])))
             if total >= MAX_SESSIONS or active >= MAX_ACTIVE or not now < invitation.expires_at <= now + timedelta(minutes=5):
                 raise PairingError()
             await session.execute(sa.insert(pairings).values(id=invitation.session_id,

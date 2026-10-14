@@ -80,6 +80,8 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
             security = (security_runtime_factory or PostgresSecurityRuntime)()
             active_app.state.security_runtime = security
             try:
+                if remote is not None:
+                    security.configure_recovery_gate(remote.config.recovery_gate)
                 await security.startup()
                 if remote is not None:
                     remote.runtime = security

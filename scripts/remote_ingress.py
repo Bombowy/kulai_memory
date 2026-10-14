@@ -22,13 +22,14 @@ def main():
     parser.add_argument('--expected-gateway-identity', required=True)
     parser.add_argument('--public-origin', required=True)
     parser.add_argument('--gateway-sha256')
+    parser.add_argument('--recovery-gate', type=Path, required=True)
     parser.add_argument('--port', type=int, default=8443)
     args = parser.parse_args()
     try:
         config = RemoteIngressConfig(enabled=args.enable, public_origin=args.public_origin,
             expected_gateway_identity=args.expected_gateway_identity,
             certificate=args.certificate, private_key=args.private_key, client_ca=args.client_ca,
-            gateway_sha256=args.gateway_sha256)
+            gateway_sha256=args.gateway_sha256, recovery_gate=args.recovery_gate)
         app = create_app(security_config=SecurityConfig(mode=SecurityMode.SECURE), remote_ingress_config=config)
         server = create_remote_server(app, port=args.port)
         asyncio.run(server.serve())

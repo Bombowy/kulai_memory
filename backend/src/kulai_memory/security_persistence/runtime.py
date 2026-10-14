@@ -1,6 +1,7 @@
 """Composition-owned security pool. No providers, migrations or credential bootstrap."""
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 
 from kulai_db import DbConfig
@@ -50,6 +51,14 @@ class PostgresSecurityRuntime:
         self._lifecycle_lock = asyncio.Lock()
         self._remote_closed = False
         self._validated_revision = None
+        self._recovery_gate = None
+        self._ingress_lease = None
+
+    def configure_recovery_gate(self, directory):
+        if self.ready or self._engine is not None:
+            raise SecurityError()
+        from kulai_memory.security_recovery import RecoveryGate
+        self._recovery_gate = RecoveryGate(directory)
 
     async def startup(self) -> None:
         async with self._lifecycle_lock:
@@ -60,6 +69,9 @@ class PostgresSecurityRuntime:
             return
         try:
             config = self._config_factory()
+            if self._recovery_gate is None and os.environ.get('KULAI_RECOVERY_GATE'):
+                from kulai_memory.security_recovery import RecoveryGate
+                self._recovery_gate = RecoveryGate(os.environ['KULAI_RECOVERY_GATE'])
             report = await self._doctor(async_url=config.async_url, require_security=True)
             if not report.ok:
                 raise SecurityError()
@@ -75,8 +87,14 @@ class PostgresSecurityRuntime:
             if not state.valid or not state.present:
                 raise SecurityError()
             self._validated_revision = state.revision
+            if self._recovery_gate is not None:
+                from kulai_memory.security_recovery.gate import FileLease
+                self._ingress_lease = FileLease(self._recovery_gate.ingress, exclusive=False)
+                if not self._ingress_lease.try_lock():
+                    raise SecurityError()
+                await self._recovery_gate.check(factory)
             if state.revision == SESSION_HEAD:
-                self._store = PostgresSessionStore(factory)
+                self._store = PostgresSessionStore(factory, recovery_gate=self._recovery_gate)
                 self.pairing_service = PairingService(self._store, clock=utc_now)
                 self.session_service = SessionService(self._store)
             elif state.revision == SECURITY_HEAD:
@@ -105,7 +123,8 @@ class PostgresSecurityRuntime:
     @property
     def remote_ready(self) -> bool:
         return (self.ready and not self._remote_closed and self._validated_revision == SESSION_HEAD
-                and isinstance(self._store, PostgresSessionStore) and self.session_service is not None)
+                and isinstance(self._store, PostgresSessionStore) and self.session_service is not None
+                and self._recovery_gate is not None and self._ingress_lease is not None)
 
     async def require_remote_ready(self) -> None:
         """Actual read-only catalog validation, never a sidecar environment claim."""
@@ -113,6 +132,7 @@ class PostgresSecurityRuntime:
             if not self.remote_ready or self._engine is None:
                 raise SecurityError()
             async with asyncio.timeout(5):
+                await self._recovery_gate.check(async_sessionmaker(self._engine, expire_on_commit=False))
                 async with self._engine.connect() as connection:
                     try:
                         await connection.execute(text('SET TRANSACTION READ ONLY'))
@@ -138,8 +158,12 @@ class PostgresSecurityRuntime:
         self.session_service = None
         self._store = None
         engine, self._engine = self._engine, None
-        if engine is not None:
-            try:
+        try:
+            if engine is not None:
                 await drain_before_cancellation(asyncio.create_task(engine.dispose()))
-            except Exception:
-                raise SecurityError() from None
+        except Exception:
+            raise SecurityError() from None
+        finally:
+            if self._ingress_lease is not None:
+                self._ingress_lease.close()
+                self._ingress_lease = None

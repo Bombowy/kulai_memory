@@ -1,4 +1,4 @@
-# Remote gateway deployment candidates — TASK 4D.3B.2
+# Remote gateway deployment candidates — TASK 4D.3B.3
 
 This directory contains working configuration generation and isolated Nginx tests,
 not an installed VPS. Production is **NO-GO** until a separately authorized two-host
@@ -73,11 +73,12 @@ Inspect existing nginx include order, default vhosts and firewall policies priva
 Record Ubuntu/kernel/nginx/OpenSSL versions, public/local IP, UDP reachability,
 occupied 80/443/8443/51820 ports, DNS ownership and renewal mechanism.
 
-The generated Nginx file is an `http {}` include with one named vhost, unique maps/
-zones and a rejecting default vhost on a **dedicated explicit IP:port**. It must not
-be loaded twice. It does not open port 80 or redirect capability POSTs. If other
-projects already own the default for that address, STOP: use an approved dedicated
-IP or review integration with the existing rejecting default; never overwrite it.
+The Nginx file is an `http {}` include with one named vhost and reserved maps/zones.
+`shared_ip=true` generates no default vhost and can share an existing IP:443 without
+taking ownership of another project. An existing explicit default with compatible
+TLS policy is required. Dedicated mode still generates a rejecting default, but
+requires exclusive address ownership. Never load the file twice. No port 80 or
+capability redirect is added. See [shared-IP review and validator](DEPLOYMENT_REVIEW.md).
 
 Prepare DNS and a publicly trusted SAN certificate using separately approved actions.
 Provision distinct ingress-server and gateway-client certificates from a protected
@@ -222,11 +223,16 @@ firewall/interface application remain NOT RUN until deployment authorization.
 After database recovery keep ingress closed. Verify backup and a real owned restore,
 canonical/vector/tombstone/security fingerprints, then separately approve transactional
 revocation of restored sessions/access credentials and new pairing if rollback could
-rewind revocations. There is no recovery DDL/revocation tool in this package.
+rewind revocations. [Implemented recovery tool and external gate](RECOVERY.md)
+require stopped ingress, actual restore verification, atomic invalidation and
+separate manual release; startup never re-establishes trust. No recovery is run on
+main by this task. The launcher config now requires an absolute `recovery_gate`.
+See [certificate lifecycle](CERTIFICATE_LIFECYCLE.md) and the read-only
+`validator.py`, `monitor.py`, and Windows `inventory.ps1`.
 
 ## Operator checklist for the next task
 
-- [ ] Real VPS inventory and safe dedicated vhost/default integration; no overwrite.
+- [ ] Real VPS inventory and safe shared/dedicated vhost integration; no overwrite.
 - [ ] Public domain/DNS/SAN/ACME ownership and certificates/rotation/storage verified.
 - [ ] Explicit private /32 pair free of LAN/VPN conflicts, NAT/UDP reachability measured.
 - [ ] Authorized two-host WireGuard handshake, stop/restart and deny-other-services test.

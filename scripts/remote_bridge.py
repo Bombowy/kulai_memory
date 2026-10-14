@@ -23,7 +23,7 @@ def main():
     try:
         data=json.loads(args.config.read_text(encoding='utf-8-sig'))
         ingress=dict(data['ingress'])
-        for key in ('certificate','private_key','client_ca'):
+        for key in ('certificate','private_key','client_ca','recovery_gate'):
             ingress[key]=Path(ingress[key])
         config=RemoteIngressConfig(enabled=True,**ingress)
         bridge=BridgeConfig(**data['bridge'])
@@ -31,7 +31,7 @@ def main():
             raise ValueError()  # Test fixtures, never production launcher fallback.
         config.tls_context()
         if not args.enable:
-            print('Configuration valid; dry-run. No listener, DB writes or system changes.')
+            print('Configuration syntax valid; deployment NOT VERIFIED. Dry-run, no system changes.')
             return 0
         app=create_app(security_config=SecurityConfig(mode=SecurityMode.SECURE),remote_ingress_config=config)
         ingress=create_remote_server(app,port=8443)

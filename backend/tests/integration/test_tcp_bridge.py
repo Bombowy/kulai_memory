@@ -121,6 +121,8 @@ def test_combined_launcher_stops_both_listeners_on_interface_monitor_failure(cer
     async def run():
         async with owned_store() as (_,_,target,factory,_):
             app,_=application(target,factory,certificates.config())
+            from backend.tests.remote_tls_fixtures import prepare_owned_gate
+            await prepare_owned_gate(app)
             ingress=create_remote_server(app,port=free_port())
             config=BridgeConfig('127.0.0.1','127.0.0.1','TEST-LOOPBACK',port=free_port(),test_loopback=True)
             with pytest.raises(RemoteIngressError):

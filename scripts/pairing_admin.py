@@ -25,6 +25,7 @@ from kulai_memory.security_persistence.sessions import PostgresSessionStore
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument('--recovery-gate', type=Path)
     commands = result.add_subparsers(dest='command', required=True)
     invite = commands.add_parser('invite')
     invite.add_argument('--show-secret', action='store_true', required=True)
@@ -58,7 +59,11 @@ async def run(args):
             if not state.valid or state.revision not in (SECURITY_HEAD, SESSION_HEAD):
                 raise PairingError()
         adapter = PostgresSessionStore if state.revision == SESSION_HEAD else PostgresPairingStore
-        store = adapter(async_sessionmaker(engine, expire_on_commit=False))
+        gate = None
+        if getattr(args, 'recovery_gate', None) is not None:
+            from kulai_memory.security_recovery import RecoveryGate
+            gate = RecoveryGate(args.recovery_gate)
+        store = adapter(async_sessionmaker(engine, expire_on_commit=False), recovery_gate=gate)
         service = PairingService(store, clock=utc_now)
         if args.command == 'invite':
             invite = await service.invite(actions=frozenset(Action(a) for a in args.permissions),

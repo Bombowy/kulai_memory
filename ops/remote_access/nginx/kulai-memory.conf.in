@@ -1,5 +1,5 @@
-# Include in http {} after inventory; owns only this dedicated IP:port.
-# Do not overwrite another project's default_server. No port 80 redirect.
+# Include in http {} after inventory. Shared mode owns no default_server.
+# Never overwrite another project's vhost. No port 80 redirect.
 map $http_host $kulai_host_ok {
     default 0;
     "@@PUBLIC_AUTHORITY@@" 1;
@@ -32,16 +32,9 @@ map $kulai_route $kulai_capability_key { default ""; capability $binary_remote_a
 limit_req_zone $binary_remote_addr zone=kulai_requests:1m rate=10r/s;
 limit_req_zone $kulai_capability_key zone=kulai_capabilities:1m rate=30r/m;
 limit_conn_zone $binary_remote_addr zone=kulai_connections:1m;
-log_format kulai_safe '$time_iso8601 status=$status bytes=$bytes_sent duration=$request_time';
+log_format kulai_safe '$time_iso8601 status=$status bytes=$bytes_sent duration=$request_time req=$limit_req_status conn=$limit_conn_status';
 
-server {
-    listen @@LISTEN@@ ssl default_server;
-    server_name _;
-    ssl_reject_handshake on;
-    access_log off;
-    error_log @@NULL_DEVICE@@ emerg;
-    return 421;
-}
+@@DEFAULT_SERVER@@
 
 server {
     listen @@LISTEN@@ ssl;

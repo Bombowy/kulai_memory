@@ -26,6 +26,7 @@ class RemoteIngressConfig:
     private_key: Path | None = None
     client_ca: Path | None = None
     gateway_sha256: str | None = None
+    recovery_gate: Path | None = None
     max_body_bytes: int = 65536
     max_frame_bytes: int = 262144
     http_timeout: float = 240
@@ -46,6 +47,8 @@ class RemoteIngressConfig:
                     raise ValueError()
             if not self.enabled:
                 return
+            if not isinstance(self.recovery_gate, Path) or not self.recovery_gate.is_absolute():
+                raise ValueError()
             origin = urlsplit(self.public_origin)
             port = origin.port if origin.port is not None else 443
             authority = (origin.hostname or '') + (':' + str(origin.port) if origin.port is not None else '')

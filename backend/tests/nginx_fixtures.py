@@ -82,9 +82,10 @@ class Gateway:
         for name,body in deployment.candidates().items():
             (self.directory/name).write_text(body,encoding='utf-8',newline='\n')
         deployment.validate_candidates(self.directory)
+        other=getattr(self,'other_vhosts','')
         config=('daemon off;\nworker_processes 1;\npid nginx.pid;\n'
                 'error_log '+('nul' if os.name=='nt' else '/dev/null')+' emerg;\n'
-                'events { worker_connections 128; }\nhttp { include kulai-memory.nginx.conf; }\n')
+                'events { worker_connections 128; }\nhttp { '+other+'\ninclude kulai-memory.nginx.conf; }\n')
         (self.directory/'nginx.conf').write_text(config,encoding='utf-8',newline='\n')
         prefix=str(self.directory).replace('\\','/')+'/'
         command=[self.executable,'-p',prefix,'-c','nginx.conf']

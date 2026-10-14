@@ -34,12 +34,12 @@ class Certificates:
         self.make('wrong-server', server=True, other=True)
         self.make('wrong-server-name', server=True, identity='other.test', ip=False)
 
-    def root(self, name):
+    def root(self, name, days=2):
         key = ec.generate_private_key(ec.SECP256R1())
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
         cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
-            .not_valid_before(self.now-timedelta(days=1)).not_valid_after(self.now+timedelta(days=2))
+            .not_valid_before(self.now-timedelta(days=1)).not_valid_after(self.now+timedelta(days=days))
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
             .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, None, None), critical=True)
             .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
@@ -47,7 +47,7 @@ class Certificates:
         self.path(name, 'pem').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         return cert, key
 
-    def make(self, name, *, server=False, identity=None, ip=True, other=False, expired=False):
+    def make(self, name, *, server=False, identity=None, ip=True, other=False, expired=False, days=1):
         key = ec.generate_private_key(ec.SECP256R1())
         ca, issuer_key = (self.other_ca, self.other_key) if other else (self.ca, self.ca_key)
         identity = identity or ('ingress.test' if server else 'gateway.test')
@@ -58,7 +58,7 @@ class Certificates:
             .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, identity)]))
             .issuer_name(ca.subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(self.now-timedelta(days=2 if expired else 1))
-            .not_valid_after(self.now-timedelta(days=1) if expired else self.now+timedelta(days=1))
+            .not_valid_after(self.now-timedelta(days=1) if expired else self.now+timedelta(days=days))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(x509.KeyUsage(True, False, False, False, False, False, False, None, None), critical=True)
             .add_extension(x509.SubjectAlternativeName(san), critical=False)
@@ -75,7 +75,8 @@ class Certificates:
     def config(self, **changes):
         return replace(RemoteIngressConfig(enabled=True, public_origin='https://memory.test',
             expected_gateway_identity='gateway.test', certificate=self.path('server', 'pem'),
-            private_key=self.path('server', 'key'), client_ca=self.path('ca', 'pem')), **changes)
+            private_key=self.path('server', 'key'), client_ca=self.path('ca', 'pem'),
+            recovery_gate=self.directory/'gate'), **changes)
 
     def client(self, name='gateway'):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -94,6 +95,7 @@ def certificates():
 
 @asynccontextmanager
 async def tls_server(app):
+    await prepare_owned_gate(app)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
@@ -110,3 +112,33 @@ async def tls_server(app):
         finally:
             host.should_exit = True
             await asyncio.wait_for(task, 10)
+
+
+async def prepare_owned_gate(app):
+    """Explicit synthetic bootstrap with actual owned capability; never production.
+
+    Existing closed/pending gates are NEVER reopened by the fixture. The initial
+    pre-approved test state is checkpointed only for a freshly created owned DB.
+    """
+    fixture = getattr(app.state, '_owned_gate_fixture', None)
+    if fixture is None: return
+    from sqlalchemy import text
+    from kulai_memory.database_safety import require_owned_database
+    from kulai_memory.security_persistence.integrity import inspect_security_schema
+    from kulai_memory.security_recovery.gate import RecoveryGate, checkpoint, locked
+    owned, config, target, factory = fixture
+    await require_owned_database(owned, config=config)
+    path = app.state.remote_ingress_binding.config.recovery_gate
+    async with factory() as session:
+        async with session.begin():
+            await session.execute(text('SET TRANSACTION READ ONLY'))
+            state = await inspect_security_schema(await session.connection())
+            if not state.valid or state.revision != 'kulai_security_0003': return
+            value = await checkpoint(await session.connection())
+    if not path.exists():
+        gate = RecoveryGate.initialize(path)
+        async with locked(gate.mutex):
+            gate.append({'state':'OPEN','identity':value[0],'security':value[1],'synthetic_owned_bootstrap':True})
+    else:
+        gate = RecoveryGate(path)
+    factory.configure(info={'recovery_gate':gate})

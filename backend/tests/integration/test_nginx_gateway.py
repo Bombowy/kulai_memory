@@ -347,10 +347,13 @@ def test_nginx_real_connection_and_request_rate_limits(certificates):
                     assert (await transport.get('/api/memories',headers=headers(credential))).status_code==429
             finally:
                 await asyncio.gather(*(ws.close() for ws in sockets))
-            statuses=[]
             async with g.client() as transport:
-                for _ in range(60):
-                    statuses.append((await transport.get('/api/memories')).status_code)
+                # A real burst, independent of backend checkpoint latency.
+                responses=await asyncio.gather(*(transport.get('/api/memories') for _ in range(60)))
+                statuses=[response.status_code for response in responses]
             assert 429 in statuses and set(statuses)<={401,429}
+            await g.stop()
+            log=(g.directory/'safe.log').read_text(encoding='utf-8')
+            assert 'req=REJECTED' in log and 'conn=REJECTED' in log
             assert runtime.ingest_calls==[]
     asyncio.run(bounded_test(run()))

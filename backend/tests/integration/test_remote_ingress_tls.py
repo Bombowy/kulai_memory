@@ -14,7 +14,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from backend.tests.remote_tls_fixtures import certificates, tls_server
-from backend.tests.security_postgres_fixtures import owned_store
+from backend.tests.security_postgres_fixtures import owned_store, CURRENT_OWNED
 from backend.tests.integration.test_sessions_postgres import paired, age_refresh
 from backend.tests.test_memory_ws import _start_message, _stop_message
 from backend.tests.test_server_transport import start, stop
@@ -52,6 +52,9 @@ def application(target, factory, config, runtime=None):
     runtime = runtime or PgRuntime(factory)
     app = create_app(remote_ingress_config=config, voice_runtime_factory=lambda: runtime,
         security_runtime_factory=lambda: PostgresSecurityRuntime(config_factory=lambda: target))
+    fixture = CURRENT_OWNED.get()
+    if fixture is not None and fixture[2].name == target.name:
+        app.state._owned_gate_fixture = fixture
     return app, runtime
 
 

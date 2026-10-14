@@ -1,4 +1,4 @@
-# Remote access architecture — ingress and gateway package TASK 4D.3B.2
+# Remote access architecture — recovery gate and shared VPS TASK 4D.3B.3
 
 The opt-in `kulai_memory.remote_ingress` package now implements a real loopback
 TLS/mTLS listener with HTTP and WSS, invoking the existing FastAPI application
@@ -57,7 +57,8 @@ Live schema/storage failures latch the remote boundary closed; restoring the DB
 does not reopen the existing lifespan. An operator must stop and explicitly start
 a fresh ingress process after verification. There is no autostart or automatic
 recovery/re-pairing. A restored backup still requires separately approved credential
-revocation before that manual restart; this task does not implement that recovery tool.
+revocation before that manual restart. TASK 4D.3B.3 implements that tool and an
+independent durable gate; see [recovery protocol](../ops/remote_access/RECOVERY.md).
 
 The public Host is compared with an explicitly configured HTTPS origin, independently
 of the private ingress certificate hostname. All browser Origin, proxy/verified
@@ -103,7 +104,7 @@ certificate/key, connect to `https://127.0.0.1:PORT`, and send `Host: memory.tes
 WSS clients connect with that same CA/client identity and Host. Finish/Ctrl+C closes
 the listener and deletes the owned database and temporary PKI/control files.
 
-`scripts/remote_ingress.py --enable --certificate <server.pem> --private-key
+`scripts/remote_ingress.py --enable --recovery-gate <ABS_PROTECTED_GATE> --certificate <server.pem> --private-key
 <server.key> --client-ca <gateway-ca.pem> --expected-gateway-identity <gateway-DNS-SAN>
 --public-origin https://<configured-public-domain>` is a separate explicit backend
 launcher, restricted to numeric loopback. It performs no DDL. Use only synthetic
@@ -279,7 +280,27 @@ revoke affected devices/sessions and investigate redacted audit events before
 reopening traffic. A failed gateway upgrade must fail closed; a rollback cannot
 restore an expired/revoked credential through cached authorization.
 
-## 12. PostgreSQL backup and session recovery
+## 12. PostgreSQL backup and session recovery (implemented in 4D.3B.3)
+
+Remote runtime requires a protected gate independently persisted outside PostgreSQL
+and Git. Every supported security transaction verifies the complete fingerprint
+under a cross-process lock. Writers fsync PENDING before COMMIT and publish OPEN
+only after successful COMMIT and checkpoint persistence. Old restores, missing or
+corrupt journals and ambiguous COMMIT fail closed. Startup never initializes or
+releases a gate. A shared lifespan lease prevents recovery while ingress is alive.
+
+`scripts/security_recovery.py` implements actual archive re-restore verification,
+atomic credential invalidation, terminal active pairing proofs, retained audit and
+replay history, idempotence and separate manual release. No canonical DML or new
+migration is introduced. OS ACLs protect the journal; its checksums are not a
+hardware monotonic counter. Whole-host rollback including the independent seal
+requires new CLOSED state and full recovery. See
+[recovery and its limits](../ops/remote_access/RECOVERY.md).
+
+Shared-IP Nginx generation (`shared_ip=True`) owns no default server and preserves
+strict SNI/Host and mTLS. The read-only production validator reports conflicts and
+missing evidence separately. See [deployment review](../ops/remote_access/DEPLOYMENT_REVIEW.md)
+and [certificate lifecycle](../ops/remote_access/CERTIFICATE_LIFECYCLE.md).
 
 Security v3 snapshots include all session fields and refresh digests/consumption
 history in addition to devices, access tokens, pairing and rate state. Verified
@@ -294,7 +315,7 @@ associated access credentials (and legacy access credentials affected by rewind)
 using a separately approved, transactional administration procedure. Restore must
 not silently resume phone login. Require pairing again, then reopen only after
 synthetic expiry/replay/revoke checks. This recovery revocation procedure is a
-required 4D.3B operational deliverable; 4D.3A never executes it on main.
+implemented 4D.3B.3 deliverable; it has never been executed on main.
 
 Security upgrade on main also remains separately authorized: stop all writers/admin
 commands -> strict doctor -> full backup -> actual restore verification -> archive

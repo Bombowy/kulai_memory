@@ -1,6 +1,7 @@
 """Owned synthetic DB only, with two independent Alembic graphs."""
 import asyncio
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -11,6 +12,7 @@ from kulai_memory.database_safety import (
 )
 from kulai_memory.security_persistence.migration import upgrade_owned_security
 from kulai_memory.security_persistence.postgres import PostgresSecurityStore
+CURRENT_OWNED = ContextVar('current_owned_security_fixture', default=None)
 
 
 @asynccontextmanager
@@ -27,7 +29,11 @@ async def owned_store(*, security=True):
             await upgrade_owned_security(owned, config=config)
         engine = create_async_engine(target.async_url, echo=False, hide_parameters=True, pool_pre_ping=True)
         factory = async_sessionmaker(engine, expire_on_commit=False)
-        yield owned, config, target, factory, PostgresSecurityStore(factory)
+        token = CURRENT_OWNED.set((owned, config, target, factory))
+        try:
+            yield owned, config, target, factory, PostgresSecurityStore(factory)
+        finally:
+            CURRENT_OWNED.reset(token)
     finally:
         if engine is not None:
             await engine.dispose()

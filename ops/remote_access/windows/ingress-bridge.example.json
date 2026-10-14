@@ -1,6 +1,7 @@
 {
   "ingress": {
     "public_origin": "https://<PUBLIC_DOMAIN>",
+    "recovery_gate": "C:/ProgramData/KulAI-Memory/recovery",
     "expected_gateway_identity": "<GATEWAY_CLIENT_DNS_SAN>",
     "certificate": "C:/ProgramData/KulAI-Memory/tls/ingress.pem",
     "private_key": "C:/ProgramData/KulAI-Memory/tls/ingress.key",

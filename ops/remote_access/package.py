@@ -36,9 +36,10 @@ class Deployment:
     bridge_port: int = 8443
     test_loopback: bool = False
     test_listen_port: int | None = None
+    shared_ip: bool = False
 
     def __post_init__(self):
-        if type(self.test_loopback) is not bool:
+        if type(self.test_loopback) is not bool or type(self.shared_ip) is not bool:
             raise ValueError('Explicit boolean test mode required.')
         origin = urlsplit(self.public_origin)
         if (not dns(origin.hostname or '') or origin.scheme != 'https' or origin.path or origin.query or
@@ -84,12 +85,21 @@ class Deployment:
             'NULL_DEVICE':'nul' if self.test_loopback and __import__('os').name == 'nt' else '/dev/null',
             'VPS_WG_IP':self.vps_wg_ip,'WINDOWS_WG_IP':self.windows_wg_ip,
             'WG_UDP_PORT':str(self.wireguard_port),'VPS_ENDPOINT':self.vps_endpoint,
+            'DEFAULT_SERVER': '' if self.shared_ip else '''server {
+    listen @@LISTEN@@ ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    access_log off;
+    error_log @@NULL_DEVICE@@ emerg;
+    return 421;
+}''',
         }
         result = {}
         for source, target in (('nginx/kulai-memory.conf.in','kulai-memory.nginx.conf'),
                                ('wireguard/ubuntu.conf.in','kulai-memory.ubuntu.conf'),
                                ('wireguard/windows.conf.in','kulai-memory.windows.conf')):
             body = (ROOT / source).read_text(encoding='utf-8')
+            body = body.replace('@@DEFAULT_SERVER@@', replacements['DEFAULT_SERVER'])
             for key,value in replacements.items():
                 body = body.replace('@@'+key+'@@',value.replace('\\','/'))
             if '@@' in body:

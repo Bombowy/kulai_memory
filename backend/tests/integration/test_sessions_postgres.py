@@ -38,7 +38,8 @@ async def paired(factory, *, actions=frozenset({Action.MEMORY_READ}), ttl=timede
 
 async def age_refresh(factory):
     # Synthetic rows only; retain CHECK validity while bypassing real 30s wait.
-    async with factory.begin() as session:
+    store = PostgresSessionStore(factory)
+    async with store._transaction() as session:
         await session.execute(sa.text("UPDATE public.kulai_security_refreshes SET issued_at=issued_at-interval '31 seconds', expires_at=expires_at-interval '31 seconds'"))
 
 
