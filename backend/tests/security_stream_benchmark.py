@@ -9,12 +9,15 @@ from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import hashlib
 import logging
 import os
 from pathlib import Path
 import tempfile
 import time
 from uuid import uuid4
+from unittest.mock import patch
+import wave
 
 import sqlalchemy as sa
 
@@ -25,6 +28,11 @@ from backend.tests.integration.test_remote_ingress_tls import application, webso
 from backend.tests.test_memory_ws import _start_message, _stop_message
 from kulai_memory.database_safety import database_config, database_snapshot_url, run_database_doctor
 from kulai_memory.security.authentication import token_digest
+from kulai_memory.security_recovery.gate import RecoveryGate
+from backend.tests.journal_aging_benchmark import fill_fixture
+from kulai_memory.api import memory_ws
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def percentiles(values):
@@ -32,13 +40,46 @@ def percentiles(values):
     return {**distribution(values), 'p99_ms': round(sorted(values)[math.ceil(.99*len(values))-1], 3)}
 
 
-async def matrix(size, seconds, counts):
+async def matrix(size, seconds, counts, journal_records=0):
+    paths=[]
+    original=memory_ws.OwnedPcmWav
+    def observe_audio():
+        value=original(); paths.append(value.path); return value
+    # Observe only adapter-owned files; no cryptographic or auth substitution.
+    with patch.object(memory_ws,'OwnedPcmWav',side_effect=observe_audio):
+        try:
+            rows=await _matrix(size,seconds,counts,journal_records)
+        finally:
+            leaks=[p for p in paths if p.exists()]
+            for path in leaks: path.unlink()  # Exact files created by this fixture.
+            assert not leaks, 'Temporary audio cleanup failed'
+    for row in rows: row['temporary_audio_cleanup_verified']=True
+    return rows
+
+
+async def _matrix(size, seconds, counts, journal_records):
     with tempfile.TemporaryDirectory(prefix='kulai-owned-stream-') as directory:
         certificates = Certificates(directory)
         async with owned_store() as (owned, base, target, factory, _):
             credentials = await seed(owned, base, factory, size)
             app, runtime = application(target, factory, certificates.config())
             await prepare_owned_gate(app)
+            gate=RecoveryGate(certificates.directory/'gate')
+            if journal_records:
+                state={k:v for k,v in gate.read().items() if k not in ('seq','previous','checksum')}
+                fill_fixture(gate,state,records=journal_records)
+            pcm_verified=[]
+            original_transcribe=runtime.transcribe
+            async def verify_pcm(**kwargs):
+                digest=hashlib.sha256(); total=0
+                with wave.open(str(kwargs['audio_path']),'rb') as source:
+                    assert (source.getframerate(),source.getnchannels(),source.getsampwidth())==(16000,1,2)
+                    while data:=source.readframes(32000): digest.update(data); total+=len(data)
+                assert total==seconds*32000
+                assert digest.hexdigest()==hashlib.sha256(b'\0'*(seconds*32000)).hexdigest()
+                pcm_verified.append(total)
+                return await original_transcribe(**kwargs)
+            runtime.transcribe=verify_pcm
             results = []
             async with tls_server(app) as (port, _):
                 security = app.state.security_runtime
@@ -99,6 +140,9 @@ async def matrix(size, seconds, counts):
                                 track['backlog'].append(len(track['sent'])-track['done'])
                                 await ws.send(b'\0'*6400)
                                 track['send'].append((time.perf_counter()-now)*1000)
+                                if index==0 and number%150==0:
+                                    print(json.dumps(dict(stage='paced_progress',sessions=size,clients=clients,
+                                        pcm_seconds=number//5,frames=number)),flush=True)
                             stopped = time.perf_counter()
                             await ws.send(json.dumps(_stop_message()))
                             async with asyncio.timeout(90):
@@ -124,6 +168,7 @@ async def matrix(size, seconds, counts):
                     async with factory() as db:
                         saved = await db.scalar(sa.text('SELECT count(*) FROM memories'))
                     assert saved-previous == clients
+                    assert len(pcm_verified)==sum(counts[:counts.index(clients)+1])
                     output = dict(sessions=size, clients=clients, pcm_seconds=seconds,
                         frames_per_client=frames, bytes_per_frame=6400, interval_ms=200,
                         elapsed_seconds=round(elapsed, 3), saved_memories=saved-previous,
@@ -137,7 +182,9 @@ async def matrix(size, seconds, counts):
                         stop_to_saved_seconds=[r['stop'] for r in rows],
                         python_cpu_seconds=round(time.process_time()-cpu, 3),
                         memory_before=rss, memory_after=memory(),
-                        backpressure='Real unchanged bounded transport; measured send await and unfinished frame queue',
+                        journal_start_records=journal_records or 2,journal_end_records=gate.read()['seq'],
+                        pcm_bytes_verified=True,connection_errors=0,
+                        backpressure='Real transport; measured send await and unfinished frame queue; burst cap regression is separate',
                         result='PASS')
                     results.append(output)
                     print(json.dumps(output), flush=True)
@@ -147,32 +194,59 @@ async def matrix(size, seconds, counts):
 
 async def run(args):
     if os.environ.get('KULAI_RUN_POSTGRES_INTEGRATION') != '1': raise ValueError('Opt-in required')
-    if not args.output.is_absolute() or args.output.exists(): raise ValueError('New absolute output required')
+    if not args.output.is_absolute() or args.output.exists() or args.output.resolve().is_relative_to(REPO):
+        raise ValueError('New absolute output outside repository required')
     before = asdict(await database_snapshot_url(database_config().async_url))
     report = dict(started_at=datetime.now(timezone.utc).isoformat(), label=args.label,
                   scope='Real loopback mTLS WSS, owned PG, synthetic AI; no WireGuard/VPS',
                   main_before=before, cases=[])
-    for size in args.sizes:
-        report['cases'].extend(await matrix(size, args.seconds, args.clients))
-    after = asdict(await database_snapshot_url(database_config().async_url))
-    assert before == after
-    doctor = await run_database_doctor(async_url=database_config().async_url)
-    assert doctor.ok
-    report.update(main_after=after, main_unchanged=True, canonical_doctor_ok=True,
-                  finished_at=datetime.now(timezone.utc).isoformat(), result='PASS')
-    with args.output.open('x', encoding='utf-8') as stream: json.dump(report, stream, indent=2)
+    report['result']='FAIL'
+    try:
+        for size in args.sizes:
+            report['cases'].extend(await matrix(size,args.seconds,args.clients,args.journal_records))
+        report['result']='PASS'
+    except BaseException as error:
+        report.update(result='CANCELLED' if isinstance(error,asyncio.CancelledError) else 'FAIL',error_type=type(error).__name__)
+        raise
+    finally:
+        try:
+            after=asdict(await database_snapshot_url(database_config().async_url))
+            doctor=await run_database_doctor(async_url=database_config().async_url)
+            report.update(main_after=after,main_unchanged=before==after,canonical_doctor_ok=doctor.ok)
+            if before!=after or not doctor.ok: report['result']='FAIL'
+        except Exception as error:
+            report.update(result='FAIL',main_unchanged=None,canonical_doctor_ok=False,
+                          final_check_error_type=type(error).__name__)
+        report['finished_at']=datetime.now(timezone.utc).isoformat()
+        with args.output.open('x',encoding='utf-8') as stream: json.dump(report,stream,indent=2)
+        print(json.dumps(dict(result=report['result'],output=str(args.output),main_unchanged=report['main_unchanged'])),flush=True)
+    assert report['result']=='PASS'
 
 
-def main():
+def timeout_seconds(args):
+    return max(1800,120+len(args.sizes)*len(args.clients)*(args.seconds+120))
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--label', choices=['before', 'after', 'verification'], required=True)
-    parser.add_argument('--seconds', type=int, choices=[4, 20, 60], default=20)
+    parser.add_argument('--seconds', type=int, choices=[4,20,60,600], default=20)
+    parser.add_argument('--allow-long-tests',action='store_true')
+    parser.add_argument('--journal-records',type=int,choices=[0,1000],default=0)
     parser.add_argument('--sizes', type=int, nargs='+', choices=[10, 100, 1000], default=[10, 100])
     parser.add_argument('--clients', type=int, nargs='+', choices=[1, 2, 4], default=[1, 2, 4])
-    args = parser.parse_args()
+    args=parser.parse_args(argv)
+    if args.seconds==600 and (not args.allow_long_tests or os.environ.get('KULAI_RUN_LONG_TRANSPORT')!='1'):
+        parser.error('600 seconds requires --allow-long-tests and KULAI_RUN_LONG_TRANSPORT=1')
+    if len(set(args.clients))!=len(args.clients) or len(set(args.sizes))!=len(args.sizes): parser.error('Duplicate cases refused')
+    return args
+
+
+def main():
+    args=parse_args()
     logging.disable(logging.INFO)
-    try: asyncio.run(asyncio.wait_for(run(args), 1800))
+    try: asyncio.run(asyncio.wait_for(run(args),timeout_seconds(args)))
     except Exception as error:
         # Exception values/locals may contain credentials: print type/locations only.
         import traceback
