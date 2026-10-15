@@ -208,20 +208,28 @@ class SecuritySnapshot:
 
 async def _fingerprint(connection: AsyncConnection, table: str) -> SecurityFingerprint:
     digest, count = hashlib.sha256(), 0
-    result = await connection.stream(text(f"SELECT * FROM public.{table} ORDER BY id"))
-    async for row in result:
-        values = {}
-        for key, value in row._mapping.items():
-            if hasattr(value, "utcoffset"):
-                value = value.astimezone(timezone.utc).isoformat()
-            elif value is not None and (isinstance(value, UUID) or key in {'id', 'device_id', 'project_id', 'client_id', 'token_id'}):
-                # PL/EN: retain v1/v2 canonical encoding, including the rate counter's integer id.
-                value = str(value)
-            values[key] = value
-        payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-        digest.update(len(payload).to_bytes(8, "big"))
-        digest.update(payload)
-        count += 1
+    # Bound buffering and avoid one asynchronous iterator transition per row.
+    # SQL, ordering, fields and canonical bytes stay identical to v1/v2/v3.
+    # Every call still reads all rows; no snapshot/principal cache is involved.
+    result = await connection.stream(text(f"SELECT * FROM public.{table} ORDER BY id"),
+                                     execution_options={"yield_per": 256})
+    try:
+        async for batch in result.mappings().partitions(256):
+            for row in batch:
+                values = {}
+                for key, value in row.items():
+                    if hasattr(value, "utcoffset"):
+                        value = value.astimezone(timezone.utc).isoformat()
+                    elif value is not None and (isinstance(value, UUID) or key in {'id', 'device_id', 'project_id', 'client_id', 'token_id'}):
+                        # Retain historical encoding, including the rate counter's integer id.
+                        value = str(value)
+                    values[key] = value
+                payload = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                digest.update(len(payload).to_bytes(8, "big"))
+                digest.update(payload)
+                count += 1
+    finally:
+        await result.close()
     return SecurityFingerprint(count, digest.hexdigest())
 
 

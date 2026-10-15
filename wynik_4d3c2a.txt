@@ -1,0 +1,326 @@
+TASK 4D.3C.2A — SECURITY PERFORMANCE HARDENING & REAL VPS HANDOFF
+2026-10-14, Europe/Warsaw. Repo C:/Bombowy/Projekty/kulai_memory.
+
+1. GIT / ZAMKNIĘCIE C1
+HEAD f885ac202b5494873039fc80abe0788f3f5cab36, main, upstream origin/main.
+C1 jest już zatwierdzony i wypchnięty; git ls-remote potwierdził identyczny HEAD.
+Commit: feat: add deployment preflight and recovery gate benchmarks.
+Poprzedni HEAD 659e5b993b999fe32a03d14405481feb7f56016c jest jego rodzicem.
+Nie powielono commita pod proponowaną nową nazwą i nie przepisano historii.
+Stan początkowy czysty. Nowe zmiany C2A nie są staged/committed/pushed.
+Vendor gitlink/checkout czyste, pin 720d0f26c75ba4af24d395f98f15a37e4bd5067e.
+
+2. RZECZYWISTE POPRAWKI
+checkpoint(): trzy SELECT canonical heads / database name / OID połączono w jeden
+SELECT w tej samej transakcji REPEATABLE READ. Wszystkie wartości nadal odczytane.
+Nie ma cache między operacjami, pominiętego gate ani zmiany semantyki revocation.
+_fingerprint(): bounded partycje po 256 wierszy zamiast async przejścia per wiersz;
+identyczne SELECT, ORDER BY, kolumny, UTC, kodowanie UUID/int id, JSON i SHA-256.
+Zamknięcie kursora w finally. Test na 1000 syntetycznych sesji porównuje wszystkie
+sześć tabel ze starym algorytmem i potwierdza zmianę hash po zmianie urządzenia.
+
+Wykryto dodatkowy ISTOTNY BŁĄD w istniejącym server.py: override
+handle_websocket_data nie był wywoływany w przypiętym Uvicorn 0.54.0.
+Nowy rzeczywisty test mTLS/WSS wykazał 47 wiadomości w kolejce przy burście.
+Naprawa używa faktycznie wywoływanego send_receive_event_to_app dla wiadomości
+tekstowych/binarnych i złożonych fragmentów. Limit: osiem queued data messages,
+następna powoduje abort; dalsze zdarzenia z tego samego TCP batch są odrzucane.
+Dopuszczono jeden dodatkowy lifecycle disconnect, bez nieograniczonego wzrostu.
+Nie napisano parsera TLS/HTTP/WS, nie zmieniono mTLS identity ani ASGI admission.
+Test potwierdza bounded queue, pause_reading, disconnect i zero trwałych Memory.
+
+3. POMIARY PRZED/PO — REALNY TLS/WSS + OWNED POSTGRESQL
+Nowy powtarzalny harness security_stream_benchmark.py. Osobne marker-owned DBs,
+oba właściwe migration graphs, syntetyczni providerzy, tymczasowa PKI i gate.
+Wszystkie decyzje przechodzą przez istniejący runtime.lookup/Authenticator.
+Instrumentacja tylko deleguje i mierzy; nie zastępuje TLS peer ani principal.
+
+Każdy z sześciu wariantów: 20 sekund, 100 ramek/klient, 6400 B co 200 ms,
+Voice Note v1 bez zmiany. Rozmiary DB 10/100, klientów 1/2/4. Dokładnie 1/2/4
+nowych canonical Memory w każdym wariancie, bez duplikatu. 1400 ramek i 14 Memory
+na pełną macierz; owned DB usuwane po zakończeniu. Main nie jest fixture.
+
+PRZED: UTC 20:02:42.860824–20:04:53.565495.
+KOŃCOWE PO: UTC 20:17:31.333907–20:19:41.507217, po naprawie kolejki.
+Zachowano także pośredni pomiar po optymalizacji, przed naprawą hooka, aby nie
+wybierać tylko korzystniejszych liczb. Poniżej końcowy przebieg PO.
+
+DB | klienci | auth p50 PRZED/PO ms | p95 PRZED/PO | p99 PRZED/PO
+10 | 1 | 26.439 / 25.206 | 31.494 / 39.058 | 34.894 / 60.290
+10 | 2 | 37.978 / 39.744 | 67.304 / 61.663 | 69.984 / 66.176
+10 | 4 | 71.769 / 69.932 | 129.343 / 120.884 | 147.343 / 131.359
+100 | 1 | 36.105 / 32.444 | 40.023 / 40.923 | 41.418 / 91.625
+100 | 2 | 67.594 / 51.287 | 93.417 / 74.896 | 132.237 / 91.258
+100 | 4 | 104.401 / 106.996 | 173.667 / 166.609 | 204.379 / 172.777
+
+SQLAlchemy before_cursor_execute statements na każdą ramkę: PRZED 21, PO 19,
+min=max w każdym wariancie. Nie jest to wire-level trace: wewnętrzne FETCH/ping/
+BEGIN/ROLLBACK drivera nie są osobno liczone przez ten event. Licznik podłączony
+do rzeczywistego security runtime engine z per-lookup ContextVar.
+
+Końcowe PO:
+DB/klienci | send→auth-end p95 ms | send await p95 ms | peak backlog/klient
+10/1 | 41.439 | 0.625 | [2]
+10/2 | 70.203 | 0.465 | [1,1]
+10/4 | 130.153 | 0.498 | [1,1,1,1]
+100/1 | 41.707 | 0.462 | [1]
+100/2 | 79.339 | 0.309 | [1,1]
+100/4 | 171.270 | 0.225 | [1,1,2,2]
+Scheduling lateness p95: 14.064–15.639 ms. To opóźnienie harmonogramu klienta,
+nie opóźnienie fizycznego mikrofonu. Frame send→auth-end obejmuje lokalne TLS,
+kolejkę i weryfikację; nie jest pomiarem transportu przez Internet.
+
+DB/klienci | CPU Python PRZED/PO s | stop-to-saved PO s | RSS PO B
+10/1 | 1.516/1.453 | [0.0654] | 137269248
+10/2 | 2.578/2.484 | [0.0473,0.1073] | 138518528
+10/4 | 5.172/3.656 | [0.0576,0.2007,0.1002,0.1546] | 138801152
+100/1 | 2.469/2.016 | [0.0689] | 141090816
+100/2 | 4.719/3.812 | [0.0762,0.1415] | 141635584
+100/4 | 8.969/7.922 | [0.0682,0.1230,0.2023,0.2572] | 140558336
+
+CPU dotyczy procesu Python, wraz z obsługą klientów/serwera; nie całego hosta
+ani PostgreSQL. CPU PostgreSQL: NOT VERIFIED, nie wpisano fikcyjnego zera.
+Pełne RSS/private/peak i wszystkie rozkłady są w zachowanym JSON.
+
+Wnioski: gwarantowana redukcja dwóch zapytań na ramkę; poprawa czasów jest mała
+i nierówna. Nie twierdzę, że wszystkie percentyle poprawiono. Przy 100/4 auth max
+nadal 218.952 ms, send→auth-end max 227.004 ms, backlog do 2. Brak zaliczonego
+produkcyjnego SLO. Krótka próba loopback nie dowodzi 4 równoczesnych nagrań po
+10 minut przez VPS/WG ani pojemności starego journalu. 1000 sesji to opcjonalny
+stress dataset, ponad istniejącym limitem 128 pairing records; nie zmieniono go.
+
+4. RECOVERY JOURNAL AGING
+Rzeczywisty limit 16777216 B, bez jego obniżania i bez kompakcji.
+Historia testowa wygenerowana liniowo w izolowanym katalogu; następnie każde
+czytanie weryfikuje cały prawdziwy production hash chain. Nie dopisano dziesiątek
+tysięcy rekordów quadraticznym append, nie zmieniono produkcyjnego algorytmu.
+
+rekordy | bytes | mediana read ms | p95 (=max z 5) ms | CPU/5 odczytów s
+2 | 670 | 3.202 | 7.698 | 0.0156
+1000 | 336893 | 10.243 | 15.735 | 0.0469
+49523 | 16777191 | 360.069 | 360.618 | 1.7344
+Near-full: dokładnie 25 B wolne; kolejny poprawny append odmówiony, cały plik
+pozostał byte-for-byte identyczny. Liczba rekordów zależy od payloadu; rekordy
+recovery z canonical/backup metadata są większe. Nie jest to ogólna pojemność.
+
+PASS: mały/wielorekordowy/near-full journal, uszkodzony i ucięty rekord, cofnięty
+poprawny checkpoint niezgodny z DB, współbieżne security reads/writes, revocation,
+odmowa zapisu przed mutacją przy pełnym journalu. Dotychczasowa regresja obejmuje
+niepewny COMMIT i crash po COMMIT przed OPEN: gate pozostaje PENDING/CLOSED.
+Poprawny pełny journal może nadal obsługiwać read auth; zapisy odmawiają przed
+mutacją. Błąd/mismatch nie przywraca zaufania i nie uruchamia ingress.
+
+5. OGRANICZENIE RYZYKA AGING / ROLLOVER
+Nowy ops.remote_access.journal_status: real ACL check, blokada mutex i pełna
+weryfikacja journalu, bez DB check/write, initialize/recover/release. Raportuje
+wyłącznie state/count/bytes/time. Nie wyświetla identity, checksum ani sekretów.
+Walidator wymaga świeżego inventory.journal: records <=1000, bytes <=4 MiB,
+read_ms <50, prawidłowe typy i wartości. Przekroczenie BLOCKED, brak NOT VERIFIED.
+To konserwatywny próg review/maintenance, nie automatyczny runtime shutdown ani
+udowodniona wydajność 4 klientów przy takim wieku. Potrzebny monitoring i pomiar
+współbieżności z faktycznym journalem przed dopuszczeniem ruchu.
+
+Procedura replacement oparta na istniejących jawnych operacjach: stop wszystkich
+ingress/security workers, CLOSED stary gate, verified backup i real owned restore,
+NOWY chroniony zewnętrzny CLOSED gate, pełne recover z atomowym unieważnieniem
+credential, osobno release, nowy zatwierdzony pairing. Stary journal zachowany,
+nigdy nie kopiowany jako OPEN ani automatycznie kasowany. Osobny nowy test owned
+PostgreSQL wykonał cały ten scenariusz i potwierdził canonical unchanged, odmowę
+starego tokenu, działanie nowego urządzenia i CLOSED starego gate.
+
+Na produkcji każdy etap wymaga osobnej zgody. Przy braku miejsca na CLOSED:
+zatrzymać bridge/ingress/wszystkich uczestników, utrzymać blokadę procesu/sieci,
+nie edytować pliku. Brak automatycznego rollover. Rollback nie odtwarza starego
+zaufania; zatrzymuje ruch i pozostawia gate zamknięty.
+
+Pełny fingerprint DB nadal O(n), journal O(history) i globalny mutex serializują
+security operations. Dalsza stałokosztowa optymalizacja wymaga osobno reviewed
+modelu trwałego wersjonowania/digestu każdej mutacji, wykrywania restore względem
+niezależnego stanu i testów historycznych backupów. Wariant z DB-maintained digest
+potrzebowałby migracji, kontroli wszystkich writers i nowego dowodu integralności;
+nie wdrożono go automatycznie. Nie wprowadzono cache principal/TTL revocation.
+
+6. POSTGRESQL — FAKTY I PLAN, BEZ APPLY
+Server 18.6, listen_addresses='*', port5432. PID5628 postgres obserwowany na
+0.0.0.0 i ::. Bieżące połączenia tylko 127.0.0.1/::1; SQL dał zero nonloopback.
+Są klienci innych baz na tej samej instancji. Zaobserwowano procesy python.exe,
+w tym PID32672 z parent pgAdmin4 oraz inne python-parented procesy i benchmark.
+Nie czytano ich command lines ani prywatnych zapytań. Nie przypisuję nieznanych
+procesów arbitralnie do KulAI; administratorzy muszą potwierdzić właścicieli.
+HBA read-only: wyłącznie local/127.0.0.1/::1, SCRAM-SHA-256, brak błędnych reguł.
+Nie ma dowodu publicznej osiągalności ani potwierdzenia, że żaden okresowy klient
+LAN nie jest zatwierdzony. Snapshot połączeń tego nie rozstrzyga.
+
+ActiveStore: wszystkie profile Enabled, inbound Block, outbound Allow. Odczyt
+Get-NetFirewallPortFilter zwraca Access denied (Error5); efektywne szerokie allow,
+program/service rules, scope interfejsów oraz IPv6 pozostają NOT VERIFIED.
+Skrypt postgres-preflight.ps1 niczego nie naprawia i nie eskaluje uprawnień.
+Jeśli uruchomi go uprawniony operator, nadal wymagana lokalna interpretacja
+filtrów adresów/programów/usług; sam count reguł nie jest dowodem izolacji.
+
+Dokładna instrukcja: docs/POSTGRES_LOOPBACK_CHANGE.md. Zgody wszystkich ownerów,
+sprawdzenie scheduled jobs, verified backup/restore, backup efektywnego config/ACL,
+kontrola overrides, jawny edit listen_addresses='127.0.0.1,::1', parse check,
+osobno zatwierdzony restart postgresql-x64-18, test obu rodzin IP i aplikacji.
+Rollback: dokładny stary config/ACL, parse check, kontrolowany restart i ponowne
+połączenie aplikacji. Bez poszerzania HBA/firewalla i bez restore danych.
+Nie wykonano żadnego z tych zapisów ani restartu. Network isolation to nadal
+konkretna blokada wdrożenia do rozstrzygnięcia przez ownera/admina.
+
+7. REAL VPS / CERTYFIKATY / CANDIDATE
+NOT VERIFIED: konkretny VPS/IP, konto SSH, host key z niezależnego źródła, domena,
+default vhost, shared-IP, IPv6, reguły firewall, UDP/WG/routing, ACME/certyfikaty,
+istniejące usługi i konfiguracje. Brak zgody na konkretny host; ZERO połączeń SSH.
+Nie wybrano serwera spośród innych projektów i nie wpisano fikcyjnych adresów.
+
+Nowy samodzielny collect-preflight-safe.sh: read-only, bez sudo/install/reload,
+bez prywatnych kluczy, env/logów/raw nginx -T. Wybrane Nginx dyrektywy parsowane
+z zachowaniem quoted strings; raport nie uznaje częściowego skanu za pełny config.
+Zwraca wersje, listeners i dostępnych ownerów, IPv4/IPv6, prefixy routes, częściowy
+default/server_name/namespace, WG installation/handshake ages, UFW status/nft table
+facts i systemd namespace facts, jeśli dostępne. Brak uprawnień/danych pozostaje
+NOT VERIFIED. --domain dopuszcza wyłącznie DNS hostname i opcjonalny systemowy DNS
+lookup; domyślnie nie wykonuje zewnętrznego public-IP discovery. Bez zmian DNS.
+Testy parsera/redakcji, braku komend i składni shell wykonane lokalnie; rzeczywiste
+uruchomienie na Ubuntu VPS: NOT RUN. Nie eksportuje aplikacyjnych sekretów.
+
+Operator: sh collect-preflight-safe.sh --self-test
+Następnie na wybranym VPS: sh collect-preflight-safe.sh --domain <CONFIRMED_DOMAIN>
+--wg-port <OPERATOR_SELECTED_UDP_PORT>. Zredagowany JSON i osobne lokalne review
+pełnego expanded Nginx/firewall/certificate ownership. Jeśli agent ma użyć SSH:
+potrzebne exact host/user, wyraźna zgoda read-only i host-key fingerprint z konsoli
+dostawcy. Tylko pinned known_hosts + StrictHostKeyChecking=yes, bez accept-new.
+
+Istniejący zewnętrzny partial deployment.json z C1 ma null dla produkcyjnych
+wartości. Rzeczywiście uruchomiony validator odmawia: BLOCKED, dry_run=true,
+production_go=false. Brak installable candidate, bez tworzenia /etc/nginx plików.
+Po potwierdzonym inventory: nowe candidates poza repo przez package.py, validator
+z fresh evidence i journal budget, combined isolated nginx -t, brak reload.
+
+8. TESTY — WYNIKI WYKONANIA
+PASS: backend unit/regression: 987 passed, 70.06s, 1 istniejący warning
+Starlette/anyio BlockingPortal deprecation. Bez Android changes.
+PASS: końcowe testy collector/journal/deployment validator/Windows policy: 85 passed,
+7.62s. Shell parse bez wykonania systemowych zmian i PowerShell AST safety.
+Obejmuje nowy test całego raportu kolektora na syntetycznym OS/command inventory,
+z canary redaction także dla WG, nft/UFW, systemd i suffix Ubuntu nginx-version.
+PASS: 6 nowych owned PostgreSQL hot-path/aging/4-WSS/burst/replacement tests,
+36.18s, po naprawie hooka. Rzeczywiste TLS/mTLS i canonical saves/denials.
+PASS: macierz PRZED, pośrednia PO oraz końcowa PO — po 6 realnych wariantów.
+PASS: aging benchmark, 5 pełnych odczytów na rozmiar i odmowa przy 16 MiB.
+PASS: wcześniejsza duża regresja: 158 testów (security recovery, start guard,
+TLS, Nginx, shared-IP), z 1 wykrytym FAIL dotyczącym starego hooka burst.
+Ten przebieg NIE był całkowicie PASS. Powtórzenie po poprawce opisane poniżej.
+PASS: końcowa regresja unit ingress + real mTLS HTTP/WSS + lifecycle + real Nginx
+HTTPS/WSS + shared-IP + transparent bridge: 119 passed, 425.71s. Nginx był
+rzeczywistym izolowanym procesem Windows 1.30.5 w Temp, nie produkcyjnym Ubuntu.
+PASS: real PostgreSQL security/pairing/sessions: 66 passed, 217.54s; wyłącznie
+owned DBs. Natychmiastowa revocation, refresh rotation/replay i brak log secrets.
+Polecenia końcowe (backend SDK z PyCharm, opt-in dla owned integracji):
+- pytest backend/tests --ignore=backend/tests/integration -q
+- pytest backend/tests/test_safe_vps_preflight.py backend/tests/test_journal_status.py
+  backend/tests/test_deployment_readiness.py backend/tests/test_remote_gateway_config.py -q
+- pytest backend/tests/integration/test_security_hot_path.py -q
+- pytest backend/tests/test_remote_ingress.py backend/tests/integration/test_remote_ingress_tls.py
+  backend/tests/integration/test_remote_ingress_lifecycle.py backend/tests/integration/test_nginx_gateway.py
+  backend/tests/integration/test_nginx_shared_ip.py backend/tests/integration/test_tcp_bridge.py -q
+- pytest backend/tests/integration/test_security_postgres.py backend/tests/integration/test_pairing_postgres.py
+  backend/tests/integration/test_sessions_postgres.py -q
+Wyniki zestawów nakładają się; nie sumuję ich jako liczby unikalnych testów.
+
+FAIL historyczny, naprawiony: burst queue rosła do47; początkowa próba oczekiwała
+abort i timeoutowała, pomiar ujawnił nieaktywny hook. Nie osłabiono limitu testu,
+naprawiono rzeczywistą granicę enqueue. Końcowy test bounded 8 data + lifecycle.
+BLOCKED oczekiwane: validator niekompletnej konfiguracji produkcyjnej.
+NOT RUN: SSH/VPS Ubuntu, Linux Nginx (Docker brak, WSL niezainstalowany), rzeczywisty
+WireGuard na2hostach, firewall Apply/privileged filter review, produkcyjne TLS/CA,
+DNS/public endpoint, fizyczny Android LTE/5G i wieloklientowe 10-min nagrania przez
+Internet. Nie nazywam Windows Nginx/local TCP bridge rzeczywistym WG/Ubuntu testem.
+SKIP zakresu: Android unit/assembleDebug — nie zmieniano kodu Androida.
+
+9. MAIN — WYŁĄCZNIE READ-ONLY
+Canonical head kulai_memory_0004; security main NULL/brak schema (bez migracji).
+Security code head nadal kulai_security_0003. Strict canonical db_doctor OK.
+PRZED/PO wszystkich trzech macierzy identyczne oraz read-only odczyt PG identyczny:
+memories9 SHA256 c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926
+vectors9 SHA256 75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f
+tombstones1 SHA256 33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147
+Końcowy odczyt PO WSZYSTKICH TESTACH: UTC 20:28:23.748990, pełny snapshot
+byte-value-equivalent po normalizacji JSON, unchanged=true, strict doctor_ok=true.
+security-required doctor_ok=false oczekiwane: main nie ma security schema.
+Konfigurowany tryb SECURE; brak uruchomionego public/remote backendu. Sam tryb
+nie wystarcza do gotowości ingress i nie wyłączono guardu schema.
+Nie wykonano DDL/DML, migration, recover/release/revocation na main. Testowe
+migracje/backup/restore/revocation były wyłącznie capability-marker-owned DBs.
+Nie zmieniono BGE-M3 1024, namespace kulai_memory.memories.v1, canonical model,
+Voice Note v1, NOTE/ASK/MEMORY/TTS ani LOCAL_DEV przez ADB reverse.
+
+10. PLIKI C2A
+Zmodyfikowane:
+backend/src/kulai_memory/remote_ingress/server.py
+backend/src/kulai_memory/security_persistence/integrity.py
+backend/src/kulai_memory/security_recovery/gate.py
+backend/tests/test_deployment_readiness.py
+docs/DEPLOYMENT_PREFLIGHT_4D3C1.md
+ops/remote_access/validator.py
+Nowe:
+backend/tests/integration/test_security_hot_path.py
+backend/tests/journal_aging_benchmark.py
+backend/tests/security_stream_benchmark.py
+backend/tests/test_journal_status.py
+backend/tests/test_safe_vps_preflight.py
+docs/POSTGRES_LOOPBACK_CHANGE.md
+docs/REMOTE_PERFORMANCE_HANDOFF_4D3C2A.md
+docs/SECURITY_PERFORMANCE_4D3C2A.json
+ops/remote_access/journal_status.py
+ops/remote_access/ubuntu/collect-preflight-safe.sh
+ops/remote_access/windows/postgres-preflight.ps1
+wynik_4d3c2a.txt
+Generated ignored: kod_repo_do_analizy.txt, bez .env i prywatnych kluczy.
+
+11. DECYZJA I KOLEJNE OSOBNO ZATWIERDZANE OPERACJE
+Kod/testy i handoff istnieją. Produkcyjne wdrożenie BLOCKED, VPS NOT VERIFIED.
+Pozostałe blokady: faktyczny VPS/domena/host-key i zgoda SSH; admin firewall read
+i ownerzy pozostałych klientów PG; realne combined Nginx/shared-IP; niezależność
+i NTFS ACL trwałego gate; budżet journalu wraz z aged concurrent workload;
+SECURE/security v3 na main dopiero po osobnej autoryzacji i backup/restore.
+
+A. READ-ONLY: owner przekazuje VPS/user/domain/hostkey i zgodę diagnostyczną albo
+sam uruchamia collector. Administrator lokalnie sprawdza filtry 5432 i inne usługi,
+IPv6, szerokie allow; ownerzy potwierdzają scheduled LAN consumers.
+B. REVIEW: ustalenie shared-IP/default, WG /32/UDP, kont, SAN/EKU, niezależnego
+storage gate i SLO/maintenance journal. Nowe reviewed candidates poza repo.
+C. Osobna zgoda: verified main backup z real owned restore i protected artifacts.
+D. Osobne zgody: localhost-only PostgreSQL (jeśli ownerzy potwierdzą), restart
+w maintenance window, recovery gate installation/ACL, guarded security migration.
+E. Osobne zgody: prywatna PKI, WireGuard obu hostów, minimalne firewall rules,
+real handshake; następnie kontrolowane SECURE ingress/bridge.
+F. Osobna zgoda: integracja istniejącego Nginx z backupem i izolowanym combined
+syntax/negative review. Bez przejmowania cudzych vhostów/default.
+G. Osobna zgoda: public DNS/ACME/HTTPS routing; następnie zatwierdzenie pairing,
+fizyczny LTE/5G smoke, log privacy, canonical integrity i wydajność na realnej
+trasie z faktycznym wiekiem gate. Dopiero wtedy osobny produkcyjny GO/NO-GO.
+
+Rollback: zamknąć public routing/bridge/ingress, zostawić gate CLOSED; przy
+niepewnym security COMMIT kontrolowane recover, nigdy stary OPEN journal/credentials.
+Nginx rollback tylko własnego nowego vhosta z tested backup, bez cudzych usług.
+PG network rollback zgodnie z osobnym runbookiem; nie odtwarzać DB jako sposobu
+naprawy konfiguracji listenera. Żadnej z tych operacji produkcyjnych nie wykonano.
+
+Final diff --check i nowy-file whitespace check PASS; skan znanych wzorców sekretów
+w zmianach PASS (nie gwarantuje wykrycia dowolnego sekretu). Brak obcych zmian,
+brak staged C2A. HEAD/upstream pozostają f885ac202b5494873039fc80abe0788f3f5cab36.
+Eksport zostaje wygenerowany po końcowym raporcie, z wszystkimi nowymi plikami kodu.
+
+Pierwszy zweryfikowany świeży eksport: 2026-10-14 22:30:35 +02:00, 372 pliki.
+Po dopisaniu niniejszego podsumowania eksport odświeżono ponownie.
+Eksport opisuje HEAD f885ac202b5494873039fc80abe0788f3f5cab36 + uncommitted C2A.
+Sprawdzono obecność nowych harnessów, journal_status, Ubuntu collector, Windows
+PG preflight i dokumentacji/JSON w eksporcie. Brak .env/private keys, vendor wyłączony.
+Benchmark harness SHA256: 342e559fe259bdddea344462be2069cd06c5450b84db10f2707ceb7b9f1563da
+Aging harness SHA256: 30a3ce56ee4b84cf5e572bf8015bd123e9046dd186fdf3c88e56ffc9f1e2c499
+Full results JSON SHA256: 6af57c91d6bce678dc5e65738f11f08629ea92bf15c64ac1ac751352d076f102
+Tekstowy label "bounded transport" w historycznych danych drivera nie był dowodem
+limitu kolejki: błąd przed naprawą wykazał dopiero burst regression. Surowe wyniki
+zachowano; skuteczny limit potwierdzono w finalnych testach po naprawie hooka.
+Stan końcowy: 6 modified + 12 untracked files, nic staged, bez commit/push C2A.

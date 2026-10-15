@@ -49,6 +49,7 @@ def full_inventory():
         certificate_key_match=True,gate_outside_database_backup=True,expected_gateway_identity='gateway.test',lan_vpn_routes=['192.168.1.0/24'],
         backend=dict(mode='SECURE',canonical_head='kulai_memory_0004',security_head='kulai_security_0003',
                      revocation_available=True,gate_state='CLOSED',external_seal_verified=True),
+        journal=dict(records=100,bytes=40000,read_ms=5),
         wireguard=dict(ubuntu_allowed_ips=['10.203.71.2/32'],windows_allowed_ips=['10.203.71.1/32'],
                        ubuntu_address='10.203.71.1/32',windows_address='10.203.71.2/32',persistent_keepalive=25))
 

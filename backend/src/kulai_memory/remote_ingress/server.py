@@ -46,13 +46,19 @@ def create_remote_server(app, *, host="127.0.0.1", port=8443):
             super().connection_made(transport)
             bind(self, transport)
 
-        def handle_websocket_data(self, event):
-            # SansIO pauses reads but its ASGI queue has no configured maxsize.
-            # Abort a burst rather than accumulating parsed messages in memory.
+        def send_receive_event_to_app(self):
+            # Uvicorn 0.54 calls this for text, binary AND reassembled fragments.
+            # Pausing reads alone cannot stop the remaining events parsed from
+            # the current TCP chunk. Bound queued data before the real enqueue.
+            if getattr(self, '_burst_aborted', False) or self.transport.is_closing():
+                self.frames = []
+                return
             if self.queue.qsize() >= 8:
+                self._burst_aborted = True
+                self.frames = []
                 self.transport.abort()
                 return
-            super().handle_websocket_data(event)
+            super().send_receive_event_to_app()
 
     settings = uvicorn.Config(app, host=host, port=port, http=Http, ws=WebSocket,
         lifespan="on", proxy_headers=False, access_log=False, log_config=None,

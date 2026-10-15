@@ -5,6 +5,11 @@ authorizes no VPS, firewall, DNS, certificate, service or main-DB operation.
 Measured performance and final status are in `wynik_4d3c1.txt`. Do not treat this
 document or an unfilled candidate as production approval.
 
+Follow-up measurements, the Uvicorn burst-queue fix, journal review budgets and
+the concrete redacted VPS collector are in `REMOTE_PERFORMANCE_HANDOFF_4D3C2A.md`.
+PostgreSQL binding remains a separately approved operation described in
+`POSTGRES_LOOPBACK_CHANGE.md`; no production change was made by the preflights.
+
 The completed benchmark is also preserved as
 `docs/SECURITY_GATE_BENCHMARK_4D3C1.json`. It ran 600.011 seconds of paced PCM at
 the existing Android 6400-byte/200ms cadence, with real mTLS WSS and 1000 synthetic

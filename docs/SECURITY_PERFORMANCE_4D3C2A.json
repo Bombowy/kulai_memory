@@ -1,0 +1,1542 @@
+{
+  "base_head": "f885ac202b5494873039fc80abe0788f3f5cab36",
+  "before": {
+    "started_at": "2026-10-14T20:02:42.860824+00:00",
+    "label": "before",
+    "scope": "Real loopback mTLS WSS, owned PG, synthetic AI; no WireGuard/VPS",
+    "main_before": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "cases": [
+      {
+        "sessions": 10,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.071,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 22.953,
+          "median_ms": 26.439,
+          "p95_ms": 31.494,
+          "max_ms": 36.097,
+          "p99_ms": 34.894
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 23.309,
+          "median_ms": 27.293,
+          "p95_ms": 33.903,
+          "max_ms": 37.043,
+          "p99_ms": 36.519
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.145,
+          "median_ms": 0.339,
+          "p95_ms": 0.884,
+          "max_ms": 1.343,
+          "p99_ms": 1.273
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.455,
+          "median_ms": 9.056,
+          "p95_ms": 15.305,
+          "max_ms": 16.456,
+          "p99_ms": 16.315
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0619
+        ],
+        "python_cpu_seconds": 1.516,
+        "memory_before": {
+          "working_set_bytes": 134295552,
+          "peak_working_set_bytes": 151015424,
+          "private_bytes": 111394816
+        },
+        "memory_after": {
+          "working_set_bytes": 137007104,
+          "peak_working_set_bytes": 153714688,
+          "private_bytes": 113778688
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.122,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 21.333,
+          "median_ms": 37.978,
+          "p95_ms": 67.304,
+          "max_ms": 73.124,
+          "p99_ms": 69.984
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 21.785,
+          "median_ms": 40.978,
+          "p95_ms": 72.242,
+          "max_ms": 81.512,
+          "p99_ms": 74.718
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.044,
+          "median_ms": 0.161,
+          "p95_ms": 0.462,
+          "max_ms": 1.622,
+          "p99_ms": 1.513
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.6,
+          "median_ms": 8.669,
+          "p95_ms": 15.18,
+          "max_ms": 16.417,
+          "p99_ms": 15.871
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0646,
+          0.1083
+        ],
+        "python_cpu_seconds": 2.578,
+        "memory_before": {
+          "working_set_bytes": 137007104,
+          "peak_working_set_bytes": 153714688,
+          "private_bytes": 113778688
+        },
+        "memory_after": {
+          "working_set_bytes": 138153984,
+          "peak_working_set_bytes": 154931200,
+          "private_bytes": 114577408
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.224,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 21.667,
+          "median_ms": 71.769,
+          "p95_ms": 129.343,
+          "max_ms": 189.463,
+          "p99_ms": 147.343
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 22.279,
+          "median_ms": 77.682,
+          "p95_ms": 134.674,
+          "max_ms": 196.621,
+          "p99_ms": 151.533
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.029,
+          "median_ms": 0.084,
+          "p95_ms": 0.332,
+          "max_ms": 1.291,
+          "p99_ms": 0.591
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.191,
+          "median_ms": 8.486,
+          "p95_ms": 15.367,
+          "max_ms": 16.804,
+          "p99_ms": 16.378
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0576,
+          0.1056,
+          0.1746,
+          0.2212
+        ],
+        "python_cpu_seconds": 5.172,
+        "memory_before": {
+          "working_set_bytes": 138153984,
+          "peak_working_set_bytes": 154931200,
+          "private_bytes": 114577408
+        },
+        "memory_after": {
+          "working_set_bytes": 138407936,
+          "peak_working_set_bytes": 157818880,
+          "private_bytes": 115032064
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.081,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 30.081,
+          "median_ms": 36.105,
+          "p95_ms": 40.023,
+          "max_ms": 42.322,
+          "p99_ms": 41.418
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 30.378,
+          "median_ms": 36.894,
+          "p95_ms": 41.244,
+          "max_ms": 43.204,
+          "p99_ms": 42.348
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.143,
+          "median_ms": 0.252,
+          "p95_ms": 0.491,
+          "max_ms": 1.175,
+          "p99_ms": 0.95
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.152,
+          "median_ms": 7.935,
+          "p95_ms": 15.104,
+          "max_ms": 16.192,
+          "p99_ms": 15.44
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0789
+        ],
+        "python_cpu_seconds": 2.469,
+        "memory_before": {
+          "working_set_bytes": 140169216,
+          "peak_working_set_bytes": 157818880,
+          "private_bytes": 116748288
+        },
+        "memory_after": {
+          "working_set_bytes": 141012992,
+          "peak_working_set_bytes": 157818880,
+          "private_bytes": 116756480
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.153,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 29.034,
+          "median_ms": 67.594,
+          "p95_ms": 93.417,
+          "max_ms": 323.853,
+          "p99_ms": 132.237
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 29.558,
+          "median_ms": 77.033,
+          "p95_ms": 101.677,
+          "max_ms": 336.26,
+          "p99_ms": 222.189
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.046,
+          "median_ms": 0.162,
+          "p95_ms": 0.417,
+          "max_ms": 0.962,
+          "p99_ms": 0.708
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.083,
+          "median_ms": 7.963,
+          "p95_ms": 15.424,
+          "max_ms": 95.76,
+          "p99_ms": 15.868
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          2,
+          2
+        ],
+        "stop_to_saved_seconds": [
+          0.0825,
+          0.1443
+        ],
+        "python_cpu_seconds": 4.719,
+        "memory_before": {
+          "working_set_bytes": 141012992,
+          "peak_working_set_bytes": 157818880,
+          "private_bytes": 116756480
+        },
+        "memory_after": {
+          "working_set_bytes": 141402112,
+          "peak_working_set_bytes": 158187520,
+          "private_bytes": 117288960
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.297,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 31.352,
+          "median_ms": 104.401,
+          "p95_ms": 173.667,
+          "max_ms": 242.289,
+          "p99_ms": 204.379
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 32.077,
+          "median_ms": 108.247,
+          "p95_ms": 177.17,
+          "max_ms": 247.336,
+          "p99_ms": 207.302
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.026,
+          "median_ms": 0.052,
+          "p95_ms": 0.22,
+          "max_ms": 0.41,
+          "p99_ms": 0.298
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.121,
+          "median_ms": 7.576,
+          "p95_ms": 14.147,
+          "max_ms": 16.155,
+          "p99_ms": 15.507
+        },
+        "sql_per_frame_min": 21,
+        "sql_per_frame_max": 21,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          2,
+          2
+        ],
+        "stop_to_saved_seconds": [
+          0.0775,
+          0.1409,
+          0.2852,
+          0.2129
+        ],
+        "python_cpu_seconds": 8.969,
+        "memory_before": {
+          "working_set_bytes": 141402112,
+          "peak_working_set_bytes": 158187520,
+          "private_bytes": 117288960
+        },
+        "memory_after": {
+          "working_set_bytes": 140398592,
+          "peak_working_set_bytes": 159645696,
+          "private_bytes": 118104064
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      }
+    ],
+    "main_after": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "main_unchanged": true,
+    "canonical_doctor_ok": true,
+    "finished_at": "2026-10-14T20:04:53.565495+00:00",
+    "result": "PASS"
+  },
+  "after_optimization_before_queue_fix": {
+    "started_at": "2026-10-14T20:06:38.354242+00:00",
+    "label": "after",
+    "scope": "Real loopback mTLS WSS, owned PG, synthetic AI; no WireGuard/VPS",
+    "main_before": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "cases": [
+      {
+        "sessions": 10,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.077,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 22.338,
+          "median_ms": 27.249,
+          "p95_ms": 34.159,
+          "max_ms": 39.073,
+          "p99_ms": 35.309
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 22.646,
+          "median_ms": 28.078,
+          "p95_ms": 35.058,
+          "max_ms": 39.835,
+          "p99_ms": 36.33
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.144,
+          "median_ms": 0.284,
+          "p95_ms": 0.533,
+          "max_ms": 1.298,
+          "p99_ms": 0.667
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.526,
+          "median_ms": 8.285,
+          "p95_ms": 15.313,
+          "max_ms": 16.128,
+          "p99_ms": 16.093
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0641
+        ],
+        "python_cpu_seconds": 1.516,
+        "memory_before": {
+          "working_set_bytes": 134144000,
+          "peak_working_set_bytes": 150876160,
+          "private_bytes": 111104000
+        },
+        "memory_after": {
+          "working_set_bytes": 136912896,
+          "peak_working_set_bytes": 153628672,
+          "private_bytes": 113238016
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.121,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 22.216,
+          "median_ms": 38.983,
+          "p95_ms": 67.008,
+          "max_ms": 80.374,
+          "p99_ms": 69.551
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 22.93,
+          "median_ms": 42.051,
+          "p95_ms": 71.801,
+          "max_ms": 84.471,
+          "p99_ms": 75.088
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.043,
+          "median_ms": 0.157,
+          "p95_ms": 0.426,
+          "max_ms": 0.92,
+          "p99_ms": 0.844
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.351,
+          "median_ms": 8.237,
+          "p95_ms": 15.131,
+          "max_ms": 16.483,
+          "p99_ms": 15.838
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0556,
+          0.1113
+        ],
+        "python_cpu_seconds": 2.922,
+        "memory_before": {
+          "working_set_bytes": 136912896,
+          "peak_working_set_bytes": 153628672,
+          "private_bytes": 113238016
+        },
+        "memory_after": {
+          "working_set_bytes": 138100736,
+          "peak_working_set_bytes": 154882048,
+          "private_bytes": 114307072
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.23,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 21.336,
+          "median_ms": 74.014,
+          "p95_ms": 121.238,
+          "max_ms": 188.176,
+          "p99_ms": 128.775
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 21.98,
+          "median_ms": 80.166,
+          "p95_ms": 129.985,
+          "max_ms": 193.701,
+          "p99_ms": 134.947
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.027,
+          "median_ms": 0.08,
+          "p95_ms": 0.37,
+          "max_ms": 1.207,
+          "p99_ms": 0.735
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.179,
+          "median_ms": 9.016,
+          "p95_ms": 15.393,
+          "max_ms": 18.037,
+          "p99_ms": 16.346
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.2175,
+          0.1549,
+          0.0576,
+          0.1081
+        ],
+        "python_cpu_seconds": 4.266,
+        "memory_before": {
+          "working_set_bytes": 138100736,
+          "peak_working_set_bytes": 154882048,
+          "private_bytes": 114307072
+        },
+        "memory_after": {
+          "working_set_bytes": 138674176,
+          "peak_working_set_bytes": 157626368,
+          "private_bytes": 115101696
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.083,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 26.375,
+          "median_ms": 32.142,
+          "p95_ms": 37.089,
+          "max_ms": 41.384,
+          "p99_ms": 40.457
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 26.777,
+          "median_ms": 32.764,
+          "p95_ms": 37.91,
+          "max_ms": 43.292,
+          "p99_ms": 41.411
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.137,
+          "median_ms": 0.242,
+          "p95_ms": 0.537,
+          "max_ms": 0.762,
+          "p99_ms": 0.661
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.255,
+          "median_ms": 8.357,
+          "p95_ms": 14.746,
+          "max_ms": 15.751,
+          "p99_ms": 15.388
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0742
+        ],
+        "python_cpu_seconds": 2.234,
+        "memory_before": {
+          "working_set_bytes": 139894784,
+          "peak_working_set_bytes": 157626368,
+          "private_bytes": 116559872
+        },
+        "memory_after": {
+          "working_set_bytes": 140980224,
+          "peak_working_set_bytes": 157761536,
+          "private_bytes": 116920320
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.132,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 27.025,
+          "median_ms": 57.614,
+          "p95_ms": 73.335,
+          "max_ms": 89.616,
+          "p99_ms": 77.198
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 27.435,
+          "median_ms": 61.603,
+          "p95_ms": 77.893,
+          "max_ms": 94.69,
+          "p99_ms": 81.879
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.044,
+          "median_ms": 0.156,
+          "p95_ms": 0.367,
+          "max_ms": 1.221,
+          "p99_ms": 0.646
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.244,
+          "median_ms": 7.503,
+          "p95_ms": 15.28,
+          "max_ms": 16.15,
+          "p99_ms": 15.917
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0737,
+          0.1264
+        ],
+        "python_cpu_seconds": 3.625,
+        "memory_before": {
+          "working_set_bytes": 140980224,
+          "peak_working_set_bytes": 157761536,
+          "private_bytes": 116920320
+        },
+        "memory_after": {
+          "working_set_bytes": 141291520,
+          "peak_working_set_bytes": 158076928,
+          "private_bytes": 117440512
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.272,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 27.466,
+          "median_ms": 99.011,
+          "p95_ms": 165.061,
+          "max_ms": 222.086,
+          "p99_ms": 167.045
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 28.01,
+          "median_ms": 104.783,
+          "p95_ms": 170.343,
+          "max_ms": 227.903,
+          "p99_ms": 172.368
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.026,
+          "median_ms": 0.056,
+          "p95_ms": 0.225,
+          "max_ms": 1.248,
+          "p99_ms": 0.38
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.154,
+          "median_ms": 7.646,
+          "p95_ms": 14.68,
+          "max_ms": 15.897,
+          "p99_ms": 15.792
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0723,
+          0.2051,
+          0.261,
+          0.1247
+        ],
+        "python_cpu_seconds": 7.375,
+        "memory_before": {
+          "working_set_bytes": 141291520,
+          "peak_working_set_bytes": 158076928,
+          "private_bytes": 117440512
+        },
+        "memory_after": {
+          "working_set_bytes": 140517376,
+          "peak_working_set_bytes": 159862784,
+          "private_bytes": 118185984
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      }
+    ],
+    "main_after": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "main_unchanged": true,
+    "canonical_doctor_ok": true,
+    "finished_at": "2026-10-14T20:08:48.893648+00:00",
+    "result": "PASS"
+  },
+  "after_final_queue_fix": {
+    "started_at": "2026-10-14T20:17:31.333907+00:00",
+    "label": "after",
+    "scope": "Real loopback mTLS WSS, owned PG, synthetic AI; no WireGuard/VPS",
+    "main_before": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "cases": [
+      {
+        "sessions": 10,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.079,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 21.233,
+          "median_ms": 25.206,
+          "p95_ms": 39.058,
+          "max_ms": 192.218,
+          "p99_ms": 60.29
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 21.676,
+          "median_ms": 25.671,
+          "p95_ms": 41.439,
+          "max_ms": 193.704,
+          "p99_ms": 66.066
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.141,
+          "median_ms": 0.217,
+          "p95_ms": 0.625,
+          "max_ms": 0.975,
+          "p99_ms": 0.857
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.187,
+          "median_ms": 7.788,
+          "p95_ms": 14.064,
+          "max_ms": 26.103,
+          "p99_ms": 15.201
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          2
+        ],
+        "stop_to_saved_seconds": [
+          0.0654
+        ],
+        "python_cpu_seconds": 1.453,
+        "memory_before": {
+          "working_set_bytes": 134684672,
+          "peak_working_set_bytes": 151404544,
+          "private_bytes": 111841280
+        },
+        "memory_after": {
+          "working_set_bytes": 137269248,
+          "peak_working_set_bytes": 153985024,
+          "private_bytes": 113979392
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.113,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 20.714,
+          "median_ms": 39.744,
+          "p95_ms": 61.663,
+          "max_ms": 78.39,
+          "p99_ms": 66.176
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 21.094,
+          "median_ms": 43.625,
+          "p95_ms": 70.203,
+          "max_ms": 82.75,
+          "p99_ms": 72.313
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.042,
+          "median_ms": 0.165,
+          "p95_ms": 0.465,
+          "max_ms": 0.996,
+          "p99_ms": 0.965
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.307,
+          "median_ms": 8.657,
+          "p95_ms": 15.324,
+          "max_ms": 17.02,
+          "p99_ms": 16.404
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0473,
+          0.1073
+        ],
+        "python_cpu_seconds": 2.484,
+        "memory_before": {
+          "working_set_bytes": 137269248,
+          "peak_working_set_bytes": 153985024,
+          "private_bytes": 113979392
+        },
+        "memory_after": {
+          "working_set_bytes": 138518528,
+          "peak_working_set_bytes": 155299840,
+          "private_bytes": 115048448
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 10,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.215,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 20.8,
+          "median_ms": 69.932,
+          "p95_ms": 120.884,
+          "max_ms": 169.699,
+          "p99_ms": 131.359
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 21.345,
+          "median_ms": 76.402,
+          "p95_ms": 130.153,
+          "max_ms": 176.4,
+          "p99_ms": 145.316
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.028,
+          "median_ms": 0.109,
+          "p95_ms": 0.498,
+          "max_ms": 1.048,
+          "p99_ms": 0.904
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.82,
+          "median_ms": 9.13,
+          "p95_ms": 15.639,
+          "max_ms": 18.58,
+          "p99_ms": 17.092
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0576,
+          0.2007,
+          0.1002,
+          0.1546
+        ],
+        "python_cpu_seconds": 3.656,
+        "memory_before": {
+          "working_set_bytes": 138518528,
+          "peak_working_set_bytes": 155299840,
+          "private_bytes": 115048448
+        },
+        "memory_after": {
+          "working_set_bytes": 138801152,
+          "peak_working_set_bytes": 158052352,
+          "private_bytes": 116109312
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 1,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.084,
+        "saved_memories": 1,
+        "auth": {
+          "n": 100,
+          "min_ms": 27.97,
+          "median_ms": 32.444,
+          "p95_ms": 40.923,
+          "max_ms": 149.972,
+          "p99_ms": 91.625
+        },
+        "frame_send_to_auth_end": {
+          "n": 100,
+          "min_ms": 28.282,
+          "median_ms": 32.956,
+          "p95_ms": 41.707,
+          "max_ms": 150.587,
+          "p99_ms": 92.448
+        },
+        "client_send": {
+          "n": 100,
+          "min_ms": 0.135,
+          "median_ms": 0.206,
+          "p95_ms": 0.462,
+          "max_ms": 0.714,
+          "p99_ms": 0.695
+        },
+        "scheduling_lateness": {
+          "n": 100,
+          "min_ms": 0.415,
+          "median_ms": 8.444,
+          "p95_ms": 15.046,
+          "max_ms": 32.092,
+          "p99_ms": 17.169
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0689
+        ],
+        "python_cpu_seconds": 2.016,
+        "memory_before": {
+          "working_set_bytes": 140279808,
+          "peak_working_set_bytes": 158052352,
+          "private_bytes": 117710848
+        },
+        "memory_after": {
+          "working_set_bytes": 141090816,
+          "peak_working_set_bytes": 158052352,
+          "private_bytes": 117714944
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 2,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.149,
+        "saved_memories": 2,
+        "auth": {
+          "n": 200,
+          "min_ms": 27.28,
+          "median_ms": 51.287,
+          "p95_ms": 74.896,
+          "max_ms": 97.37,
+          "p99_ms": 91.258
+        },
+        "frame_send_to_auth_end": {
+          "n": 200,
+          "min_ms": 28.18,
+          "median_ms": 53.801,
+          "p95_ms": 79.339,
+          "max_ms": 106.644,
+          "p99_ms": 95.965
+        },
+        "client_send": {
+          "n": 200,
+          "min_ms": 0.044,
+          "median_ms": 0.151,
+          "p95_ms": 0.309,
+          "max_ms": 0.573,
+          "p99_ms": 0.42
+        },
+        "scheduling_lateness": {
+          "n": 200,
+          "min_ms": 0.46,
+          "median_ms": 9.198,
+          "p95_ms": 15.431,
+          "max_ms": 16.532,
+          "p99_ms": 16.263
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1
+        ],
+        "stop_to_saved_seconds": [
+          0.0762,
+          0.1415
+        ],
+        "python_cpu_seconds": 3.812,
+        "memory_before": {
+          "working_set_bytes": 141090816,
+          "peak_working_set_bytes": 158052352,
+          "private_bytes": 117714944
+        },
+        "memory_after": {
+          "working_set_bytes": 141635584,
+          "peak_working_set_bytes": 158416896,
+          "private_bytes": 118300672
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      },
+      {
+        "sessions": 100,
+        "clients": 4,
+        "pcm_seconds": 20,
+        "frames_per_client": 100,
+        "bytes_per_frame": 6400,
+        "interval_ms": 200,
+        "elapsed_seconds": 20.273,
+        "saved_memories": 4,
+        "auth": {
+          "n": 400,
+          "min_ms": 27.206,
+          "median_ms": 106.996,
+          "p95_ms": 166.609,
+          "max_ms": 218.952,
+          "p99_ms": 172.777
+        },
+        "frame_send_to_auth_end": {
+          "n": 400,
+          "min_ms": 27.811,
+          "median_ms": 109.765,
+          "p95_ms": 171.27,
+          "max_ms": 227.004,
+          "p99_ms": 177.669
+        },
+        "client_send": {
+          "n": 400,
+          "min_ms": 0.027,
+          "median_ms": 0.051,
+          "p95_ms": 0.225,
+          "max_ms": 0.306,
+          "p99_ms": 0.297
+        },
+        "scheduling_lateness": {
+          "n": 400,
+          "min_ms": 0.158,
+          "median_ms": 8.376,
+          "p95_ms": 15.375,
+          "max_ms": 16.15,
+          "p99_ms": 15.853
+        },
+        "sql_per_frame_min": 19,
+        "sql_per_frame_max": 19,
+        "peak_unfinished_frames_per_client": [
+          1,
+          1,
+          2,
+          2
+        ],
+        "stop_to_saved_seconds": [
+          0.0682,
+          0.123,
+          0.2023,
+          0.2572
+        ],
+        "python_cpu_seconds": 7.922,
+        "memory_before": {
+          "working_set_bytes": 141635584,
+          "peak_working_set_bytes": 158416896,
+          "private_bytes": 118300672
+        },
+        "memory_after": {
+          "working_set_bytes": 140558336,
+          "peak_working_set_bytes": 159784960,
+          "private_bytes": 117911552
+        },
+        "backpressure": "Real unchanged bounded transport; measured send await and unfinished frame queue",
+        "result": "PASS"
+      }
+    ],
+    "main_after": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "main_unchanged": true,
+    "canonical_doctor_ok": true,
+    "finished_at": "2026-10-14T20:19:41.507217+00:00",
+    "result": "PASS"
+  },
+  "journal_aging": {
+    "result": "PASS",
+    "full_chain_verified_every_read": true,
+    "cases": [
+      {
+        "records": 2,
+        "bytes": 670,
+        "limit": 16777216,
+        "reads": {
+          "n": 5,
+          "min_ms": 2.997,
+          "median_ms": 3.202,
+          "p95_ms": 7.698,
+          "max_ms": 7.698
+        },
+        "cpu_seconds": 0.0156,
+        "memory_before": {
+          "working_set_bytes": 122220544,
+          "peak_working_set_bytes": 122220544,
+          "private_bytes": 103079936
+        },
+        "memory_after": {
+          "working_set_bytes": 122220544,
+          "peak_working_set_bytes": 139001856,
+          "private_bytes": 103079936
+        }
+      },
+      {
+        "records": 1000,
+        "bytes": 336893,
+        "limit": 16777216,
+        "reads": {
+          "n": 5,
+          "min_ms": 8.761,
+          "median_ms": 10.243,
+          "p95_ms": 15.735,
+          "max_ms": 15.735
+        },
+        "cpu_seconds": 0.0469,
+        "memory_before": {
+          "working_set_bytes": 122241024,
+          "peak_working_set_bytes": 139001856,
+          "private_bytes": 103215104
+        },
+        "memory_after": {
+          "working_set_bytes": 122638336,
+          "peak_working_set_bytes": 139419648,
+          "private_bytes": 104271872
+        }
+      },
+      {
+        "records": 49523,
+        "bytes": 16777191,
+        "limit": 16777216,
+        "reads": {
+          "n": 5,
+          "min_ms": 357.121,
+          "median_ms": 360.069,
+          "p95_ms": 360.618,
+          "max_ms": 360.618
+        },
+        "cpu_seconds": 1.7344,
+        "memory_before": {
+          "working_set_bytes": 122753024,
+          "peak_working_set_bytes": 139419648,
+          "private_bytes": 104407040
+        },
+        "memory_after": {
+          "working_set_bytes": 123449344,
+          "peak_working_set_bytes": 159105024,
+          "private_bytes": 104878080
+        },
+        "refused_append_without_modification": true
+      }
+    ],
+    "scope": "Synthetic isolated files, production 16 MiB limit, no compaction"
+  },
+  "postgres_readonly": {
+    "scope": "local read-only observation; no configuration changes",
+    "listen_addresses": "*",
+    "port": "5432",
+    "server_version": "18.6",
+    "connections": [
+      {
+        "address": "127.0.0.1/32",
+        "connections": 2,
+        "unnamed": 2,
+        "scope": "other"
+      },
+      {
+        "address": "::1/128",
+        "connections": 2,
+        "unnamed": 1,
+        "scope": "configured"
+      },
+      {
+        "address": "::1/128",
+        "connections": 4,
+        "unnamed": 0,
+        "scope": "other"
+      },
+      {
+        "address": "::1/128",
+        "connections": 3,
+        "unnamed": 3,
+        "scope": "owned_test"
+      }
+    ],
+    "nonloopback_connections": 0,
+    "hba_redacted": [
+      {
+        "type": "local",
+        "address": null,
+        "netmask": null,
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      },
+      {
+        "type": "host",
+        "address": "127.0.0.1",
+        "netmask": "255.255.255.255",
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      },
+      {
+        "type": "host",
+        "address": "::1",
+        "netmask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      },
+      {
+        "type": "local",
+        "address": null,
+        "netmask": null,
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      },
+      {
+        "type": "host",
+        "address": "127.0.0.1",
+        "netmask": "255.255.255.255",
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      },
+      {
+        "type": "host",
+        "address": "::1",
+        "netmask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "auth_method": "scram-sha-256",
+        "invalid": false
+      }
+    ],
+    "doctor_ok": true,
+    "main_snapshot": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    }
+  },
+  "final_main_readonly": {
+    "observed_at": "2026-10-14T20:28:23.748990+00:00",
+    "main_before": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "main_after": {
+      "revision": [
+        "kulai_memory_0004"
+      ],
+      "memories": {
+        "count": 9,
+        "sha256": "c7f8c9c96e8f71e6195819201e1dff973e43c75e928e17f8d37a4f0a26173926"
+      },
+      "vectors": {
+        "count": 9,
+        "sha256": "75462539f2966f1ee5ac4e9fcd5249d7fa5b00396302cb91a1842fe5ca0bc45f"
+      },
+      "tombstones": {
+        "count": 1,
+        "sha256": "33870fb88d899ed763aab78bb0762d54360f7fcc046a9b5e811defac8bba0147"
+      },
+      "security": null
+    },
+    "unchanged": true,
+    "doctor_ok": true,
+    "security_required_doctor_ok": false,
+    "configured_security_mode": "SECURE"
+  }
+}

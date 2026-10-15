@@ -113,12 +113,17 @@ def private_directory(path):
 
 async def checkpoint(connection):
     """Same transaction/snapshot as the security operation; no credential output."""
-    heads = tuple((await connection.execute(text('SELECT version_num FROM public.alembic_version ORDER BY version_num'))).scalars())
+    # Same repeatable-read transaction, same metadata as the former three
+    # SELECTs, one round trip. This is never retained between operations/frames.
+    metadata = (await connection.execute(text('''
+        SELECT datname, oid::text,
+            ARRAY(SELECT version_num FROM public.alembic_version ORDER BY version_num)
+        FROM pg_database WHERE datname=current_database()
+    '''))).one()
+    name, identity, heads = metadata[0], metadata[1], tuple(metadata[2])
     security = await security_snapshot(connection)
     if heads != ('kulai_memory_0004',) or security is None or security.revision != ('kulai_security_0003',):
         raise SecurityError()
-    identity = await connection.scalar(text('SELECT oid::text FROM pg_database WHERE datname=current_database()'))
-    name = await connection.scalar(text('SELECT current_database()'))
     return {'database': name, 'oid': identity}, hashlib.sha256(canonical(asdict(security))).hexdigest()
 
 

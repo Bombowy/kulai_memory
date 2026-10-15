@@ -16,6 +16,7 @@ import subprocess
 from urllib.parse import urlsplit
 
 from ops.remote_access.package import Deployment
+from ops.remote_access.journal_status import within_budget
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def validate(config, inventory, *, existing_nginx=None, candidates=None, certifi
     try: fresh=timedelta(0)<=datetime.now(timezone.utc)-datetime.fromisoformat(observed)<=timedelta(hours=24)
     except Exception: fresh=None
     check('fresh_inventory',fresh)
+    check('journal_capacity_and_latency_budget',within_budget(inventory.get('journal')))
     checks_needed={
         'nginx_combined_syntax':'combined_nginx_t_ok',
         'ubuntu_firewall_peer_only':'ubuntu_firewall_peer_only',
