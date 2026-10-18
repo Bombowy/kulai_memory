@@ -720,6 +720,122 @@ to marker-owned databases, with unchanged full snapshots during preview.
 Task reports overwrite `wynik.txt`. Run `scripts/export_repo.py` yourself when a
 fresh `kod_repo_do_analizy.txt` is needed; preview never runs the exporter.
 
+## Persistent facts in owned test storage (TASK 5A.2)
+
+`application.fact_memory` separates staging, human review and approved retrieval
+from the existing read-only intelligence preview. There are no new public routes,
+NOTE hooks or startup migrations. The normal application does not import the new
+PostgreSQL adapter. Main fact persistence is deliberately unavailable.
+
+The third Alembic graph is `backend/facts_alembic.ini`, with head
+`kulai_facts_0001` and version table `kulai_facts_version`. Canonical remains
+`kulai_memory_0004`; security remains `kulai_security_0003`. Fact migrations require
+an explicitly supplied connection and matching `OwnedTemporaryDatabase` capability.
+The migration environment verifies the actual database name and marker before DDL.
+Plain Alembic invocation, offline SQL and main installation are rejected. The
+explicit `upgrade_owned_facts(owned, config=...)` never runs during startup.
+
+Seven fact tables store logical sources, source/analysis versions, independent
+fact identities, candidate versions, immutable approval versions, relation
+suggestions and append-only decisions. Source metadata includes revision/hash,
+observed row token and a static pipeline/prompt fingerprint. Memory source rows
+store no extra full-text snapshot; evidence and claims remain private derived data.
+Local text sources require explicit registration with a UUID in the test adapter.
+
+Each source version accepts one complete analysis. Reprocessing unchanged input
+returns its original candidates, including their current decisions; changed Qwen
+wording/order cannot reset or overwrite an approved/rejected/revoked candidate.
+New relations only attach to matching original claims and subject scopes. Recovery
+of missed facts through forced reanalysis is future work, not an implicit override.
+After a source change, a new analysis creates new PENDING versions. An explicit
+`RevisionBinding` can attach a new candidate to a prior fact identity from that
+same source. No identity or content merge is inferred by Qwen/BGE.
+
+The neutral `FactMemoryService` provides `list_pending`, `get_candidate`, `approve`,
+`reject`, `revoke_approval`, `list_approved`, relation review and bounded decision
+history. Decisions require an opaque principal minted by the trusted local adapter,
+a UUID request key and an expected lock version. A JSON `reviewer=admin`, a string
+or a principal from another scope is rejected. The local reviewer identity derives
+from the trusted process login, not from a request. This is a test trust boundary;
+it is not Android authentication or a production authorization system.
+
+Transitions are PENDING -> APPROVED/REJECTED and APPROVED -> REVOKED. There is no
+automatic reopening or AI approval. SQL constraints/triggers protect immutable
+candidate/source/approval content and decision history. Human approval rechecks
+evidence and semantic support through the existing intelligence verifier, without
+holding a database checkout. The committing transaction locks the current source,
+rechecks revision/hash/evidence/source token and stored candidate, then atomically
+writes status, approval and audit. Decision request keys serialize retries;
+optimistic versions and row locks protect competing decisions. Failed COMMIT
+invalidates the connection, and retry/readback uses the same durable request key.
+A replayed receipt is historical operation evidence, never restoration of a fact.
+
+`list_approved` only returns approved versions with currently valid sources.
+EDIT or ARCHIVE hides old versions immediately. The owned prototype also binds
+Memory versions to PostgreSQL `xmin`, so ARCHIVE followed by RESTORE cannot silently
+restore a previous approval even if revision/content match. This is conservative:
+unrelated row updates can invalidate proposals, and transaction wrap/freeze/restore
+semantics require a durable mutation epoch or transactional lifecycle integration
+before main deployment. `reconcile_memory` records observed invalidation/revocation;
+read filters remain fail-closed before reconciliation, but do not constitute a
+complete immediate audit of every canonical mutation.
+
+Sources reference Memory with ON DELETE CASCADE. Existing canonical DELETE removes
+all fact source versions, candidates, approvals and related suggestions touching
+that source, including rationales that could quote its content. Triggers on the
+new fact tables retain only opaque target/request IDs, action, reviewer identity,
+time and counters. They retain no quote, source text, source hash or free-text
+decision note. Local sources have an explicit `forget_local` operation; a technical
+retirement prevents the same UUID from silently recreating deleted data. This is
+logical database erasure; WAL, backups and physical storage retention still need
+a separately reviewed privacy policy before production. No fact vector index is
+created here. No canonical/security columns or migration heads are changed.
+
+Approving a fact never approves a relation. Relation approval requires both endpoint
+versions to be approved and valid, and still does not revoke/delete an older fact.
+Revoked/invalid/deleted endpoints are excluded from approved relation retrieval.
+
+Use `open_owned_fact_memory(owned, config=..., intelligence=...)` only inside a
+trusted local test process. It yields `.service`, an opaque `.principal` and
+owned-only `.storage` helpers. `.analyze_and_stage(runtime, memory_ids)` borrows the
+existing `MemoryIntelligenceRuntime`; it releases source reads before extraction
+and only stages after successful preview. Failed/cancelled inference stages nothing.
+The caller owns the borrowed intelligence provider lifecycle. While a runtime is
+open, `runtime.intelligence` exposes its existing service for revalidation without
+creating extra providers. These helpers are not intended to accept arbitrary
+untrusted client calls or database URLs.
+
+After explicit owned schema installation and creating synthetic source Memories,
+the trusted local host can stage and separately execute a user's decision:
+
+```python
+async with MemoryIntelligenceRuntime(settings=settings) as runtime:
+    async with open_owned_fact_memory(
+        owned, config=config, intelligence=runtime.intelligence,
+    ) as facts:
+        preview, staged = await facts.analyze_and_stage(runtime, (memory_id,))
+        # Present candidates and evidence; obtain the user's choice separately.
+        # chosen_id and displayed_lock_version come from that review interaction.
+        receipt = await facts.service.approve(
+            chosen_id, principal=facts.principal, request_id=request_uuid,
+            expected_version=displayed_lock_version,
+        )
+```
+
+Real PostgreSQL tests (synthetic Memories and marker-owned DBs only):
+
+```powershell
+$env:KULAI_RUN_POSTGRES_INTEGRATION = "1"
+backend\.venv\Scripts\python.exe -m pytest -q backend\tests\integration\test_fact_memory.py
+```
+
+The tests use controlled Qwen/BGE providers for persistence paths; no expensive real
+AI or WSS benchmark is needed. They cover lifecycle, idempotency, concurrent review,
+source edits/deletion, privacy cascades, transaction failures, cancellation, stale
+source checks, separate relation decisions, independent heads and owned DB cleanup.
+Main activation requires a separate migration/review and complete lifecycle,
+authorization, retention, backup/fingerprint and retrieval integration.
+
 ## Memory vector indexing
 
 `MemoryIndexingService` accepts a detached canonical `Memory` and a neutral

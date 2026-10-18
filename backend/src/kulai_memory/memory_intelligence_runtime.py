@@ -57,6 +57,13 @@ class MemoryIntelligenceRuntime:
         if stack is not None:
             await stack.aclose()
 
+    @property
+    def intelligence(self) -> MemoryIntelligenceService:
+        """Borrow the existing verifier while this runtime owns its providers."""
+        if self._stack is None:
+            raise IntelligenceError("invalid_configuration")
+        return self._service
+
     async def preview(
         self, source: SourceDocument, references: tuple[SourceDocument, ...] = (), *,
         compare_main: bool = False, top_k: int = 5,

@@ -165,14 +165,7 @@ class MemoryIntelligenceService:
             ))
         if not grounded:
             return ExtractionResult(source_id=source.source_id, candidates=(), rejections=tuple(rejections))
-        checked = await self._structured(VERIFY_PROMPT, {
-            "source": source.model_dump(mode="json"),
-            "candidates": [candidate.model_dump(mode="json") for candidate in grounded],
-        }, VerificationBatch)
-        expected = {candidate.candidate_id for candidate in grounded}
-        actual = [verdict.candidate_id for verdict in checked.verdicts]
-        if len(actual) != len(expected) or set(actual) != expected:
-            raise IntelligenceError("invalid_verification")
+        checked = await self.verify_candidates(source, tuple(grounded))
         supported: set[str] = set()
         for verdict in checked.verdicts:
             if (verdict.verdict == "supported") != (verdict.reason == "supported"):
@@ -186,6 +179,36 @@ class MemoryIntelligenceService:
             candidates=tuple(candidate for candidate in grounded if candidate.candidate_id in supported),
             rejections=tuple(rejections),
         )
+
+    async def verify_candidates(
+        self, source: SourceDocument, candidates: tuple[FactCandidate, ...],
+    ) -> VerificationBatch:
+        """Reusable source/semantic check; this never authorizes human approval."""
+        expected = {candidate.candidate_id for candidate in candidates}
+        if len(expected) != len(candidates) or not 1 <= len(candidates) <= 20:
+            raise IntelligenceError("invalid_verification")
+        try:
+            for candidate in candidates:
+                origin = candidate.provenance
+                if (origin.source_id != source.source_id or origin.source_sha256 != source.content_sha256
+                    or origin.memory_id != source.memory_id or origin.revision != source.revision
+                    or origin.recorded_at != source.created_at
+                    or origin.evidence != _evidence(source, candidate.fact)
+                    or candidate.subject_scope != _scope(source, candidate.fact)):
+                    raise ValueError
+        except Exception:
+            raise IntelligenceError("invalid_verification") from None
+        checked = await self._structured(VERIFY_PROMPT, {
+            "source": source.model_dump(mode="json"),
+            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+        }, VerificationBatch)
+        actual = [verdict.candidate_id for verdict in checked.verdicts]
+        if len(actual) != len(expected) or set(actual) != expected or any(
+            (verdict.verdict == "supported") != (verdict.reason == "supported")
+            for verdict in checked.verdicts
+        ):
+            raise IntelligenceError("invalid_verification")
+        return checked
 
     async def preview(
         self, source: SourceDocument, references: Sequence[SourceDocument] = (), *, top_k: int = 5,
