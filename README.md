@@ -636,6 +636,90 @@ citations, complete snapshot equality, client reuse/closure, and zero DB
 checkout during Qwen. Synthetic PostgreSQL tests additionally check latest
 edits, archive exclusion, and stale-vector rejection before generation.
 
+## Memory intelligence preview (TASK 5A.1)
+
+The opt-in local CLI extracts atomic proposals from UTF-8 files, checks exact
+source evidence (native JSON Schema restricts quote choices to actual source
+sentences or the whole source), independently verifies proposals with Qwen3.5:9b,
+and suggests duplicates, related information, possible conflicts and replacements.
+It always runs in dry-run mode. It creates no Memories, vectors or fact records,
+and is not invoked by NOTE, ASK, voice, TTS or server startup.
+
+```powershell
+.venv\Scripts\python.exe scripts\memory_intelligence_preview.py `
+    --input C:\private\new-note.txt --compare-file C:\private\previous-note.txt --dry-run
+```
+
+Normal output contains counts, candidate IDs, information types, relation labels,
+similarity hints and review status. Add `--show-candidates` to explicitly display
+private text, exact quotes, Unicode character offsets (end exclusive), source
+hashes, Memory ID/revision when applicable, temporal context and relation rationale.
+Keep private input files outside the repository. The CLI does not save outputs.
+Input is limited to 12,000 characters per source and 20 proposals per extraction;
+oversized sources fail explicitly instead of being truncated.
+
+`--compare-file` can be repeated. Without `--compare-main`, there is no database
+configuration, doctor, engine or session. `--compare-main` explicitly enables local
+administrative read-only BGE lookup against already indexed active canonical
+Memories; it requires strict canonical doctor PASS at `kulai_memory_0004` and
+compatible 1024-dimensional vectors. Missing/stale vectors are never repaired.
+An absent security schema is reported as `ABSENT_SECURE_DOCTOR_FAIL`; this local
+administrator tool does not change the server's SECURE startup requirements.
+No schema migration is added by this feature.
+
+First-person authors are scoped to each source by default. `--speaker-id local-user`
+explicitly shares the narrator's identity across all supplied/read sources, while
+named and quoted people keep their own attribution. Different project names and
+person identities conservatively block equivalence/conflict suggestions. Entity
+aliases are not resolved automatically.
+Possible replacements additionally require an explicit PL/EN replacement phrase
+in the proposed replacement's evidence (for example `zamiast` / `instead of`).
+Different dates alone are downgraded to related information, with
+`validation_notes=["replacement_not_explicit"]`. This lexical guard is conservative
+and can miss other ways of expressing a change; it is not a semantic proof.
+
+Plans, preferences and hypotheses remain distinct from facts. Negation and explicit
+time phrases are retained; source timestamps are not inferred event times. All
+returned candidates and relations have `review_status=requires_review`. Exact
+quotes prove source location; the second Qwen check is a fallible semantic review,
+not a formal entailment proof. A failure or invalid response is not reported as a
+successful extraction of zero facts. Rejected proposals have safe reason codes.
+
+BGE-M3 ranks possible pairs in RAM using cosine similarity, without a merge
+threshold. `--top-k` defaults to 5 and accepts 1..20. Exact matches within the
+local candidate pool bypass ranking; remaining pairs require contextual review.
+`compared_pairs`, `available_pairs` and `exhaustive` describe candidate-pool coverage.
+Main lookup is always non-exhaustive: unindexed/unretrieved Memories are not covered.
+All providers are loopback-only, reused and closed on success, failure or cancellation.
+No DB transaction remains open during Qwen or embedding generation.
+
+The neutral `application.intelligence` package exposes `SourceDocument`,
+`MemoryIntelligenceService.extract/preview`, `ExtractionResult`, `FactCandidate`,
+`RelationSuggestion` and `PreviewResult`. It accepts provider ports, with no SQL,
+filesystem, web-framework or persistence dependencies. A host runtime owns provider
+lifecycle and optional canonical reads. This boundary can support future clients;
+MCP, synchronization, recursive RAG and persistence are outside this preview.
+
+The durable synthetic fixture contains 30 texts (15 PL/15 EN) and 24 labeled pairs.
+Protocol/validation tests use controlled providers and do not measure Qwen accuracy.
+Run the real model quality measurement separately (synthetic sources only):
+
+```powershell
+$env:KULAI_RUN_OLLAMA_INTEGRATION = "1"
+$env:KULAI_RUN_LLM_INTEGRATION = "1"
+.venv\Scripts\python.exe -m pytest -q -s backend\tests\integration\test_memory_intelligence_models.py
+```
+
+Missing models/service are explicitly NOT RUN; no downloads are attempted. Annotation
+matches are limited type/technology checks, not full semantic accuracy. Inspect
+reported misses and model outputs. An optional `KULAI_INTELLIGENCE_EVALUATION_OUTPUT`
+path outside the repo saves synthetic evaluation details. Owned PostgreSQL tests
+require `KULAI_RUN_POSTGRES_INTEGRATION=1`; all fixture writes/migrations are confined
+to marker-owned databases, with unchanged full snapshots during preview.
+
+Task reports overwrite `wynik.txt`. Run `scripts/export_repo.py` yourself when a
+fresh `kod_repo_do_analizy.txt` is needed; preview never runs the exporter.
+
 ## Memory vector indexing
 
 `MemoryIndexingService` accepts a detached canonical `Memory` and a neutral
