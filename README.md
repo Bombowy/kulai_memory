@@ -836,6 +836,52 @@ source checks, separate relation decisions, independent heads and owned DB clean
 Main activation requires a separate migration/review and complete lifecycle,
 authorization, retention, backup/fingerprint and retrieval integration.
 
+## Isolated Desktop Fact Review demo (TASK 5A.3)
+
+Run in a separate PowerShell process from the repository root:
+
+```powershell
+.\backend\.venv\Scripts\python.exe .\scripts\fact_review_demo.py
+```
+
+The window is labelled **TEST DATA**. It creates a new randomly named,
+marker-owned loopback PostgreSQL database, installs the existing canonical and
+fact graphs there, then stages four synthetic sources: Flask, the October switch
+to FastAPI, a future MCP plan, and a Python preference. Existing database
+configuration supplies connection credentials; main is never the target.
+No ports, Ollama calls, downloads or normal Desktop hooks are started.
+The demo uses explicitly controlled corpus providers through the existing
+intelligence service. Its buttons call the real `FactMemoryService` and commit
+real decisions to PostgreSQL; the corpus provider cannot authorize a decision.
+
+Choose a status/type and select a row. Read the exact highlighted source, then
+use APPROVE, REJECT or REVOKE. Plans remain labelled plans after approval.
+The relations view shows both sources; approve both facts first, then make a
+separate relation decision. Supersession does not delete/archive either Memory.
+Pending counts, keyset pagination and REFRESH use bounded owned-only reads.
+Unknown commit outcomes expose receipt lookup and explicit retry with the same
+request ID. No new approval UUID is generated automatically.
+
+The open panel polls each second. Refresh/action/read failure clears source,
+quotes, row data and history; a two-second display lease also expires them.
+Invalidated/deleted source content is not restored by filters or request retry.
+There can be a polling interval between an external mutation and its observation;
+this demo does not provide instantaneous remote invalidation or secure RAM erasure.
+
+Close the window to cancel work, close pools/providers and drop exactly the
+generated database after ownership verification. Closing during provisioning
+waits for provisioning to finish so its capability can be cleaned up. The Qt
+window stays in its closing state until cleanup finishes. Never kill the process
+as a normal exit. A forced process kill may leave an owned test DB requiring
+separately verified cleanup. An ownership/cleanup failure stops safely and is
+shown without private error text; no search-and-delete by prefix occurs.
+Each demo launch starts fresh. Automated tests reopen windows against the same
+retained owned DB to verify that decisions themselves are durable.
+
+The normal Desktop and preview CLI remain unchanged. The future Android scope,
+device binding and reviewer contract is documented in
+[`docs/fact_review_android_contract.md`](docs/fact_review_android_contract.md).
+
 ## Memory vector indexing
 
 `MemoryIndexingService` accepts a detached canonical `Memory` and a neutral
