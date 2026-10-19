@@ -9,6 +9,7 @@ from .models import safe_message
 
 
 class FactReviewThread(QThread):
+    operations = frozenset({"read", "decide", "resolve"})
     ready = Signal(str)
     completed = Signal(int, str, object)
     failed = Signal(int, str, str)
@@ -32,7 +33,7 @@ class FactReviewThread(QThread):
             loop.run_until_complete(self._serve())
             self.clean_shutdown = True
         except Exception as error:
-            self.failed.emit(-1, "startup_or_cleanup", safe_message(error))
+            self.failed.emit(-1, "startup_or_cleanup", self.error_message(error))
         finally:
             self._ready = False
             pending = asyncio.all_tasks(loop)
@@ -61,12 +62,12 @@ class FactReviewThread(QThread):
                 token, operation, value = command
                 result = error_message = None
                 try:
-                    self._active = asyncio.create_task(getattr(backend, operation)(value))
+                    self._active = asyncio.create_task(self._call(backend, operation, value, token), name=f"{token}:{operation}")
                     result = await self._active
                 except asyncio.CancelledError:
                     error_message = "Operacja anulowana. Odśwież widok."
                 except Exception as error:
-                    error_message = safe_message(error)
+                    error_message = self.error_message(error)
                 finally:
                     self._active = None
                     with self._mutex:
@@ -79,7 +80,7 @@ class FactReviewThread(QThread):
                 result = error_message = value = command = None
 
     def submit(self, token, operation, value):
-        if operation not in {"read", "decide", "resolve"}:
+        if operation not in self.operations:
             return False
         with self._mutex:
             if self._closing.is_set() or not self._ready or self._busy:
@@ -87,6 +88,13 @@ class FactReviewThread(QThread):
             self._busy = True
         self._loop.call_soon_threadsafe(self._queue.put_nowait, (token, operation, value))
         return True
+
+    @staticmethod
+    def error_message(error):
+        return safe_message(error)
+
+    async def _call(self, backend, operation, value, token):
+        return await getattr(backend, operation)(value)
 
     def request_shutdown(self):
         self._closing.set()

@@ -1,0 +1,17 @@
+{
+  "version": "local-v1-12q-frozen-before-real-evaluation",
+  "questions": [
+    {"id":"pl_current","query":"Jakiej technologii używa backend projektu X?","rubric":"current","min_citations":2},
+    {"id":"en_current","query":"Which technology does project X's backend use?","rubric":"current","min_citations":2},
+    {"id":"pl_previous","query":"Czego wcześniej używał backend projektu X?","rubric":"previous","min_citations":2},
+    {"id":"en_previous","query":"What did project X's backend use before FastAPI?","rubric":"previous","min_citations":2},
+    {"id":"pl_month","query":"Kiedy nastąpiła zmiana technologii backendu projektu X?","rubric":"month","min_citations":2},
+    {"id":"en_year","query":"In which year did project X switch from Flask to FastAPI?","rubric":"year_unknown","min_citations":2},
+    {"id":"pl_removal","query":"Czy Flask został całkowicie usunięty z projektu X?","rubric":"removal_unknown","min_citations":2},
+    {"id":"en_removal","query":"Was Flask entirely removed from project X?","rubric":"removal_unknown","min_citations":2},
+    {"id":"pl_mcp","query":"Czy MCP jest już zaimplementowane?","rubric":"plan","min_citations":1},
+    {"id":"en_mcp","query":"Has MCP already been implemented, or is it only planned?","rubric":"plan","min_citations":1},
+    {"id":"pl_preference","query":"Z jakim językiem autor preferuje pracować?","rubric":"preference","min_citations":1},
+    {"id":"en_unknown_project","query":"Which backend technology is used by project Y?","rubric":"insufficient","min_citations":0}
+  ]
+}

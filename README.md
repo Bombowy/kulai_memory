@@ -1008,6 +1008,70 @@ Tests: `backend/tests/test_approved_facts.py` and
 `KULAI_RUN_OLLAMA_INTEGRATION=1` and `KULAI_RUN_LLM_INTEGRATION=1`; missing existing
 models are NOT RUN, never downloaded. Main remains read-only without facts.
 
+## One local TEST DATA workspace (TASK 5A.6)
+
+Run the combined PySide6 demo from the repository in PowerShell:
+
+```powershell
+.\backend\.venv\Scripts\python.exe .\scripts\fact_memory_workspace_demo.py
+# Existing local models for ASK/grounding; no downloads:
+.\backend\.venv\Scripts\python.exe .\scripts\fact_memory_workspace_demo.py --real-models
+```
+
+One `synthetic_session` provisions one fresh marker-owned PostgreSQL database
+with the existing canonical/facts graphs and four PENDING sources A–D. The
+`Fact Review` and `Ask Approved Facts` tabs borrow the same local session,
+`FactMemoryService` and approval history. The existing review window and worker
+are extended; the original `ApprovedFactsService` performs ASK. Normal Desktop,
+API and main are not connected. There are no default approvals or new services.
+
+Approve plan C in Review, switch to ASK and ask about MCP. Approve A/B to ask
+about Flask/FastAPI. Click a citation to read the actual Memory with exact Unicode
+evidence, identity/version, subject/project/time and generation. `Pokaż wybrany
+fakt w Review` navigates to that candidate without copying a UUID. Relations have
+their own review/filter, approval and history; fact approval does not approve a
+relation. Bounded coverage is always explained; partial coverage is explicit.
+
+CONTROLLED is the default and requires no Ollama. It uses fixed synthetic
+annotations, constant embeddings and a controlled answer/verification oracle;
+it tests integration, not model quality. REAL AI uses existing BGE/Qwen for
+ranking, generation and grounding. Candidate extraction/approval verification
+remain controlled synthetic annotations in both modes, explicitly labelled.
+Qwen can refuse or fail validation; no draft is shown and no citation is repaired
+or fabricated. Ask again explicitly as a new operation, or use `Zatwierdzone
+źródła` for a fresh model-free read and verified source view.
+
+One QThread/asyncio queue admits one operation. Progress messages contain only
+constant stages. Cancel applies to reads/ASK, not review decisions. Uncertain
+review results retain the existing request UUID/reconciliation rules. All DB
+transactions close before BGE/Qwen. X cancels current work, closes providers and
+connections, then drops exactly this session's verified DB. Never force-stop
+as the normal exit path; an OS kill cannot guarantee cleanup.
+
+The TEST-only source selector exposes EDIT/ARCHIVE/RESTORE/DELETE with an explicit
+confirmation defaulting to No. Targets are restricted to the four generated
+source IDs and their displayed revision/epoch. EDIT appends a fixed TEST DATA
+line. Existing canonical lifecycle/deletion services run on the verified owned
+connection. RESTORE never revives an old approval; no automatic re-extraction or
+approval follows a mutation. Restart the disposable demo for fresh A–D data.
+
+ASK results and sources have a two-second display lease, renewed by bounded
+read-only validation each second while that tab is visible. Valid unchanged
+views retain scroll/selection. Switching to Review, mutation, cancellation,
+expiry, failed validation and X clear answer/citation/source widgets. Late replies
+cannot repopulate expired state. The backend keeps only technical display stamps,
+never a cached answer or source quotes. This is bounded staleness and logical Qt
+clearing, not instant push invalidation or secure RAM erasure. Final ASK validity
+still has the snapshot boundary documented for 5A.5.
+
+Tests: `test_fact_workspace_ui.py`, `integration/test_fact_workspace_postgres.py`,
+and the opt-in real Desktop evaluation `integration/test_fact_workspace_models.py`.
+The latter uses the frozen 12-question PL/EN fixture
+`backend/tests/fixtures/fact_workspace_eval_v1.json`, actual QThread/model providers,
+and no retries. Its semantic rubric is deliberately small; review the full
+answers for language and nuance. A test execution PASS does not mean 12 correct
+model answers or a user's manual GUI acceptance. Results are in local `wynik.txt`.
+
 ## Memory vector indexing
 
 `MemoryIndexingService` accepts a detached canonical `Memory` and a neutral
