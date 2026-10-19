@@ -2,6 +2,10 @@
 
 KulAI Studio project `kulai_memory`.
 
+Current priority: the [simple voice RAG MVP](docs/MVP_SCOPE.md), with durable
+Memories, NOTE / ASK / MEMORY and optional TTS. Fact Intelligence (5A.1–5A.6)
+development is paused; its demos remain separate from the normal runtime.
+
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
 The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader
 only after strict schema verification. TASK 4D.2A adds an independent security
