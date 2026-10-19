@@ -12,7 +12,8 @@ MEMORY_SOURCE_NAMESPACE = UUID("93044fea-8abc-485b-a371-0f25241dbb89")
 
 VALID_SOURCE = """v.invalidated_at IS NULL AND (
  (s.memory_id IS NOT NULL AND m.id IS NOT NULL AND m.archived_at IS NULL
-  AND m.revision=v.revision AND m.xmin::text=v.source_token
+  AND m.revision=v.revision AND e.deleted_at IS NULL
+  AND v.source_token='epoch:'||e.incarnation::text||':'||e.generation::text
   AND encode(sha256(convert_to(m.content,'UTF8')),'hex')=v.sha256
   AND NOT EXISTS(SELECT 1 FROM public.memory_ingestion_tombstones t WHERE t.memory_id=m.id))
  OR (s.memory_id IS NULL AND s.local_revision=v.revision AND s.local_token::text=v.source_token
@@ -20,11 +21,17 @@ VALID_SOURCE = """v.invalidated_at IS NULL AND (
 CANDIDATE_FROM = """FROM public.kulai_fact_candidates c
  JOIN public.kulai_fact_source_versions v ON v.id=c.source_version_id
  JOIN public.kulai_fact_sources s ON s.id=v.source_id
- LEFT JOIN public.memories m ON m.id=s.memory_id"""
+ LEFT JOIN public.memories m ON m.id=s.memory_id
+ LEFT JOIN public.kulai_fact_memory_epochs e ON e.memory_id=m.id"""
 
 
 def memory_source_id(memory_id):
     return uuid5(MEMORY_SOURCE_NAMESPACE, str(memory_id))
+
+
+def memory_document_id(memory_id, revision, token):
+    """Bind a detached extraction document to the generation read before AI."""
+    return f"memory-{memory_id}-r{revision}-{token}"
 
 
 def private_json(model):
@@ -49,8 +56,14 @@ class PostgresFactRepository:
             WHERE target_id=:id AND target_kind='source' AND action='source_deleted')"""), {"id": source_id}))
 
     async def memory(self, memory_id, *, lock=False):
-        return await self.one("""SELECT id,content,revision,archived_at,created_at,xmin::text AS token
-            FROM public.memories WHERE id=:id""" + (" FOR UPDATE" if lock else ""), {"id": memory_id})
+        if lock:
+            # Re-read the epoch AFTER obtaining the canonical lock. A joined
+            # FOR UPDATE alone can retain a pre-wait epoch under READ COMMITTED.
+            await self.one("SELECT id FROM public.memories WHERE id=:id FOR UPDATE", {"id": memory_id})
+        return await self.one("""SELECT m.id,m.content,m.revision,m.archived_at,m.created_at,
+            'epoch:'||e.incarnation::text||':'||e.generation::text AS token
+            FROM public.memories m JOIN public.kulai_fact_memory_epochs e ON e.memory_id=m.id
+            WHERE m.id=:id AND e.deleted_at IS NULL""", {"id": memory_id})
 
     async def source(self, source_id, *, lock=False):
         return await self.one("SELECT * FROM public.kulai_fact_sources WHERE id=:id" + (" FOR UPDATE" if lock else ""), {"id": source_id})
@@ -60,7 +73,8 @@ class PostgresFactRepository:
             current = await self.memory(document.memory_id, lock=lock)
             if (current is None or current["archived_at"] is not None
                 or current["revision"] != document.revision or current["content"] != document.text
-                or document.created_at != current["created_at"]):
+                or document.created_at != current["created_at"]
+                or document.source_id != memory_document_id(document.memory_id, current["revision"], current["token"])):
                 raise FactMemoryError("source_invalid")
             retired = await self.db.scalar(text("SELECT EXISTS(SELECT 1 FROM public.memory_ingestion_tombstones WHERE memory_id=:id)"), {"id": document.memory_id})
             if retired:

@@ -18,7 +18,7 @@ from kulai_memory.deletion_persistence import delete_memory
 from kulai_memory.fact_persistence.migration import fact_migration_heads, upgrade_owned_facts
 from kulai_memory.fact_persistence.owned import open_owned_fact_memory
 from kulai_memory.fact_persistence.repository import memory_source_id
-from kulai_memory.fact_persistence.schema_v1 import TABLES
+from kulai_memory.fact_persistence.schema_v2 import TABLES
 from kulai_memory.persistence import PostgresMemoryRepository
 
 
@@ -46,7 +46,7 @@ async def mutate_memory(state, memory_id, action, content=None):
 def test_independent_schema_and_pending_approved_with_unchanged_canonical():
     async def scenario():
         async with fact_store(security=True) as state:
-            assert fact_migration_heads() == ("kulai_facts_0001",)
+            assert fact_migration_heads() == ("kulai_facts_0002",)
             memory = await create_memory(state, CASES["pl_flask"]["text"])
             before = await database_snapshot_url(state.target.async_url)
             item = await analyze_memory(state, memory.id)

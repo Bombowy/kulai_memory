@@ -22,7 +22,7 @@ def test_all_three_graphs_are_separate_and_keep_existing_heads():
     root = Path(__file__).resolve().parents[2]
     assert ScriptDirectory.from_config(Config(str(root / "backend/alembic.ini"))).get_heads() == ["kulai_memory_0004"]
     assert security_migration_heads() == ("kulai_security_0003",)
-    assert fact_migration_heads() == ("kulai_facts_0001",)
+    assert fact_migration_heads() == ("kulai_facts_0002",)
 
 
 def test_unscoped_alembic_invocation_fails_before_any_connection():

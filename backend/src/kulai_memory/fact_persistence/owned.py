@@ -22,8 +22,8 @@ from ..database_safety import (
     validate_owned_database_name,
 )
 from ..settings import get_settings
-from .repository import CANDIDATE_FROM, VALID_SOURCE, PostgresFactRepository, memory_source_id
-from .schema_v1 import FACT_HEAD
+from .repository import CANDIDATE_FROM, VALID_SOURCE, PostgresFactRepository, memory_source_id, memory_document_id
+from .schema_v2 import FACT_HEAD
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ class OwnedFactStorage:
             row = await repo.memory(memory_id)
             if row is None or row["archived_at"] is not None:
                 raise FactMemoryError("source_invalid")
-            return SourceDocument(source_id=f"memory-{memory_id}-r{row['revision']}", text=row["content"],
+            return SourceDocument(source_id=memory_document_id(memory_id, row["revision"], row["token"]), text=row["content"],
                                   memory_id=memory_id, revision=row["revision"], created_at=row["created_at"], speaker_id=speaker_id)
 
     async def register_local(self, key, content, *, speaker_id=None):

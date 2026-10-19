@@ -372,6 +372,7 @@ def test_actual_launcher_event_loop_window_and_cleanup(monkeypatch, tmp_path):
         def __init__(self):
             super().__init__()
             windows.append(self)
+            self.worker.finished.connect(app.quit)
         def _display(self, view):
             assert QThread.currentThread() == app.thread()
             super()._display(view)

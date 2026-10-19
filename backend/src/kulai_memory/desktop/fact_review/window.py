@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 from pathlib import Path
+from time import monotonic
 
 from PySide6.QtCore import QTimer, Qt, Slot, QStandardPaths
 from PySide6.QtGui import QFont, QFontDatabase
@@ -69,12 +70,15 @@ class EvidencePanel(QGroupBox):
         self.source.setExtraSelections([])
         self.source.clear()
 
-    def display(self, snapshot):
-        self.clear()
+    def display(self, snapshot, *, preserve=False):
+        if not preserve:
+            self.clear()
         candidate, source = snapshot.record.candidate, snapshot.source
-        set_evidence(self.source, source.text, candidate.provenance.evidence)
+        if not preserve:
+            set_evidence(self.source, source.text, candidate.provenance.evidence)
         fact = candidate.fact
-        self.claim.setPlainText(fact.text)
+        if not preserve:
+            self.claim.setPlainText(fact.text)
         self.meta.setText(f"{TYPE_LABELS[fact.information_type]} · {snapshot.record.status} · wersja {snapshot.record.version}\n"
             f"Podmiot: {fact.subject} · projekt: {fact.project_context or '—'} · czas: {fact.temporal_context or '—'}\n"
             f"Memory: {source.memory_id} · revision {source.revision} · źródło aktualne\n"
@@ -95,6 +99,8 @@ class FactReviewWindow(QMainWindow):
         self.setWindowTitle("KulAI Memory · Fact Review · TEST DATA")
         self.resize(1250, 900)
         self._ready = self._busy = self._closing = self._finished = False
+        self._background_read = False
+        self._read_started = 0.0
         self._token = 0
         self._selected = None
         self._detail = self._view = None
@@ -194,10 +200,11 @@ class FactReviewWindow(QMainWindow):
 
     def _enable(self):
         usable = self._ready and not self._busy and not self._closing
+        readable = self._ready and (not self._busy or self._background_read) and not self._closing
         for widget in (self.mode, self.status_filter, self.refresh, self.table):
-            widget.setEnabled(usable)
-        self.type_filter.setEnabled(usable and self.mode.currentData() == "facts")
-        self.relation_filter.setEnabled(usable and self.mode.currentData() == "relations")
+            widget.setEnabled(readable)
+        self.type_filter.setEnabled(readable and self.mode.currentData() == "facts")
+        self.relation_filter.setEnabled(readable and self.mode.currentData() == "relations")
         self.previous.setEnabled(usable and bool(self._pages))
         self.next.setEnabled(usable and self._next_after is not None)
         can_decide = usable and self._detail is not None and self._pending_intent is None
@@ -225,6 +232,8 @@ class FactReviewWindow(QMainWindow):
         self._enable()
 
     def _expire(self):
+        self._token += 1  # A late read must not renew an already expired display.
+        self._selected = None
         self._clear_private()
         if not self._busy:
             self._refresh()
@@ -243,23 +252,33 @@ class FactReviewWindow(QMainWindow):
             information_type=self.type_filter.currentData(), relation=self.relation_filter.currentData(),
             after=self._after, limit=self._page_size, selected=self._selected)
 
-    def _send(self, operation, value):
+    def _send(self, operation, value, *, background=False):
         if self._busy or not self._ready or self._closing or value is None:
             return
         self._busy = True
-        self._clear_private()
+        self._background_read = background and operation == "read"
+        if operation == "read":
+            self._read_started = monotonic()
+        if not self._background_read:
+            self._clear_private()
         self._token += 1
         if not self.worker.submit(self._token, operation, value):
             self._busy = False
+            self._background_read = False
             self.message.setText("Worker nie przyjął operacji. Odśwież widok.")
         self._enable()
 
     def _refresh(self):
+        if self._busy and self._background_read:
+            self._token += 1
+            self._clear_private()
+            return  # Current response is discarded, then a fresh read is queued.
         if self._ready and not self._busy and not self._closing:
             self._send("read", self._query())
 
     def _poll_refresh(self):
-        self._refresh()
+        if self._ready and not self._busy and not self._closing:
+            self._send("read", self._query(), background=True)
 
     def _filter_changed(self):
         self._token += 1  # Discard any result queued for a previous filter.
@@ -280,9 +299,12 @@ class FactReviewWindow(QMainWindow):
             self._refresh()
 
     def _selection_changed(self):
-        if self._busy or self._view is None:
+        if (self._busy and not self._background_read) or self._view is None:
             return
-        row = self.table.currentRow()
+        indexes = self.table.selectionModel().selectedRows()
+        if not indexes:
+            return
+        row = indexes[0].row()
         if 0 <= row < len(self._view.rows):
             self._selected = self._view.rows[row].id
             self._refresh()
@@ -302,18 +324,26 @@ class FactReviewWindow(QMainWindow):
             return
         if token != self._token:
             self._busy = False
+            self._background_read = False
             self._clear_private()
             QTimer.singleShot(0, self._refresh)
             return
         self._busy = False
-        self._clear_private()
+        self._background_read = False
         if operation == "read":
+            if (monotonic() - self._read_started) * 1000 >= self._lease_ms:
+                self._expire()
+                return
             try:
-                self._display(result)
+                if result != self._view:
+                    self._display(result)
+                else:
+                    self._lease.start(self._lease_ms)
             except Exception:
                 self._clear_private()
                 self.message.setText("Niezgodne evidence. Treść usunięto z panelu; wymagana nowa analiza.")
         else:
+            self._clear_private()
             self._selected = None  # Receipts/retries must never repopulate an old source panel.
             if result.state == "recorded":
                 self._pending_intent = None
@@ -330,6 +360,18 @@ class FactReviewWindow(QMainWindow):
         self._enable()
 
     def _display(self, view):
+        old = self._view
+        same_sources = bool(old and old.detail and view.detail and
+            len(old.detail.snapshots) == len(view.detail.snapshots) and all(
+                a.source == b.source and a.source_token == b.source_token and
+                a.record.candidate == b.record.candidate
+                for a, b in zip(old.detail.snapshots, view.detail.snapshots)))
+        scrolls = [(w, w.verticalScrollBar().value(), w.horizontalScrollBar().value())
+                   for w in (self.table, self.history)]
+        if not same_sources:
+            self.left.clear()
+            self.right.clear()
+            self.history.clear()
         self._view, self._detail, self._next_after = view, view.detail, view.next_after
         self.counts.setText(f"Oczekujące fakty: {view.pending_count} · wyników filtra: {view.total_count}")
         self.page_label.setText(f"Strona {len(self._pages) + 1} · limit {self._page_size}")
@@ -338,6 +380,7 @@ class FactReviewWindow(QMainWindow):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(view.rows))
+        self.table.clearSelection()
         for index, row in enumerate(view.rows):
             for column, value in enumerate(row.cells):
                 if self.mode.currentData() == "facts" and column == 1:
@@ -355,9 +398,9 @@ class FactReviewWindow(QMainWindow):
         self.right.setVisible(view.detail is not None and len(view.detail.snapshots) == 2)
         if view.detail:
             detail = view.detail
-            self.left.display(detail.snapshots[0])
+            self.left.display(detail.snapshots[0], preserve=same_sources)
             if len(detail.snapshots) == 2:
-                self.right.display(detail.snapshots[1])
+                self.right.display(detail.snapshots[1], preserve=same_sources)
             lines = [f"Historia decyzji (maks. 100): {len(detail.decisions)}"]
             lines.extend(f"{d.decided_at.isoformat()} · {d.reviewer_id} · {d.action} · {d.request_id}" for d in detail.decisions)
             lines.append("Wersje (maks. 100): " + ", ".join(f"v{v}={s}" for v, s in detail.versions))
@@ -366,11 +409,17 @@ class FactReviewWindow(QMainWindow):
                 lines.insert(0, f"{detail.suggestion.relation} · {detail.suggestion.status} · lock_version: {detail.lock_version}")
                 lines.append(detail.suggestion.suggestion.rationale)
                 lines.append("Zgoda na relację wymaga obu zatwierdzonych faktów. Nie usuwa starszej Memory.")
-            self.history.setPlainText("\n".join(lines))
+            history_text = "\n".join(lines)
+            if self.history.toPlainText() != history_text:
+                self.history.setPlainText(history_text)
         if view.stale_selection:
             self._selected = None
             self.message.setText("Źródło zmieniło się lub zostało usunięte. Panel wyczyszczono; wymagana nowa analiza.")
         self._lease.start(self._lease_ms)
+        if old:
+            for widget, vertical, horizontal in scrolls:
+                widget.verticalScrollBar().setValue(vertical)
+                widget.horizontalScrollBar().setValue(horizontal)
 
     @Slot(int, str, str)
     def _on_failed(self, token, operation, message):
@@ -378,10 +427,12 @@ class FactReviewWindow(QMainWindow):
             return
         if token != -1 and token != self._token:
             self._busy = False
+            self._background_read = False
             self._clear_private()
             QTimer.singleShot(0, self._refresh)
             return
         self._busy = False
+        self._background_read = False
         self._selected = None
         self._clear_private()
         self.message.setText(message)
@@ -409,4 +460,9 @@ class FactReviewWindow(QMainWindow):
         self._clear_private()
         self.message.setText("Zamykanie operacji, połączeń i własnej bazy demo…")
         self.worker.request_shutdown()
-        event.ignore()
+        # A test/local adapter can finish synchronously. Do not undo the
+        # finished handler's close with an outer ignored close event.
+        if self._finished:
+            event.accept()
+        else:
+            event.ignore()

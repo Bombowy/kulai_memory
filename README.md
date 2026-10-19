@@ -727,15 +727,15 @@ from the existing read-only intelligence preview. There are no new public routes
 NOTE hooks or startup migrations. The normal application does not import the new
 PostgreSQL adapter. Main fact persistence is deliberately unavailable.
 
-The third Alembic graph is `backend/facts_alembic.ini`, with head
-`kulai_facts_0001` and version table `kulai_facts_version`. Canonical remains
+The third Alembic graph is `backend/facts_alembic.ini`, with current head
+`kulai_facts_0002` (v1 was `kulai_facts_0001`) and version table `kulai_facts_version`. Canonical remains
 `kulai_memory_0004`; security remains `kulai_security_0003`. Fact migrations require
 an explicitly supplied connection and matching `OwnedTemporaryDatabase` capability.
 The migration environment verifies the actual database name and marker before DDL.
 Plain Alembic invocation, offline SQL and main installation are rejected. The
 explicit `upgrade_owned_facts(owned, config=...)` never runs during startup.
 
-Seven fact tables store logical sources, source/analysis versions, independent
+Seven v1 fact tables store logical sources, source/analysis versions, independent
 fact identities, candidate versions, immutable approval versions, relation
 suggestions and append-only decisions. Source metadata includes revision/hash,
 observed row token and a static pipeline/prompt fingerprint. Memory source rows
@@ -772,13 +772,13 @@ A replayed receipt is historical operation evidence, never restoration of a fact
 
 `list_approved` only returns approved versions with currently valid sources.
 EDIT or ARCHIVE hides old versions immediately. The owned prototype also binds
-Memory versions to PostgreSQL `xmin`, so ARCHIVE followed by RESTORE cannot silently
-restore a previous approval even if revision/content match. This is conservative:
-unrelated row updates can invalidate proposals, and transaction wrap/freeze/restore
-semantics require a durable mutation epoch or transactional lifecycle integration
-before main deployment. `reconcile_memory` records observed invalidation/revocation;
-read filters remain fail-closed before reconciliation, but do not constitute a
-complete immediate audit of every canonical mutation.
+Memory versions to a durable generation since TASK 5A.4: ARCHIVE followed by
+RESTORE cannot silently restore a previous approval even if revision/content
+match. PostgreSQL row triggers atomically invalidate versions, revoke approved
+facts and approved touching relations, and append technical audit during the
+canonical mutation. `reconcile_memory` remains an idempotent compatibility helper;
+correctness no longer depends on calling it. The former `xmin` implementation
+is retained only in the v1-to-v2 migration's one-time legacy validation.
 
 Sources reference Memory with ON DELETE CASCADE. Existing canonical DELETE removes
 all fact source versions, candidates, approvals and related suggestions touching
@@ -862,8 +862,11 @@ Pending counts, keyset pagination and REFRESH use bounded owned-only reads.
 Unknown commit outcomes expose receipt lookup and explicit retry with the same
 request ID. No new approval UUID is generated automatically.
 
-The open panel polls each second. Refresh/action/read failure clears source,
-quotes, row data and history; a two-second display lease also expires them.
+The open panel polls each second. Since TASK 5A.4, background checks retain the
+leased display: identical snapshots do not rebuild the table/source, and source
+scroll/cursor/selection survive unrelated status/history changes. Manual refresh,
+actions, read failure or invalidation clear private data. The two-second lease
+still expires the display; late pre-expiry snapshots cannot repopulate it.
 Invalidated/deleted source content is not restored by filters or request retry.
 There can be a polling interval between an external mutation and its observation;
 this demo does not provide instantaneous remote invalidation or secure RAM erasure.
@@ -881,6 +884,50 @@ retained owned DB to verify that decisions themselves are durable.
 The normal Desktop and preview CLI remain unchanged. The future Android scope,
 device binding and reviewer contract is documented in
 [`docs/fact_review_android_contract.md`](docs/fact_review_android_contract.md).
+
+## Durable source lifecycle in owned storage (TASK 5A.4)
+
+Facts v2 adds `kulai_fact_memory_epochs`: immutable Memory UUID/incarnation,
+monotonically increasing bigint generation, and optional deletion time. It stores
+no Memory text, evidence or hashes. A generation row survives DELETE as a minimal
+retirement; reinserting the same Memory UUID is rejected. Runtime validity uses
+`epoch:<incarnation>:<generation>`, canonical revision/hash, active-source state
+and evidence. It never reads transaction IDs.
+Owned Memory document labels also include the captured generation. Stage rejects
+an extraction made before an intervening ARCHIVE/RESTORE or content ABA even when
+the current revision/hash are unchanged. This adds no field to the public API.
+
+The explicit owned-only migration backfills existing source generations and
+installs INSERT/UPDATE/DELETE/TRUNCATE guards on `memories`. Any actual row change
+increments the generation; a no-op rewrite leaves it unchanged. Canonical
+`revision` remains content versioning under its existing application semantics.
+Triggers execute inside the caller's transaction, including direct SQL: rollback
+undoes the canonical change, generation increment, revocation and audit together.
+TRUNCATE is rejected; DELETE uses the existing privacy CASCADE. Normal Desktop
+and API persistence functions do not need Python hooks.
+
+Migration v1 -> v2 locks the owned canonical table for exclusive maintenance. It
+converts still-verifiable legacy tokens once, preserving candidate/decision IDs
+and valid approvals. Unverifiable legacy versions are invalidated with technical
+audit, without dropping prior decisions. Runtime requires exact fact head v2;
+opening a v1 adapter does not automatically migrate it. Canonical/security heads
+remain 0004/0003 and main is never a migration target here.
+
+Locks follow canonical Memory -> source/version/candidate -> approval/relation.
+The adapter re-reads the epoch after acquiring the canonical row lock to avoid a
+pre-wait joined snapshot. Multi-Memory commands lock canonical IDs in sorted order.
+Arbitrary opposing SQL batches can still deadlock: PostgreSQL aborts a whole
+victim transaction (including its fact effects). There is no automatic retry
+with a fresh approval UUID. Bulk writers must use a consistent row-lock order
+and explicitly handle transaction aborts.
+
+Tests cover both approve/mutation lock orders, rollback, cancellation after
+writes, actual deadlock rollback, unchanged-content revision ABA, adapter restart,
+v1 migration, physical row rewrite and owned `VACUUM (FREEZE, ANALYZE)`.
+Epochs solve normal lifecycle validity, not restoration of an older whole-DB
+snapshot. The separate quarantine/retirement-ledger/reapproval plan is
+[`docs/fact_restore_privacy_plan.md`](docs/fact_restore_privacy_plan.md).
+No production recovery is enabled.
 
 ## Memory vector indexing
 

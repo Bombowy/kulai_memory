@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from ..database_safety import database_config_for_database, postgres_connection, require_owned_database, run_database_doctor
 from ..application.fact_memory import FactMemoryError
-from .schema_v1 import FACT_HEAD
+from .schema_v2 import FACT_HEAD
 
 INI = Path(__file__).resolve().parents[3] / "facts_alembic.ini"
 
@@ -19,8 +19,10 @@ def fact_migration_heads():
     return tuple(ScriptDirectory.from_config(Config(str(INI))).get_heads())
 
 
-async def upgrade_owned_facts(owned, *, config):
+async def upgrade_owned_facts(owned, *, config, revision=FACT_HEAD):
     try:
+        if revision not in {"kulai_facts_0001", FACT_HEAD}:
+            raise FactMemoryError("invalid_input")
         await require_owned_database(owned, config=config)
         target = database_config_for_database(owned.name, config=config)
         doctor = await run_database_doctor(async_url=target.async_url)
@@ -34,7 +36,7 @@ async def upgrade_owned_facts(owned, *, config):
                 def upgrade(sync_connection):
                     active = Config(str(INI))
                     active.attributes.update(connection=sync_connection, owned=owned, source_database=postgres_connection(config).database)
-                    command.upgrade(active, FACT_HEAD)
+                    command.upgrade(active, revision)
                 await connection.run_sync(upgrade)
         finally:
             await engine.dispose()
