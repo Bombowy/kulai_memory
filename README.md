@@ -929,6 +929,85 @@ snapshot. The separate quarantine/retirement-ledger/reapproval plan is
 [`docs/fact_restore_privacy_plan.md`](docs/fact_restore_privacy_plan.md).
 No production recovery is enabled.
 
+## Approved Fact-RAG in owned storage (TASK 5A.5)
+
+`application.approved_facts.ApprovedFactsService` borrows the neutral
+`ApprovedFactsReader` read/revalidate port. `OwnedApprovedFactsReader` only wraps
+the existing marker-guarded storage with exact facts head `kulai_facts_0002`.
+It joins active approvals, canonical Memory and durable epochs, and validates
+revision, hash, source metadata, information type, subject scope and exact Unicode
+evidence. PENDING/REJECTED/REVOKED, archived/deleted or invalidated versions cannot
+enter retrieval. Local file-only sources without a canonical Memory are excluded.
+ASK executes read-only, repeatable-read transactions followed by rollback.
+
+The bounded collection defaults to 50 candidates (maximum 100), ordered by
+candidate UUID; optional exact project/subject-scope filters apply before the
+limit. Existing BGE-M3 ranks candidates in RAM using cosine similarity, in batches
+of eight. There is no persistent fact vector index, cache, migration or score
+threshold. Similarity only ranks relevance. `top_k` is 1–20; query length is at
+most 4,000 characters. Candidate embedding JSON is capped at 120,000 characters
+(configurable 2,000–200,000), context JSON at 16,000 (512–48,000). Only complete
+fact/evidence blocks are included. Limits are characters, not token counts.
+`partial_coverage`/`partial_reasons` report candidate, ranking, relation and context
+limits; a small collection is not a complete knowledge base.
+
+The pipeline embeds the question, reads one consistent collection, embeds/ranks
+outside any transaction, then revalidates selected facts and relation snapshots.
+It constructs the prompt synchronously after that read returns. Every context
+block contains the full fact identity/version, candidate and Memory IDs,
+revision, source SHA-256, incarnation and generation, plus a local `F1`–`F20`
+citation token. Qwen selects tokens in strict JSON; the application resolves the
+full immutable references from the supplied context, never from model-supplied
+identity metadata. Unknown tokens, forged reference objects, duplicate/missing
+citations and incomplete conflict/supersession
+endpoint citations fail closed. A second structured Qwen call checks semantic
+grounding, types, scopes, negation and time. Plans never establish completion;
+October without a year stays October without a year. Suggested relations retain
+their separate review status and never delete canonical Memory.
+
+After generation/verification, a fresh bounded read revalidates **all** context
+facts and supplied relations. Any invalidation yields a safe error with no draft
+answer. This final consistent snapshot is the validity boundary: a mutation
+committed after its snapshot was established can occur before transport or after
+delivery. Returned objects are detached; answers already delivered cannot be
+retracted. No PostgreSQL lock or transaction spans BGE/Qwen. No automatic provider
+or decision retries occur. Structured validation proves identity/provenance, not
+semantic truth; the verifier remains probabilistic, especially for correlated
+errors and adversarial evidence. Errors and repr omit private text.
+
+Run from the repository in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\ask_approved_facts_demo.py
+# Existing installed local models, no downloads:
+.\.venv\Scripts\python.exe .\scripts\ask_approved_facts_demo.py --real-models
+```
+
+Each launch provisions a fresh owned synthetic DB, installs the existing graphs
+there, stages four known synthetic annotations, and starts with **zero approvals**.
+The default providers are explicitly CONTROLLED fixtures, including a fixed
+grounding oracle; they measure contracts, not model quality. `--real-models` uses
+real BGE/Qwen for ranking, answering and grounding. Extraction and approval
+verification still use the labelled synthetic annotation provider.
+
+Use `list`, copy a candidate UUID, then `approve UUID`, `reject UUID` or
+`revoke UUID`. These invoke real `FactMemoryService` methods with the local opaque
+principal, displayed lock version and fresh request UUID. Reviewer identity
+cannot be entered as text. Use `relations` and `approve-relation UUID` for separate
+relation review; both endpoints must already be APPROVED. `ask QUESTION` displays
+the answer, coverage and full source/type/evidence citations. ASK never stages or
+approves. `quit`/EOF closes providers/connections and drops only this session's
+verified DB. An uncertain decision stops the demo without automatically retrying
+with a new request ID. There is no resume mode for somebody else's database.
+
+This mode is opt-in and disconnected from normal ASK, NOTE, Desktop and HTTP.
+Tests: `backend/tests/test_approved_facts.py` and
+`backend/tests/integration/test_approved_facts_postgres.py`; enable
+`KULAI_RUN_POSTGRES_INTEGRATION=1` for the latter. The short real-model test in
+`test_approved_facts_models.py` additionally requires
+`KULAI_RUN_OLLAMA_INTEGRATION=1` and `KULAI_RUN_LLM_INTEGRATION=1`; missing existing
+models are NOT RUN, never downloaded. Main remains read-only without facts.
+
 ## Memory vector indexing
 
 `MemoryIndexingService` accepts a detached canonical `Memory` and a neutral
