@@ -1,56 +1,63 @@
-TASK V2.4/8 — API ROZMÓW TEKSTOWYCH I GŁOSOWYCH
+TASK V2.5/8 — ANDROID CHAT
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-WYNIK: ZREALIZOWANE I PRZETESTOWANE; bez wdrożenia do działającej V1.
+WYNIK: ZAIMPLEMENTOWANE, ZBUDOWANE I PRZETESTOWANE; bez instalacji i przełączenia produkcji.
 
-WYKONANE
-- HTTP: utworzenie rozmowy, lista z kursorem, wiadomości z kursorem, kolejne pytanie.
-  conversation_id oraz request_id; trwałe wspólne historie tekstu i głosu w PostgreSQL.
-- /ws/assistant: opcjonalne oba UUID w question.start; conversation.completed
-  zawiera ten sam TurnWrite co HTTP. Bez UUID stary protokół V1 pozostaje bez zmian.
-- Ponowienie HTTP/WS zwraca zapisaną parę bez Qwena. Głosowy replay również bez
-  ponownej transkrypcji; nowy zapis audio wymaga nowego request_id. Konflikty: odmowa.
-- Istniejące SECURE, pairing i refresh; memory.read dla listy/historii,
-  assistant.ask dla tworzenia/pytania/WS. Odwołanie uprawnień działa także podczas WS.
-- Błędy i disconnect podczas generowania nie zapisują niepełnej tury. Audio usuwane.
-  Bez zmian logiki Qwena, RAG, canonical Memories, NOTE/MEMORY/ASK i TTS.
+CO DZIAŁA
+- Czwarta zakładka CHAT obok zachowanych NOTE / ASK / MEMORY. Lista rozmów,
+  NOWA ROZMOWA, wybór i kontynuacja, paginacja listy i starszych wiadomości,
+  przewijane wypowiedzi, WYŚLIJ, MIKROFON/STOP i czytelne stany/błędy.
+- API V2.4 przez dotychczasowy MemoryHttpClient i OkHttpVoiceSocketFactory;
+  tekst/głos w tej samej rozmowie. Nowe pytanie ma nowy UUID; PONÓW zachowuje UUID.
+  Po transkrypcji ponowienie głosu używa HTTP z input_kind=voice, bez audio.
+  Gdy transkrypcja nie dotarła, WS start/stop sprawdza już zapisany wynik.
+- Historia po nowym uruchomieniu kontrolera pochodzi z PostgreSQL przez API.
+  Bez lokalnej bazy i cache audio CHAT. Oczekujące UUID/transkrypcje żyją w RAM;
+  po restarcie brak automatycznego ponawiania — aplikacja pobiera historię serwera.
+- Zmiana rozmowy anuluje HTTP/WS/nagrywanie, spóźnione wyniki są ignorowane.
+  Wspólna blokada mikrofonu zwalnia zasób dopiero po zakończeniu AudioRecord.
+- Jeden istniejący silnik lokalnego TTS PL/EN: SPEAK, STOP AUDIO i wspólne auto-read.
+  Odczyt treści odpowiedzi bez metadanych UUID/Memory. Dawna historia nie uruchamia TTS.
+- Zachowane pairing, refresh, SECURE i prefiks /memory/. Minimalna poprawka klienta:
+  biznesowy błąd rozmowy WS 1008 nie jest mylony z utratą autoryzacji/parowania.
 
 TESTY
-- 7 nowych rzeczywistych testów TCP HTTP/WS, także HTTPS/WSS z testowym mTLS: PASS.
-  Historia tekst+głos, reconnect DB, paginacja, 8 równoległych ponowień = 1 generacja,
-  pairing/refresh/uprawnienia/revoke, błędne UUID, konflikty, brak audio, błędy i cancel.
-- Łączna regresja integracyjna: 94 PASS, 5 SKIP opcjonalnych testów rzeczywistych
-  Qwen/BGE/Whisper. Nowe API testowane z kontrolowaną inferencją i prawdziwym PostgreSQL.
-- Jednostkowe backend/tests + tests: 1487 PASS, 1 SKIP, 1 znany wcześniej FAIL:
-  tests/test_security_schema.py::test_historical_rate_fingerprint_encoding_stays_compatible
-  (mock Connection.stream nie przyjmuje execution_options). Nie zmieniano tego mechanizmu.
-- Wszystkie zapisy/migracje testowe wyłącznie w marker-owned tymczasowych bazach 0005;
-  po testach pozostało 0 marker-owned baz. git diff --check i skan sekretów: PASS.
-- JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.4-20261021\
-  postgres-regression.xml oraz unit.xml.
+- testDebugUnitTest: 225 PASS, 0 FAIL, 0 SKIP, w tym 15 nowych testów CHAT.
+  Regresje NOTE/ASK/MEMORY/TTS/pairing i ochrony prefiksu przeszły.
+- assembleDebug: BUILD SUCCESSFUL. Pełen końcowy build/test wykonany z --rerun-tasks.
+- Rzeczywisty klient Android OkHttp -> TCP HTTP/WS -> FastAPI SECURE -> marker-owned
+  PostgreSQL 0005: PASS. Tekst/głos/tekst, odtworzenie historii w nowym kontrolerze
+  i po zamknięciu połączeń HTTP, ponowienie UUID bez duplikatu, druga niezależna rozmowa.
+  Sprawdzone w DB: 2 rozmowy, 3 tury, 6 wiadomości, 0 Memories i 0 wektorów;
+  3 kontrolowane generacje i 1 transkrypcja, bez dodatkowej generacji przy retry.
+- 7 istniejących testów API V2.4 oraz nowy przekrojowy test Android/PostgreSQL: 8 PASS.
+  Końcowy przekrojowy test powtórzony po kontroli anulowania: PASS.
+- Kontrolowana inferencja/STT i syntetyczne dane; bez prywatnych Memories i nowych modeli.
+- git diff --check i skan sekretów: PASS. Po testach 0 marker-owned baz.
+- Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.5-20261021\
+  android-junit\, android-gradle.log, android-postgres.xml, android-postgres-final.xml.
 
-V1 I GRANICE
-Końcowy READ ONLY: kulai_memory_mvp i kulai_memory nadal 0004, bez tabel rozmów;
-MVP security nadal 0003. Bez migracji/zapisów produkcyjnych, zmian Androida, VPS,
-Nginx, mostu, WireGuard, certyfikatów i innych projektów. Fact Intelligence wyłączony.
-Most V1: PID 35288, start 2026-10-20T20:15:55.7286080Z, oba listenery 8443 bez zmian.
-Publiczne /memory/api/memories bez credentials: 401. Bez restartu usług.
+APK / BRAKUJĄCY TEST
+C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+SHA-256: FC5670FD31FB30D8872896F4B7A1E4509D48DFB6C13C1776C58946E5E2415BD6
+ADB: brak podłączonego telefonu. APK NIE instalowano. Fizyczny test Galaxy S25 Ultra,
+mikrofonu, układu ekranu, głosów offline i LTE pozostaje do osobnej weryfikacji.
+CHAT nie został udostępniony w produkcji; wymaga późniejszego kontrolowanego V2 cutover
+oraz ścieżek Nginx opisanych w docs/CONVERSATION_API.md. Konfiguracji nie zmieniano.
 
-NGINX — WYMAGANE DOPIERO PRZY PÓŹNIEJSZYM WDROŻENIU
-GET i POST /memory/api/conversations
-GET /memory/api/conversations/{canonical-UUID}/messages
-POST /memory/api/conversations/{canonical-UUID}/ask
-GET Upgrade /memory/ws/assistant już istnieje. Prefiks usuwany tak jak w V1.
-Dokładny kontrakt/metody/UUID: docs/CONVERSATION_API.md. Konfiguracji Nginx nie zmieniono.
+V1
+Bez restartu backendu/mostu, migracji/zapisów produkcyjnych, zmian VPS/Nginx/WireGuard,
+certyfikatów, telefonu, Qwena ani API V2.4. Fact Intelligence pozostaje wyłączony.
+READ ONLY: kulai_memory_mvp i kulai_memory nadal 0004, bez tabel rozmów; MVP Security 0003.
+Most: PID 35288, start 2026-10-20T20:15:55.7286080Z, listenery 127.0.0.1/10.77.77.2:8443.
+Publiczne /memory/api/memories bez credentials: 401.
 
-PLIKI I GIT
-Nowy adapter: backend/src/kulai_memory/api/conversations_http.py; podłączenie w app_factory,
-authentication, assistant_ws/protocol, server/runtime i ścisłej liście backendowego ingressu.
-Nowe testy: backend/tests/integration/test_conversation_api_postgres.py; istniejący helper
-V2.3 rozszerzony wyłącznie o opcję security. Dokumentacja: README.md, docs/CONVERSATION_API.md.
-Gałąź: feature/kulai-memory-v2-conversations; jeden katalog, zwykły commit i push tej gałęzi.
-Commit zadania: Expose durable conversations over authenticated HTTP and voice WebSocket.
-Raport jest częścią commita; jego SHA: git rev-parse HEAD (podany też w odpowiedzi końcowej).
-Bez merge/force push; main pozostaje fbf77dae3e96efbf4f71084f73da2eac3f7b6f16.
-Pozostały problem: wyłącznie opisany wcześniej błąd testu fingerprintu.
+GIT / PLIKI
+Gałąź feature/kulai-memory-v2-conversations, jeden katalog. Zwykły commit i push;
+bez merge/force push i bez zmian main (fbf77dae3e96efbf4f71084f73da2eac3f7b6f16).
+Commit: Add Android CHAT with durable text and voice conversations.
+Raport jest częścią commita; dokładny SHA: git rev-parse HEAD i odpowiedź końcowa.
+Zmiany: modele/parser CHAT, metody istniejącego klienta, ChatController/ChatScreen,
+minimalne podłączenie nawigacji/ViewModel/TTS, testy Android i test owned PostgreSQL,
+README projektu i Androida. Bez nowych bibliotek, procesów produkcyjnych lub lokalnej bazy.
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
-Aktualny eksport istniejącym scripts/export_repo.py: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
+Eksport istniejącym scripts/export_repo.py: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt

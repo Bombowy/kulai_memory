@@ -6,6 +6,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 sealed interface SocketEvent {
@@ -59,6 +60,7 @@ private class OkHttpVoiceSocket(
 ) : VoiceSocket, WebSocketListener() {
     @Volatile
     private var socket: WebSocket? = null
+    private var conversationRejection = false
 
     fun bind(value: WebSocket) {
         socket = value
@@ -69,6 +71,13 @@ private class OkHttpVoiceSocket(
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
+        // V2 business errors use 1008 too. They must not invalidate a paired session.
+        if (text.length <= 4096) runCatching {
+            val event = JSONObject(text)
+            if (event.optInt("schema_version") == 1 && event.optString("type") == "error" &&
+                event.optJSONObject("payload")?.optString("code") in
+                setOf("conversation.not_found", "conversation.request_conflict")) conversationRejection = true
+        }
         onEvent(SocketEvent.Text(text))
     }
 
@@ -77,7 +86,7 @@ private class OkHttpVoiceSocket(
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        if (code == 1008) onRejected()
+        if (code == 1008 && !conversationRejection) onRejected()
         onEvent(SocketEvent.Closed(code))
     }
 

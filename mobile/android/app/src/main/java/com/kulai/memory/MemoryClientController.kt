@@ -2,13 +2,16 @@ package com.kulai.memory
 
 import com.kulai.memory.audio.CaptureOwner
 import com.kulai.memory.audio.MicrophoneGate
+import com.kulai.memory.models.ChatMessage
+import com.kulai.memory.models.Conversation
+import com.kulai.memory.models.speechAnswer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-enum class MemoryTab { NOTE, ASK, MEMORY }
+enum class MemoryTab { NOTE, ASK, MEMORY, CHAT }
 
 /** Root navigation/permission coordination; each feature retains its own state and ownership. */
 class MemoryClientController(
@@ -18,12 +21,14 @@ class MemoryClientController(
     val history: MemoryHistoryController,
     val microphone: MicrophoneGate,
     val speech: MemorySpeechController? = null,
+    val chat: ChatController? = null,
 ) {
     private val mutableTab = MutableStateFlow(MemoryTab.NOTE)
     val tab = mutableTab.asStateFlow()
     private var closed = false
     private var operationGeneration = 0L
     private var operationJob: Job? = null
+    private var handledChatAnswer: java.util.UUID? = null
     private val savedObserver = scope.launch {
         var lastSaved: java.util.UUID? = null
         note.state.collect { state ->
@@ -37,9 +42,11 @@ class MemoryClientController(
         if (closed) return
         mutableTab.value = tab
         if (tab == MemoryTab.MEMORY) history.refreshIfStale()
+        if (tab == MemoryTab.CHAT) chat?.refreshIfNeeded()
     }
     fun setMicrophonePermission(granted: Boolean) {
         note.setMicrophonePermission(granted); assistant.setMicrophonePermission(granted)
+        chat?.setMicrophonePermission(granted)
     }
     fun ask() = afterSpeechStopped { assistant.ask() }
     fun startVoiceQuestion() = afterSpeechStopped { assistant.startVoiceQuestion() }
@@ -47,6 +54,26 @@ class MemoryClientController(
     fun retryNote() = afterSpeechStopped { note.retryNote() }
     fun retrySave() = afterSpeechStopped { note.retrySave() }
     fun stopAudio() = afterSpeechStopped { }
+    fun sendChat() = afterSpeechStopped { chat?.sendText() }
+    fun startChatVoice() = afterSpeechStopped { chat?.startVoice() }
+    fun retryChat() = afterSpeechStopped { chat?.retry() }
+    fun newChat() = afterSpeechStopped { chat?.newConversation() }
+    fun selectChat(conversation: Conversation) {
+        chat?.selectConversation(conversation)
+        stopAudio()
+    }
+    fun chatList() { chat?.showConversations(); stopAudio() }
+    fun speakChat(message: ChatMessage) {
+        if (!closed && operationJob?.isActive != true && microphone.owner.value == null && chat?.state?.value?.busy == false)
+            speech?.speak(message.speechAnswer())
+    }
+    fun chatAnswerRendered(message: ChatMessage) {
+        if (closed || tab.value != MemoryTab.CHAT || chat?.state?.value?.latestAnswer?.messageId != message.messageId ||
+            handledChatAnswer == message.messageId) return
+        handledChatAnswer = message.messageId
+        if (speech?.state?.value?.autoSpeak == true && operationJob?.isActive != true && microphone.owner.value == null)
+            speech.speak(message.speechAnswer())
+    }
     fun speakAnswer() {
         if (!closed && operationJob?.isActive != true && microphone.owner.value == null)
             assistant.state.value.result?.let { speech?.speak(it) }
@@ -70,7 +97,7 @@ class MemoryClientController(
         if (closed) return
         closed = true; operationGeneration++; operationJob?.cancel(); savedObserver.cancel()
         speech?.shutdown()
-        assistant.shutdown(); history.shutdown(); note.shutdown()
+        chat?.shutdown(); assistant.shutdown(); history.shutdown(); note.shutdown()
     }
 }
 

@@ -2,6 +2,7 @@ package com.kulai.memory.protocol
 
 import com.kulai.memory.audio.VoiceAudioContract
 import com.kulai.memory.models.AssistantAnswer
+import com.kulai.memory.models.ChatTurnWrite
 import org.json.JSONObject
 import java.util.UUID
 
@@ -11,6 +12,8 @@ object AssistantClientMessages {
             .put("sample_rate", VoiceAudioContract.SAMPLE_RATE_HZ).put("channels", VoiceAudioContract.CHANNELS))
         .put("top_k", 5).toString()
     fun questionStop(): String = JSONObject().put("schema_version", 1).put("type", "question.stop").toString()
+    fun conversationStart(conversationId: UUID, requestId: UUID): String = JSONObject(questionStart())
+        .put("conversation_id", conversationId.toString()).put("request_id", requestId.toString()).toString()
 }
 
 sealed interface AssistantEvent {
@@ -20,10 +23,11 @@ sealed interface AssistantEvent {
     data class Transcript(override val sessionId: UUID, override val sequence: Int, val text: String) : AssistantEvent
     data class Started(override val sessionId: UUID, override val sequence: Int) : AssistantEvent
     data class Completed(override val sessionId: UUID, override val sequence: Int, val answer: AssistantAnswer) : AssistantEvent
+    data class ConversationCompleted(override val sessionId: UUID, override val sequence: Int, val result: ChatTurnWrite) : AssistantEvent
     data class Error(override val sessionId: UUID, override val sequence: Int) : AssistantEvent
 }
 
-class AssistantEventParser {
+class AssistantEventParser(private val conversationMode: Boolean = false) {
     fun parse(raw: String): AssistantEvent {
         if (raw.length > 2 * 1024 * 1024) StrictJson.invalid()
         val root = StrictJson.objectFrom(raw)
@@ -38,6 +42,8 @@ class AssistantEventParser {
                 AssistantEvent.Transcript(id, sequence, StrictJson.string(payload, "text")) }
             "rag.started" -> { StrictJson.keys(payload); AssistantEvent.Started(id, sequence) }
             "assistant.completed" -> AssistantEvent.Completed(id, sequence, MemoryJson.answer(payload))
+            "conversation.completed" -> if (conversationMode)
+                AssistantEvent.ConversationCompleted(id, sequence, ConversationJson.turnWrite(payload)) else StrictJson.invalid()
             "error" -> { StrictJson.keys(payload, "code", "message", "recoverable")
                 StrictJson.string(payload, "code"); StrictJson.string(payload, "message"); StrictJson.boolean(payload, "recoverable")
                 AssistantEvent.Error(id, sequence) }

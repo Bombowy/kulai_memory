@@ -158,6 +158,7 @@ class MemoryAssistantController(
                         if (state.value.phase != AssistantPhase.SEARCHING) { protocolFailure(); return }
                         complete(parsed.answer); finishSocket()
                     }
+                    is AssistantEvent.ConversationCompleted -> protocolFailure()
                     is AssistantEvent.Error -> fail("The memory assistant could not complete the operation.")
                 }
             }

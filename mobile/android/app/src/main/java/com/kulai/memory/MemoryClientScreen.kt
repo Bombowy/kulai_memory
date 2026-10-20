@@ -39,7 +39,7 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
             MemoryTab.entries.forEach { destination ->
                 NavigationBarItem(selected = tab == destination,
                     onClick = { viewModel.root.selectTab(destination) },
-                    icon = { Text(when (destination) { MemoryTab.NOTE -> "●"; MemoryTab.ASK -> "?"; MemoryTab.MEMORY -> "≡" }) },
+                    icon = { Text(when (destination) { MemoryTab.NOTE -> "●"; MemoryTab.ASK -> "?"; MemoryTab.MEMORY -> "≡"; MemoryTab.CHAT -> "◇" }) },
                     label = { Text(destination.name) })
             }
         }
@@ -56,6 +56,7 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
                 MemoryTab.MEMORY -> HistoryContent(history, viewModel.history::setFilter,
                     viewModel.history::refresh, viewModel.history::loadMore, viewModel.history::selectMemory,
                     viewModel.history::clearDetail)
+                MemoryTab.CHAT -> ChatContent(viewModel.chat, viewModel.root, speech, capture == null, requestMicrophonePermission)
             }
         }
     }

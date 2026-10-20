@@ -1,13 +1,15 @@
-# KulAI Memory Android Alpha — NOTE / ASK / MEMORY
+# KulAI Memory Android Alpha — NOTE / ASK / MEMORY / CHAT
 
-This native Kotlin/Compose client requires a local
-KulAI Memory backend and a debug-authorized physical Android device connected
-over USB.
+This native Kotlin/Compose client uses the configured KulAI Memory server and
+existing SECURE pairing, including an HTTPS path prefix such as
+`https://demo.kulai.eu/memory/`. V2.5 adds CHAT on the V2 feature branch; it is not
+installed on the phone or deployed to the running V1 by this task.
 
-The three tabs retain their in-memory state while switching and across Activity
+The four tabs retain their in-memory state while switching and across Activity
 recreation. There is no Room/SQLite/DataStore history or conversation database.
-Process death clears history/assistant state; the existing Note retry cache does
-not provide restart recovery.
+Process death clears UI state; opening CHAT again fetches the conversation list
+and selected history from PostgreSQL through the API. The existing Note retry
+cache does not provide restart recovery.
 
 - **NOTE** keeps the existing `/ws/memory` v1 Voice Note flow. Bounded PCM16 audio
   is privately cached only while retry is possible. **RETRY NOTE** replays PCM
@@ -33,6 +35,34 @@ not provide restart recovery.
   it does not use OFFSET. Previews are derived by the backend. After a successful
   Note save, history is marked stale and refreshed on its next visit or REFRESH.
   There are no Android lifecycle mutation controls.
+- **CHAT** uses only the [V2.4 conversation API](../../docs/CONVERSATION_API.md).
+  **NOWA ROZMOWA**, a paginated conversation list and selection open a scrollable
+  server history. **WYŚLIJ** and **MIKROFON / STOP** share the same conversation
+  UUID; each new question gets a request UUID. **PONÓW** reuses it. If a voice
+  transcript arrived, retry uses the same UUID/input-kind through HTTP; otherwise
+  WS start/stop checks for the saved pair without recording again. No CHAT audio
+  is cached. If no saved result is available, refresh or explicitly record a new
+  question. Uncertain request identities are held in memory while the process
+  lives; process restart fetches server history and never automatically resends.
+  Changing conversations cancels HTTP/WS/capture and ignores stale callbacks.
+  Switching tabs retains state and paired credentials. CHAT uses the existing
+  OkHttp boundary, shared microphone gate and single PL/EN TTS engine. **SPEAK**
+  reads answer prose only; the auto-read checkbox and **STOP AUDIO** are shared
+  with ASK. Loading old history does not auto-read old answers.
+
+CHAT requires schema `0005`, a V2 server and the separately approved future
+Nginx allowlist change. This task does not migrate `kulai_memory_mvp`, change
+Nginx or switch the live V1. The debug APK remains
+`app/build/outputs/apk/debug/app-debug.apk`; it is built without installing it.
+`testDebugUnitTest` covers controlled HTTP/WS contracts, retries, capture drain,
+history recovery, TTS and V1/pairing regressions. The opt-in
+`backend/tests/integration/test_android_chat_postgres.py` fixture runs the complete
+Android JVM suite against actual SECURE FastAPI and a marker-owned PostgreSQL
+0005 database (`KULAI_RUN_POSTGRES_INTEGRATION=1` and
+`KULAI_RUN_ANDROID_INTEGRATION=1`). Only synthetic inference/data are used; the
+fixture passes temporary test credentials in the child environment and checks
+stored turns/model-call counts so skipped tests cannot look successful. The
+phone microphone, layout and offline voices still require a later physical test.
 
 HTTP and assistant WS parsers reject unknown/missing fields, wrong types, invalid
 UUIDs/dates/citations and unexpected assistant events. The assistant sequence

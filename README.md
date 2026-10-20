@@ -29,8 +29,13 @@ V2.4 exposes conversation creation, paginated history and text questions under
 Text and voice share durable history, credentials and idempotency; the V1 protocol
 is unchanged. See the [conversation API contract](docs/CONVERSATION_API.md),
 including the exact routes required by a future Nginx allowlist update. This branch
-does not migrate or restart the running V1 or deploy proxy changes. Android
-integration remains for V2.5.
+does not migrate or restart the running V1 or deploy proxy changes.
+
+V2.5 adds Android's fourth CHAT tab: server conversation history, text and voice
+turns, UUID-preserving retries and the shared local PL/EN speech controls.
+NOTE/ASK/MEMORY retain their existing flows. The [Android contract](mobile/android/README.md)
+describes recovery and the owned-PostgreSQL integration test. The APK is built
+and tested without phone installation or production cutover.
 
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
 The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader

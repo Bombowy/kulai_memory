@@ -34,6 +34,7 @@ class VoiceMemoryViewModel(application: Application) : AndroidViewModel(applicat
             features.root.setMicrophonePermission(microphonePermissionGranted)
         }, renewalBusy = {
             microphone.owner.value != null || features.assistant.state.value.voiceBusy ||
+                features.chat.state.value.busy ||
                 features.note.state.value.phase in setOf(VoiceMemoryPhase.CONNECTING, VoiceMemoryPhase.READY,
                     VoiceMemoryPhase.RECORDING, VoiceMemoryPhase.WAITING_FOR_TRANSCRIPT, VoiceMemoryPhase.SAVING)
         })
@@ -42,6 +43,7 @@ class VoiceMemoryViewModel(application: Application) : AndroidViewModel(applicat
     val assistant get() = features.assistant
     val history get() = features.history
     val speech get() = features.speech
+    val chat get() = features.chat
     val state get() = features.note.state
 
     private inner class Features(originValue: String, localDev: Boolean) {
@@ -55,10 +57,12 @@ class VoiceMemoryViewModel(application: Application) : AndroidViewModel(applicat
         val assistant = MemoryAssistantController(viewModelScope, api, origin.webSocket("ws/assistant"), socketFactory,
             AndroidVoiceAudioRecorder(appContext), microphone)
         val history = MemoryHistoryController(viewModelScope, api)
+        val chat = ChatController(viewModelScope, api, origin.webSocket("ws/assistant"), socketFactory,
+            AndroidVoiceAudioRecorder(appContext), microphone)
         val speech = MemorySpeechController(viewModelScope, api, OfflineLocalSpeechEngine { callback ->
             AndroidTtsBoundary(appContext.applicationContext, callback)
         })
-        val root = MemoryClientController(viewModelScope, note, assistant, history, microphone, speech)
+        val root = MemoryClientController(viewModelScope, note, assistant, history, microphone, speech, chat)
         init { note.startup(); speech.startup() }
     }
     init { connection.startup() }

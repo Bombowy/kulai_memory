@@ -2,6 +2,7 @@ package com.kulai.memory.transport
 
 import com.kulai.memory.models.*
 import com.kulai.memory.protocol.MemoryJson
+import com.kulai.memory.protocol.ConversationJson
 import com.kulai.memory.protocol.ProtocolException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -27,6 +28,14 @@ interface MemoryApi {
     suspend fun planSpeech(answer: String): SpeechPlan
 }
 
+interface ConversationApi {
+    suspend fun createConversation(): Conversation
+    suspend fun listConversations(limit: Int = 20, cursor: ConversationCursor? = null): ConversationPage
+    suspend fun conversationMessages(id: UUID, limit: Int = 40, beforeSequence: Long? = null): ChatMessagePage
+    suspend fun askConversation(id: UUID, requestId: UUID, question: String,
+        inputKind: ChatInputKind = ChatInputKind.TEXT): ChatTurnWrite
+}
+
 enum class HttpFailure { UNAVAILABLE, INVALID_RESPONSE, NOT_FOUND, OPERATION_FAILED, AUTHENTICATION_REQUIRED }
 class MemoryHttpException(val failure: HttpFailure) : Exception(when (failure) {
     HttpFailure.UNAVAILABLE -> "Local server is unavailable."
@@ -42,7 +51,7 @@ class MemoryHttpClient(
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(210, TimeUnit.SECONDS)
         .callTimeout(240, TimeUnit.SECONDS).build(),
     private val authentication: RequestAuthentication = RequestAuthentication(baseUrl),
-) : MemoryApi {
+) : MemoryApi, ConversationApi {
     private val base = ServerOrigin(baseUrl, allowLocalCleartext = true)
     private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).build()
@@ -77,6 +86,37 @@ class MemoryHttpClient(
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return parse(Request.Builder().url(base.endpoint("api/assistant/speech-plan"))
             .post(body).build()) { MemoryJson.speech(it, answer) }
+    }
+
+    override suspend fun createConversation(): Conversation = parse(Request.Builder()
+        .url(base.endpoint("api/conversations")).post("{}".toRequestBody(JSON)).build(), ConversationJson::conversation)
+
+    override suspend fun listConversations(limit: Int, cursor: ConversationCursor?): ConversationPage {
+        require(limit in 1..100)
+        val url = base.endpoint("api/conversations").newBuilder().addQueryParameter("limit", limit.toString())
+        cursor?.let { url.addQueryParameter("before_activity_at", it.beforeActivityAt.toString())
+            .addQueryParameter("before_id", it.beforeId.toString()) }
+        return parse(Request.Builder().url(url.build()).build(), ConversationJson::conversations)
+    }
+
+    override suspend fun conversationMessages(id: UUID, limit: Int, beforeSequence: Long?): ChatMessagePage {
+        require(limit in 1..100 && (beforeSequence == null || beforeSequence > 0))
+        val url = base.endpoint("api/conversations/$id/messages").newBuilder().addQueryParameter("limit", limit.toString())
+        beforeSequence?.let { url.addQueryParameter("before_sequence", it.toString()) }
+        return parse(Request.Builder().url(url.build()).build()) { ConversationJson.messages(it, id) }
+    }
+
+    override suspend fun askConversation(id: UUID, requestId: UUID, question: String, inputKind: ChatInputKind): ChatTurnWrite {
+        require(question.isNotBlank() && question.length <= 10000 && '\u0000' !in question)
+        val body = JSONObject().put("request_id", requestId.toString()).put("question", question)
+            .put("input_kind", inputKind.wire).toString().toRequestBody(JSON)
+        return parse(Request.Builder().url(base.endpoint("api/conversations/$id/ask")).post(body).build()) {
+            ConversationJson.turnWrite(it).also { result ->
+                if (result.turn.conversationId != id || result.turn.requestId != requestId ||
+                    result.turn.user.content != question || result.turn.user.inputKind != inputKind)
+                    throw ProtocolException("Invalid conversation response.")
+            }
+        }
     }
 
     private suspend fun <T> parse(request: Request, parse: (String) -> T): T {
@@ -128,5 +168,8 @@ class MemoryHttpClient(
         })
     }
 
-    companion object { private const val MAX_RESPONSE_BYTES = 2L * 1024 * 1024 }
+    companion object {
+        private const val MAX_RESPONSE_BYTES = 2L * 1024 * 1024
+        private val JSON = "application/json; charset=utf-8".toMediaType()
+    }
 }
