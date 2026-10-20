@@ -23,7 +23,7 @@ from kulai_memory.application.deletion import MemoryDeletionResult, MemoryDeleti
 
 PRIVATE = 'PRIVATE_CONTENT_PASSWORD_PROVIDER_PAYLOAD'
 ID = UUID(int=71)
-SNAPSHOT = DatabaseSnapshot(('kulai_memory_0004',), MemoryFingerprint(1, 'a' * 64),
+SNAPSHOT = DatabaseSnapshot(('kulai_memory_0005',), MemoryFingerprint(1, 'a' * 64),
     VectorFingerprint(1, 'b' * 64), TombstoneFingerprint(0, 'c' * 64))
 
 

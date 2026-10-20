@@ -55,7 +55,7 @@ def test_cursor_requires_timezone_and_title_is_optional():
         ConversationCursor(before_id=uuid4(), before_activity_at=datetime.now())
 
 
-def test_schema_does_not_register_in_v1_shared_metadata_or_advance_heads():
+def test_schema_does_not_register_in_v1_shared_metadata_or_security_graph():
     from kulai_db import Base
     from kulai_memory.database_safety import expected_alembic_heads
     from kulai_memory.security_persistence.migration import security_migration_heads
@@ -64,5 +64,5 @@ def test_schema_does_not_register_in_v1_shared_metadata_or_advance_heads():
     assert metadata is not Base.metadata
     assert len(metadata.tables) == 3
     assert not any("conversation" in name for name in Base.metadata.tables)
-    assert expected_alembic_heads() == ("kulai_memory_0004",)
+    assert expected_alembic_heads() == ("kulai_memory_0005",)
     assert security_migration_heads() == ("kulai_security_0003",)

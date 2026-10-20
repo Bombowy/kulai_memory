@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 import json
 import sys
 from uuid import uuid4
@@ -84,7 +85,9 @@ def test_pl_en_multiple_turns_independence_and_canonical_vector_security_unchang
             assert all(m.input_kind.value == "text" and not m.memory_ids for m in left[::2])
             assert all(m.input_kind is None and m.memory_ids == (memory.id,) for m in left[1::2])
             assert all(w.created for w in writes)
-            assert await snapshot(factory) == before
+            after = await snapshot(factory)
+            assert replace(after, conversations=None) == replace(before, conversations=None)
+            assert after.conversations.messages.count == 12
             assert (await run_database_doctor(async_url=target.async_url, require_security=True)).ok
             assert await counts(factory) == (6, 12)
     asyncio.run(asyncio.wait_for(scenario(), 120))

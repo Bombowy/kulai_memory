@@ -47,8 +47,8 @@ class Connection:
         return Rows(sorted(self.rows, key=lambda item: item._mapping["ingestion_id"]))
     async def execute(self, statement):
         self.sql.append(str(statement))
-        if "r.relname LIKE" in str(statement):
-            return []  # Historical snapshots have no optional security schema.
+        if "r.relname LIKE" in str(statement) or "r.relname IN" in str(statement):
+            return []  # Historical snapshots have neither security nor conversations.
         return SimpleNamespace(scalars=lambda: (self.revision,))
     async def scalar(self, statement):
         self.sql.append(str(statement))

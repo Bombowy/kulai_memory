@@ -242,7 +242,8 @@ def test_alembic_graph_has_one_host_head() -> None:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["kulai_memory_0004"]
+    assert scripts.get_heads() == ["kulai_memory_0005"]
+    assert scripts.get_revision("kulai_memory_0005").down_revision == "kulai_memory_0004"
     tombstone_revision = scripts.get_revision("kulai_memory_0003")
     assert tombstone_revision is not None
     assert tombstone_revision.down_revision == "kulai_memory_0002"

@@ -48,7 +48,7 @@ def test_readonly_backend_probe_reads_actual_catalog_and_never_changes_seal(cert
                 patch.setattr(safety,'database_config',lambda:target)
                 patch.setattr(settings,'get_settings',lambda:SimpleNamespace(kulai_security_mode=SecurityMode.SECURE))
                 evidence=await probe_backend(gate.directory)
-            assert evidence==dict(mode='SECURE',canonical_head='kulai_memory_0004',security_head='kulai_security_0003',
+            assert evidence==dict(mode='SECURE',canonical_head='kulai_memory_0005',security_head='kulai_security_0003',
                                   revocation_available=True,gate_state='OPEN',external_seal_verified=True)
             assert gate.journal.read_bytes()==journal
             assert await database_snapshot_url(target.async_url)==before

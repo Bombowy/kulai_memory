@@ -122,7 +122,7 @@ async def checkpoint(connection):
     '''))).one()
     name, identity, heads = metadata[0], metadata[1], tuple(metadata[2])
     security = await security_snapshot(connection)
-    if heads != ('kulai_memory_0004',) or security is None or security.revision != ('kulai_security_0003',):
+    if heads not in (('kulai_memory_0004',), ('kulai_memory_0005',)) or security is None or security.revision != ('kulai_security_0003',):
         raise SecurityError()
     return {'database': name, 'oid': identity}, hashlib.sha256(canonical(asdict(security))).hexdigest()
 

@@ -37,6 +37,7 @@ from kulai_memory.database_safety import (
     async_database_url,
     create_owned_temporary_database,
     database_config,
+    database_config_for_database,
     database_exists,
     database_snapshot_url,
     drop_owned_temporary_database,
@@ -49,6 +50,8 @@ from kulai_memory.database_safety import (
     validate_restore_source,
 )
 from kulai_memory.persistence import PostgresMemoryRepository
+from kulai_memory.conversations import CompletedTurn, Conversation, MessagePage
+from kulai_memory.conversation_persistence import PostgresConversationRepository
 from kulai_memory.settings import get_settings
 from scripts.db_backup import create_owned_database_backup
 
@@ -61,6 +64,8 @@ class DrillFixtures:
     record_id: str
     vector_values: tuple[float, ...]
     vector_metadata: dict[str, object]
+    conversation: Conversation | None = None
+    conversation_history: MessagePage | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,10 +201,26 @@ async def seed_owned_source(
             await require_owned_database(owned, config=config)
             await session.commit()
         await delete_memory(memory_id=retired.id, session_factory=factory)
+        async with factory() as session:
+            heads = tuple((await session.execute(text("SELECT version_num FROM alembic_version"))).scalars())
+        conversation = history = None
+        if heads == ("kulai_memory_0005",):
+            repository = PostgresConversationRepository(factory)
+            conversation = await repository.create(title="Synthetic PL/EN backup drill")
+            for question, answer, kind in (
+                ("Gdzie jest fikcyjny klucz?", "The synthetic key is in the drawer.", "voice"),
+                ("Which drawer?", "W górnej szufladzie — przykład testowy.", "text"),
+            ):
+                await repository.append_turn(conversation_id=conversation.conversation_id,
+                    completed=CompletedTurn(request_id=uuid4(), question=question, answer=answer,
+                                            input_kind=kind, memory_ids=(first.id,)))
+            conversation = (await repository.list_conversations()).conversations[0]
+            history = await repository.recent_messages(conversation_id=conversation.conversation_id)
         return DrillFixtures(
             memories=(first, second), retired_memory=retired,
             namespace=namespace, record_id=str(first.id),
             vector_values=vector_values, vector_metadata=vector_metadata,
+            conversation=conversation, conversation_history=history,
         )
     finally:
         await engine.dispose()
@@ -281,18 +302,36 @@ async def verify_fixtures(
             ):
                 raise RuntimeError("Restored vector controlled values do not match.")
             await session.rollback()
+        if fixtures.conversation is not None:
+            repository = PostgresConversationRepository(factory)
+            history = await repository.recent_messages(conversation_id=fixtures.conversation.conversation_id)
+            if history != fixtures.conversation_history:
+                raise RuntimeError("Restored conversation messages do not match fixtures.")
+            page = await repository.list_conversations()
+            if fixtures.conversation not in page.conversations:
+                raise RuntimeError("Restored conversation metadata does not match fixtures.")
     finally:
         await engine.dispose()
 
 
-async def run_drill(*, pre_migration_from: str | None = None) -> DrillResult:
+async def run_drill(
+    *, pre_migration_from: str | None = None,
+    owned_source: OwnedTemporaryDatabase | None = None,
+) -> DrillResult:
     settings = get_settings()
     dimension = settings.kulai_vector_dimension
     if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 1:
         raise ValueError("KULAI_VECTOR_DIMENSION must be a positive integer.")
     config = database_config()
-    source_connection = validate_restore_source(config, app_env=settings.app_env)
-    main_doctor_before = await run_database_doctor()
+    administrative_config = config
+    validate_restore_source(config, app_env=settings.app_env)
+    if owned_source is not None:
+        # Integration-only capability, like backup/restore's owned-source API.
+        # No CLI target override and no unverified database name is accepted.
+        await require_owned_database(owned_source, config=config)
+        config = database_config_for_database(owned_source.name, config=config)
+    source_connection = postgres_connection(config)
+    main_doctor_before = await run_database_doctor(async_url=config.async_url)
     validate_backup_doctor(main_doctor_before, pre_migration_from=pre_migration_from)
     main_before = await database_snapshot(config.async_url, **(
         {"pre_migration_from": pre_migration_from} if pre_migration_from is not None else {}
@@ -318,6 +357,10 @@ async def run_drill(*, pre_migration_from: str | None = None) -> DrillResult:
         if (
             source_snapshot.memories.count != 2 or source_snapshot.vectors.count != 1
             or source_snapshot.tombstones is None or source_snapshot.tombstones.count != 1
+            or source_snapshot.conversations is None
+            or source_snapshot.conversations.conversations.count != 1
+            or source_snapshot.conversations.turns.count != 2
+            or source_snapshot.conversations.messages.count != 4
         ):
             raise RuntimeError("Temporary source fixture counts are invalid.")
         await verify_fixtures(source_url, fixtures, dimension=dimension)
@@ -329,7 +372,7 @@ async def run_drill(*, pre_migration_from: str | None = None) -> DrillResult:
                     archive,
                     force=False,
                     owned=source,
-                    config=config,
+                    config=administrative_config,
                 )
             )
             restored = await create_owned_temporary_database(
@@ -382,7 +425,7 @@ async def run_drill(*, pre_migration_from: str | None = None) -> DrillResult:
     main_after = await database_snapshot(config.async_url, **(
         {"pre_migration_from": pre_migration_from} if pre_migration_from is not None else {}
     ))
-    main_doctor_after = await run_database_doctor()
+    main_doctor_after = await run_database_doctor(async_url=config.async_url)
     validate_backup_doctor(main_doctor_after, pre_migration_from=pre_migration_from)
     if main_after != main_before:
         raise RuntimeError("Main database changed during the drill.")
@@ -404,6 +447,12 @@ async def run(*, pre_migration_from: str | None = None) -> int:
     print(f"Tombstone rows: {result.source_snapshot.tombstones.count}")
     print(f"Source tombstone SHA-256: {result.source_snapshot.tombstones.sha256}")
     print(f"Restored tombstone SHA-256: {result.restored_snapshot.tombstones.sha256}")
+    for name in ("conversations", "turns", "messages"):
+        fingerprint = getattr(result.source_snapshot.conversations, name)
+        restored = getattr(result.restored_snapshot.conversations, name)
+        print(f"{name} rows: {fingerprint.count}")
+        print(f"Source {name} SHA-256: {fingerprint.sha256}")
+        print(f"Restored {name} SHA-256: {restored.sha256}")
     print(f"Backup SHA-256: {result.backup_sha256}")
     print(f"Backup size: {result.backup_size} bytes")
     print(f"pg_dump: {result.pg_dump_version}")

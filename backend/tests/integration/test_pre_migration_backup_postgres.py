@@ -69,7 +69,7 @@ async def _exercise(tmp_path, monkeypatch):
         assert before.memories.count == before.vectors.count == 2 and before.tombstones is None
         pending = await run_database_doctor(async_url=url)
         assert not pending.ok
-        assert {c.name for c in pending.checks if not c.ok} == pre_migration_failures("kulai_memory_0002", "kulai_memory_0004")
+        assert {c.name for c in pending.checks if not c.ok} == pre_migration_failures("kulai_memory_0002", "kulai_memory_0005")
 
         # Default mode still refuses this legacy source; no archive is produced.
         strict_blocked = tmp_path / "strict_blocked.dump"
@@ -97,7 +97,7 @@ async def _exercise(tmp_path, monkeypatch):
         restored_doctor, restored_fingerprints = observed_restores[-1]
         checks = {c.name: c for c in restored_doctor.checks}
         assert checks["alembic.current"].value == ["kulai_memory_0002"]
-        assert {c.name for c in restored_doctor.checks if not c.ok} == pre_migration_failures("kulai_memory_0002", "kulai_memory_0004")
+        assert {c.name for c in restored_doctor.checks if not c.ok} == pre_migration_failures("kulai_memory_0002", "kulai_memory_0005")
         assert restored_fingerprints == before
         assert await db_restore_smoke.fingerprint_url(url, pre_migration_from="kulai_memory_0002") == before
         assert archive.is_file()
@@ -125,24 +125,24 @@ async def _exercise(tmp_path, monkeypatch):
         assert upgraded.memories.count == before.memories.count and upgraded.vectors == before.vectors
         assert upgraded.memories.sha256 != before.memories.sha256
         assert upgraded.tombstones is not None and upgraded.tombstones.count == 0
-        strict_archive = tmp_path / "owned_0004.dump"
+        strict_archive = tmp_path / "owned_0005.dump"
         await db_backup.create_owned_database_backup(strict_archive, force=False, owned=source, config=config)
         result = await db_restore_smoke.restore_owned_database_backup(
             strict_archive, owned=source, config=config,
         )
         strict_report, strict_fingerprints = observed_restores[-1]
         assert strict_report.ok and strict_fingerprints == upgraded
-        assert next(c.value for c in strict_report.checks if c.name == "alembic.current") == ["kulai_memory_0004"]
+        assert next(c.value for c in strict_report.checks if c.name == "alembic.current") == ["kulai_memory_0005"]
         assert result.snapshot == upgraded
         assert await db_restore_smoke.fingerprint_url(url) == upgraded
         assert not await database_exists(result.database, config=config)
-        print("owned_0004.strict_backup=PASS;strict_restore=PASS;fingerprints_match=true;source_unchanged=true")
+        print("owned_0005.strict_backup=PASS;strict_restore=PASS;fingerprints_match=true;source_unchanged=true")
     finally:
         await drop_owned_temporary_database(source, config=config)
     assert not await database_exists(source.name, config=config)
     print("owned_source.cleanup=PASS")
 
 
-def test_owned_0002_pre_migration_backup_restore_and_0004_strict_mode(tmp_path, monkeypatch):
+def test_owned_0002_pre_migration_backup_restore_and_current_strict_mode(tmp_path, monkeypatch):
     _require_opt_in()
     asyncio.run(asyncio.wait_for(_exercise(tmp_path, monkeypatch), timeout=180))

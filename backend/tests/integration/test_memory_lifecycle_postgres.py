@@ -372,7 +372,7 @@ def test_guarded_cli_owned_execute_and_strict_four_backup_restore(tmp_path, monk
             archive = tmp_path / "archived_four.dump"
             await db_backup.create_owned_database_backup(archive, force=False, owned=owned, config=config)
             restored = await db_restore_smoke.restore_owned_database_backup(archive, owned=owned, config=config)
-            assert restored.snapshot == archived and restored.snapshot.revision == ("kulai_memory_0004",)
+            assert restored.snapshot == archived and restored.snapshot.revision == ("kulai_memory_0005",)
             assert await snapshot(factory) == archived
             assert await cli.run(args("restore", 3), owned=owned, source_config=config) == 0
             assert await counts(factory) == (1, 1, 0)

@@ -6,6 +6,17 @@ Current priority: the [simple voice RAG MVP](docs/MVP_SCOPE.md), with durable
 Memories, NOTE / ASK / MEMORY and optional TTS. Fact Intelligence (5A.1–5A.6)
 development is paused; its demos remain separate from the normal runtime.
 
+V2.2 (branch `feature/kulai-memory-v2-conversations`) adds the explicit canonical
+migration `kulai_memory_0005` after `0004`, containing only the three conversation
+tables from V2.1. The doctor and existing full PostgreSQL backup/restore include
+conversation metadata, request identities and ordered messages. Security stays
+at `kulai_security_0003`; Memories and pgvector are unchanged. Nothing migrates at
+application startup. This branch is not deployed: the running V1 database stays
+at `0004` until the controlled V2 cutover. Before that migration, the existing
+backup/restore commands require explicit `--pre-migration-from kulai_memory_0004`;
+strict mode requires `0005`. Restore verification uses marker-owned temporary
+databases and compares all conversation fingerprints, including empty tables.
+
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
 The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader
 only after strict schema verification. TASK 4D.2A adds an independent security

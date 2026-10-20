@@ -1,4 +1,4 @@
-"""Opt-in V2 adapter. Not imported or initialized by the V1 application."""
+"""Explicitly constructed V2 adapter. Importing never opens a DB or runs DDL."""
 
 from .postgres import PostgresConversationRepository
 

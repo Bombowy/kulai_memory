@@ -1,8 +1,7 @@
-"""V2.1 schema candidate, deliberately outside every production Alembic graph.
+"""V2.1 adapter metadata matching the explicit 0005 migration.
 
-Only marker-owned test fixtures install this metadata in V2.1. V2.2 must add a
-reviewed migration, backup/restore and doctor coverage before production use.
-No shared kulai_db.Base registration or startup DDL.
+No shared kulai_db.Base registration or startup DDL. Historical Alembic
+definitions are frozen independently of mutable application limits here.
 """
 
 import sqlalchemy as sa

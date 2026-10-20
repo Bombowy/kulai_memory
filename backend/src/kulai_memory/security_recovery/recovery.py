@@ -55,7 +55,16 @@ class BackupEvidence:
 
 
 def canonical_part(snapshot):
-    return {name: snapshot[name] for name in ('revision', 'memories', 'vectors', 'tombstones')}
+    result = {name: snapshot[name] for name in ('revision', 'memories', 'vectors', 'tombstones')}
+    if snapshot.get('conversations') is not None:
+        result['conversations'] = snapshot['conversations']
+    return result
+
+
+def comparable_snapshot(snapshot):
+    # Historical manifests had no optional conversation field. Never erase a
+    # nonempty/new snapshot; only normalize the legacy absent representation.
+    return {key: value for key, value in snapshot.items() if key != 'conversations' or value is not None}
 
 
 async def verify_archive(evidence, *, config):
@@ -68,7 +77,7 @@ async def verify_archive(evidence, *, config):
         url = async_database_url(database=owned.name, config=config)
         if not (await run_database_doctor(async_url=url, require_security=True)).ok: raise SecurityError()
         restored = asdict(await database_snapshot_url(url))
-        if canonical(restored) != canonical(evidence.snapshot): raise SecurityError()
+        if canonical(comparable_snapshot(restored)) != canonical(comparable_snapshot(evidence.snapshot)): raise SecurityError()
         if restored['security']['revision'] != ('kulai_security_0003',): raise SecurityError()
         evidence.validate()
         return restored
@@ -106,6 +115,8 @@ async def recover(config, gate, evidence):
                 # Lock both security and canonical writers; no canonical DML/DDL.
                 await session.execute(text('LOCK TABLE ' + ','.join('public.' + name for name in TABLES) + ' IN ACCESS EXCLUSIVE MODE'))
                 await session.execute(text('LOCK TABLE public.memories,public.kulai_vector_records,public.memory_ingestion_tombstones IN SHARE MODE'))
+                if before.get('conversations') is not None:
+                    await session.execute(text('LOCK TABLE public.kulai_conversations,public.kulai_conversation_turns,public.kulai_conversation_messages IN SHARE MODE'))
                 # Target must still be the exact snapshot verified above.
                 if not gate.matches({'identity': value[0], 'security': value[1]}, await checkpoint(await session.connection())):
                     raise SecurityError()

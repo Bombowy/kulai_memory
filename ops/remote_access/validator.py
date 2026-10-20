@@ -162,7 +162,7 @@ def validate(config, inventory, *, existing_nginx=None, candidates=None, certifi
         check(name,value if type(value) is bool else None)
     backend=inventory.get('backend',{})
     check('secure_backend',backend['mode']=='SECURE' if backend.get('mode') is not None else None)
-    check('canonical_head',backend['canonical_head']=='kulai_memory_0004' if backend.get('canonical_head') is not None else None)
+    check('canonical_head',backend['canonical_head'] in ('kulai_memory_0004','kulai_memory_0005') if backend.get('canonical_head') is not None else None)
     check('security_head',backend['security_head']=='kulai_security_0003' if backend.get('security_head') is not None else None)
     check('revocation_available',backend.get('revocation_available') if type(backend.get('revocation_available')) is bool else None)
     # Review is conducted with the deployment closed. Opening is a separate action.
@@ -233,8 +233,9 @@ async def probe_backend(directory):
             async with engine.connect() as connection:
                 await connection.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
                 value=await checkpoint(connection)
+                canonical_heads=tuple((await connection.execute(text('SELECT version_num FROM public.alembic_version ORDER BY version_num'))).scalars())
                 await connection.rollback()
-            return dict(mode=mode,canonical_head='kulai_memory_0004',security_head='kulai_security_0003',
+            return dict(mode=mode,canonical_head=canonical_heads[0],security_head='kulai_security_0003',
                         revocation_available=doctor.ok,gate_state=state['state'],external_seal_verified=gate.matches(state,value))
     finally: await engine.dispose()
 

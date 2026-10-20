@@ -139,7 +139,7 @@ class PostgresSecurityRuntime:
                         heads = tuple((await connection.execute(text(
                             'SELECT version_num FROM public.alembic_version ORDER BY version_num'))).scalars())
                         state = await inspect_security_schema(connection)
-                        if heads != ('kulai_memory_0004',) or not state.valid or state.revision != SESSION_HEAD:
+                        if heads not in (('kulai_memory_0004',), ('kulai_memory_0005',)) or not state.valid or state.revision != SESSION_HEAD:
                             raise SecurityError()
                     finally:
                         await connection.rollback()

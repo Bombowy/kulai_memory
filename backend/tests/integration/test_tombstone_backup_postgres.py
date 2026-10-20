@@ -133,15 +133,14 @@ async def tamper_round_trip(tmp_path, monkeypatch, field):
 
 
 async def canonical_drill():
-    main_url = database_config().async_url
-    before = await database_snapshot_url(main_url)
-    from kulai_memory.database_safety import expected_alembic_heads
-    mode = before.revision[0] if before.revision != expected_alembic_heads() else None
-    result = await drill.run_drill(pre_migration_from=mode)
-    assert result.source_snapshot == result.restored_snapshot
-    assert result.source_snapshot.tombstones.count == 1
-    assert await database_snapshot_url(main_url) == before
-    print("canonical.drill=PASS;counts=2/1/1;three_fingerprints_match=true;main_unchanged=true")
+    async with source_fixture() as (owned, _, source_url, _):
+        before = await database_snapshot_url(source_url)
+        result = await drill.run_drill(owned_source=owned)
+        assert result.source_snapshot == result.restored_snapshot
+        assert result.source_snapshot.tombstones.count == 1
+        assert result.source_snapshot.conversations.messages.count == 4
+        assert await database_snapshot_url(source_url) == before
+        print("owned.canonical_drill=PASS;conversations=1;turns=2;messages=4;source_unchanged=true")
 
 
 def test_owned_tombstone_restore_preserves_retired_replay_and_accepts_fresh_ingestion(tmp_path):
@@ -155,6 +154,6 @@ def test_owned_tombstone_tamper_rejected_with_same_count(tmp_path, monkeypatch, 
     asyncio.run(asyncio.wait_for(tamper_round_trip(tmp_path, monkeypatch, field), timeout=180))
 
 
-def test_canonical_drill_verifies_all_three_categories():
+def test_owned_canonical_drill_verifies_all_durable_categories():
     _require_opt_in()
     asyncio.run(asyncio.wait_for(canonical_drill(), timeout=180))

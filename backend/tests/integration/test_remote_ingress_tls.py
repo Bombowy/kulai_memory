@@ -329,7 +329,7 @@ def test_schema_tamper_fails_closed_until_new_backend_lifespan(certificates,tabl
                 assert (await transport.get('/api/memories',headers=headers(credential))).status_code == 503
                 async with factory.begin() as session:
                     await session.execute(sa.text('UPDATE '+table+' SET version_num=:revision'),
-                        {'revision':'kulai_memory_0004' if table=='alembic_version' else 'kulai_security_0003'})
+                        {'revision':'kulai_memory_0005' if table=='alembic_version' else 'kulai_security_0003'})
                 assert (await transport.get('/api/memories',headers=headers(credential))).status_code == 503
             no_private_work(runtime)
     asyncio.run(run())

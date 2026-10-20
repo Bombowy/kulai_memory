@@ -279,8 +279,8 @@ async def create_verified_backup(
 
     async def verify() -> VerifiedBackupResult:
         archive = (await _backup_archive(output, force=False, config=config, retain_on_failure=True)).backup
-        if archive.source_snapshot.revision != ("kulai_memory_0004",):
-            raise DatabaseSafetyError("Desktop deletion requires schema kulai_memory_0004.")
+        if archive.source_snapshot.revision != ("kulai_memory_0005",):
+            raise DatabaseSafetyError("Verified backup requires schema kulai_memory_0005.")
         if on_verifying is not None:
             on_verifying()
         restored = await _restore_verified_source(output, config=config)

@@ -27,6 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from .settings import get_settings
 from .security_persistence.integrity import SecuritySnapshot, inspect_security_schema, security_snapshot
+from .conversation_persistence.integrity import (
+    ConversationSnapshot, TABLES as CONVERSATION_TABLES, inspect_conversation_schema,
+    conversation_rows_valid, conversation_snapshot,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -108,6 +112,9 @@ PRE_MIGRATION_FAILURES = frozenset({
     "schema.memory_ingestion_tombstones",
     "constraint.memory_ingestion_tombstones",
 })
+CONVERSATION_MIGRATION_FAILURES = frozenset({
+    "conversation.tables", "conversation.schema", "conversation.integrity",
+})
 _PRE_MIGRATION_REQUIRED_CHECKS = PRE_MIGRATION_FAILURES | frozenset({
     "alembic.expected_head", "database.connection", "database.transaction_read_only",
     "postgres.version", "extension.vector", "table.memories",
@@ -119,6 +126,9 @@ _PRE_MIGRATION_REQUIRED_CHECKS = PRE_MIGRATION_FAILURES | frozenset({
 
 def pre_migration_failures(source: str, head: str) -> frozenset[str]:
     """Enumerate reviewed transitions only, never a generic doctor bypass."""
+    if head == "kulai_memory_0005" and source in {"kulai_memory_0002", "kulai_memory_0003", "kulai_memory_0004"}:
+        previous = pre_migration_failures(source, "kulai_memory_0004") if source != "kulai_memory_0004" else frozenset()
+        return previous | CONVERSATION_MIGRATION_FAILURES | {"alembic.current"}
     if (source, head) == ("kulai_memory_0002", "kulai_memory_0003"):
         return PRE_MIGRATION_FAILURES
     lifecycle = frozenset({"alembic.current", "schema.memories", "constraint.memories_revision_positive"})
@@ -162,7 +172,9 @@ def validate_backup_doctor(
         raise DatabaseSafetyError("Doctor failures do not match the exact allowed pre-migration gap.")
     if pre_migration_from == "kulai_memory_0002" and checks["schema.memory_ingestion_tombstones"].value != {"columns": []}:
         raise DatabaseSafetyError("Pre-migration mode requires the pending tombstone table to be absent.")
-    if heads[0] == "kulai_memory_0004":
+    if heads[0] == "kulai_memory_0005" and checks["conversation.tables"].value != []:
+        raise DatabaseSafetyError("Pre-migration conversations must be completely absent.")
+    if heads[0] in {"kulai_memory_0004", "kulai_memory_0005"} and pre_migration_from in {"kulai_memory_0002", "kulai_memory_0003"}:
         columns = checks["schema.memories"].value
         if not isinstance(columns, dict):
             raise DatabaseSafetyError("Legacy Memory schema could not be verified.")
@@ -223,6 +235,7 @@ class DatabaseSnapshot:
     vectors: VectorFingerprint
     tombstones: TombstoneFingerprint | None
     security: SecuritySnapshot | None = None  # Legacy dumps/snapshots have no security schema.
+    conversations: ConversationSnapshot | None = None  # None for pre-0005 snapshots, never an empty replacement.
 
     def __post_init__(self) -> None:
         if self.tombstones is None and self.revision != ("kulai_memory_0002",):
@@ -562,12 +575,21 @@ async def database_snapshot_url(
                     if not present:
                         raise DatabaseSafetyError("Strict snapshot requires the tombstone table.")
                     tombstones = await tombstone_fingerprint(connection)
+                chat_schema = await inspect_conversation_schema(connection)
+                chat = None
+                if revisions == ("kulai_memory_0005",):
+                    if not chat_schema.valid or not await conversation_rows_valid(connection):
+                        raise DatabaseSafetyError("Conversation snapshot schema or rows are incompatible.")
+                    chat = await conversation_snapshot(connection)
+                elif chat_schema.tables:
+                    raise DatabaseSafetyError("Unversioned conversation tables cannot be snapshotted.")
                 return DatabaseSnapshot(
                     revision=revisions,
                     memories=await memory_fingerprint(connection),
                     vectors=await vector_fingerprint(connection),
                     tombstones=tombstones,
                     security=await security_snapshot(connection),
+                    conversations=chat,
                 )
             finally:
                 await connection.rollback()
@@ -914,6 +936,12 @@ async def run_database_doctor(*, async_url: str | None = None, require_security:
             )
 
             checks.extend(await _tombstone_schema_checks(connection))
+            chat = await inspect_conversation_schema(connection)
+            checks.extend((
+                CheckResult("conversation.tables", set(chat.tables) == set(CONVERSATION_TABLES), list(chat.tables)),
+                CheckResult("conversation.schema", chat.valid),
+                CheckResult("conversation.integrity", chat.valid and await conversation_rows_valid(connection)),
+            ))
 
             revision_constraint = await connection.scalar(text("""
                   SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
