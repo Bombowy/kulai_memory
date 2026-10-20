@@ -56,6 +56,8 @@ def test_export_includes_reviewable_changes_and_omits_unsafe_files(
     _write(root / "src" / "untracked.py", "VALUE = 'lokalny'\n")
     _write(root / "ignored.py", "IGNORED = True\n")
     _write(root / "credentials.json", '{"token": "top-secret"}\n')
+    _write(root / "gateway.key", "PRIVATE KEY MUST NOT BE EXPORTED\n")
+    _write(root / "ingress.pem", "CERTIFICATE MUST NOT BE EXPORTED\n")
     _write(root / "wynik.txt", "OLD REPORT\n")
     _write(root / "link.py", "SHOULD_NOT_BE_EXPORTED = True\n")
     (root / "binary.py").write_bytes(b"source\0binary")
@@ -89,6 +91,8 @@ def test_export_includes_reviewable_changes_and_omits_unsafe_files(
     assert "FILE: src/untracked.py" in exported
     assert "Zażółć" in exported
     assert "top-secret" not in exported
+    assert "PRIVATE KEY MUST NOT BE EXPORTED" not in exported
+    assert "CERTIFICATE MUST NOT BE EXPORTED" not in exported
     assert "OLD REPORT" not in exported
     assert "PREVIOUS EXPORT" not in exported
     assert "SHOULD_NOT_BE_EXPORTED" not in exported
@@ -117,6 +121,8 @@ def test_export_includes_android_and_gradle_reviewable_text_files(
         "mobile/android/build.gradle": "plugins {}\n",
         "mobile/android/gradle.properties": "org.gradle.jvmargs=-Xmx1g\n",
         "mobile/android/settings.gradle.kts": 'rootProject.name = "KulAI Memory"\n',
+        "ops/remote_access/nginx/memory-path.http.conf": "map $request_uri $route { default denied; }\n",
+        "ops/remote_access/nginx/memory-path.server.conf": "location ^~ /memory/ { return 404; }\n",
     }
     for relative_path, content in reviewable_files.items():
         _write(root / relative_path, content)

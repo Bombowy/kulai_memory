@@ -8,7 +8,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import com.kulai.memory.pairing.ServerOrigin
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -43,13 +43,13 @@ class MemoryHttpClient(
         .callTimeout(240, TimeUnit.SECONDS).build(),
     private val authentication: RequestAuthentication = RequestAuthentication(baseUrl),
 ) : MemoryApi {
-    private val base = baseUrl.toHttpUrl()
+    private val base = ServerOrigin(baseUrl, allowLocalCleartext = true)
     private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).build()
 
     override suspend fun listMemories(archived: Boolean, limit: Int, cursor: MemoryHistoryCursor?): MemoryHistoryPage {
         require(limit in 1..100) { "Invalid history request." }
-        val url = base.newBuilder().addPathSegments("api/memories")
+        val url = base.endpoint("api/memories").newBuilder()
             .addQueryParameter("archived", archived.toString()).addQueryParameter("limit", limit.toString())
         cursor?.let {
             url.addQueryParameter("before_created_at", it.beforeCreatedAt.toString())
@@ -59,7 +59,7 @@ class MemoryHttpClient(
     }
 
     override suspend fun getMemory(id: UUID): MemoryDetail = parse(
-        Request.Builder().url(base.newBuilder().addPathSegments("api/memories/$id").build()).build(),
+        Request.Builder().url(base.endpoint("api/memories/$id")).build(),
         MemoryJson::detail,
     )
 
@@ -67,7 +67,7 @@ class MemoryHttpClient(
         require(query.isNotBlank() && query.length <= 10000 && topK in 1..20) { "Invalid assistant request." }
         val body = JSONObject().put("query", query).put("top_k", topK).toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
-        return parse(Request.Builder().url(base.newBuilder().addPathSegments("api/assistant/ask").build())
+        return parse(Request.Builder().url(base.endpoint("api/assistant/ask"))
             .post(body).build(), MemoryJson::answer)
     }
 
@@ -75,7 +75,7 @@ class MemoryHttpClient(
         require(answer.isNotBlank() && answer.length <= 6000) { "Invalid speech request." }
         val body = JSONObject().put("answer", answer).toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
-        return parse(Request.Builder().url(base.newBuilder().addPathSegments("api/assistant/speech-plan").build())
+        return parse(Request.Builder().url(base.endpoint("api/assistant/speech-plan"))
             .post(body).build()) { MemoryJson.speech(it, answer) }
     }
 

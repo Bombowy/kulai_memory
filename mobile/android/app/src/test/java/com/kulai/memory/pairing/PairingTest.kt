@@ -158,11 +158,11 @@ class PairingTest {
         val first = MockWebServer(); val other = MockWebServer(); first.start(); other.start()
         val client = OkHttpClient(); val pending = PendingPairing(UUID.randomUUID(), PairingController.randomSecret(), PairingController.randomSecret(), UUID.randomUUID(), "Phone")
         try {
-            val api = PairingHttpClient(ServerOrigin(first.url("/").toString(), true), client)
+            val api = PairingHttpClient(ServerOrigin(first.url("/memory/").toString(), true), client)
             first.enqueue(MockResponse().setResponseCode(307).setHeader("Location", other.url("/api/pairing/request")))
             try { api.register(pending); fail() } catch (safe: PairingException) { assertNull(safe.cause); assertFalse(safe.toString().contains(pending.receiverSecret)) }
             val request = first.takeRequest()
-            assertEquals("/api/pairing/request", request.path); assertEquals("Pairing " + pending.invitationSecret, request.getHeader("Authorization"))
+            assertEquals("/memory/api/pairing/request", request.path); assertEquals("Pairing " + pending.invitationSecret, request.getHeader("Authorization"))
             assertTrue(request.body.readUtf8().contains(pending.receiverSecret)); assertEquals(0, other.requestCount)
             first.enqueue(MockResponse().setResponseCode(400).setBody(pending.receiverSecret))
             try { api.status(pending); fail() } catch (safe: PairingException) { assertFalse(safe.toString().contains(pending.receiverSecret)) }

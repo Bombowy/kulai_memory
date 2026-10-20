@@ -33,7 +33,7 @@ fun ServerConnectionScreen(controller: PairingController, allowLocalDev: Boolean
             ConnectionStatus.UNAVAILABLE -> "Unavailable"
         })
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        OutlinedTextField(origin, { origin = it }, label = { Text("Server origin (HTTPS or local loopback)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(origin, { origin = it }, label = { Text("Server URL (HTTPS or local loopback)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         if (allowLocalDev) Row {
             Switch(localDev, { localDev = it })
             Text("LOCAL_DEV via ADB reverse", modifier = Modifier.padding(top = 12.dp))

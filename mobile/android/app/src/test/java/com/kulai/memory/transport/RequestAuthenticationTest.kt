@@ -1,6 +1,7 @@
 package com.kulai.memory.transport
 
 import com.kulai.memory.*
+import com.kulai.memory.pairing.ServerOrigin
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.mockwebserver.*
@@ -25,18 +26,21 @@ class RequestAuthenticationTest {
     @Test fun `all HTTP routes use current device credential only in headers`() = runBlocking {
         val server = MockWebServer(); server.start(); val client = client()
         val device = UUID.randomUUID(); val first = token(); val second = token()
-        val snapshot = AtomicReference(DeviceCredential(device, first))
-        val auth = RequestAuthentication(server.url("/").toString(), credentials = CredentialProvider { snapshot.get() })
-        val api = MemoryHttpClient(server.url("/").toString(), client, auth)
+        val base = ServerOrigin(server.url("/memory/").toString(), true)
+        val snapshot = AtomicReference(DeviceCredential(device, first, base.value))
+        val auth = RequestAuthentication(base.value, credentials = CredentialProvider { snapshot.get() })
+        val api = MemoryHttpClient(base.value, client, auth)
         try {
             server.enqueue(MockResponse().setBody(pageJson())); api.listMemories(false)
             server.enqueue(MockResponse().setBody(detailJson())); api.getMemory(FIXTURE_ID)
             server.enqueue(MockResponse().setBody(answerJson())); api.askMemory("Synthetic")
-            snapshot.set(DeviceCredential(device, second))
+            snapshot.set(DeviceCredential(device, second, base.value))
             server.enqueue(MockResponse().setBody("""{"segments":[{"text":"Synthetic","language":"en"}]}"""))
             api.planSpeech("Synthetic")
             for (index in 0..3) {
                 val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+                assertEquals(listOf("/memory/api/memories?archived=false&limit=20", "/memory/api/memories/$FIXTURE_ID",
+                    "/memory/api/assistant/ask", "/memory/api/assistant/speech-plan")[index], request.path)
                 assertEquals("Bearer ${if (index == 3) second else first}", request.getHeader("Authorization"))
                 assertEquals(device.toString(), request.getHeader("X-Kulai-Device-ID"))
                 assertEquals(1, request.headers.values("Authorization").size)
@@ -69,16 +73,17 @@ class RequestAuthenticationTest {
     @Test fun `both websocket handshakes share HTTP header policy and rotate snapshot`() = runBlocking {
         val server = MockWebServer(); server.start(); val client = client()
         val device = UUID.randomUUID(); val snapshot = AtomicReference(DeviceCredential(device, token()))
-        val auth = RequestAuthentication(server.url("/").toString(), credentials = CredentialProvider { snapshot.get() })
+        val base = ServerOrigin(server.url("/memory/").toString(), true)
+        val auth = RequestAuthentication(base.value, credentials = CredentialProvider { snapshot.get() })
         try {
-            for (path in listOf("/ws/memory", "/ws/assistant")) {
+            for (path in listOf("/memory/ws/memory", "/memory/ws/assistant")) {
                 val secret = token(); snapshot.set(DeviceCredential(device, secret))
                 server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
                 }))
                 val opened = CompletableDeferred<Unit>(); val closed = CompletableDeferred<Unit>()
                 val socket = OkHttpVoiceSocketFactory(client, auth).connect(
-                    server.url(path).toString().replaceFirst("http", "ws")) {
+                    base.webSocket(path.removePrefix("/memory/"))) {
                     if (it == SocketEvent.Opened) opened.complete(Unit)
                     if (it is SocketEvent.Closed) closed.complete(Unit)
                 }
@@ -138,9 +143,9 @@ class RequestAuthenticationTest {
 
     @Test fun `HTTP redirects never forward authenticated requests even to same origin`() = runBlocking {
         val server = MockWebServer(); server.start(); val target = MockWebServer(); target.start(); val client = client()
-        val auth = RequestAuthentication(server.url("/").toString(), credentials = CredentialProvider {
+        val auth = RequestAuthentication(server.url("/memory/").toString(), credentials = CredentialProvider {
             DeviceCredential(UUID.randomUUID(), token()) })
-        val api = MemoryHttpClient(server.url("/").toString(), client, auth)
+        val api = MemoryHttpClient(server.url("/memory/").toString(), client, auth)
         try {
             for (location in listOf(target.url("/steal"), server.url("/different"))) {
                 server.enqueue(MockResponse().setResponseCode(307).addHeader("Location", location))

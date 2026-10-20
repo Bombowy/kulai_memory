@@ -63,7 +63,7 @@ class PairingHttpClient(private val origin: ServerOrigin, client: OkHttpClient) 
 
     override suspend fun renew(credential: StoredCredential): StoredCredential {
         val session = credential.session ?: throw RenewalException(RenewalFailure.DENIED)
-        val request = Request.Builder().url(origin.url.newBuilder().addPathSegments("api/security/refresh").build())
+        val request = Request.Builder().url(origin.endpoint("api/security/refresh"))
             .header("Authorization", "Refresh ${session.secret}").tag(RenewalAttempt::class.java, RenewalAttempt())
             .post(JSONObject().put("session_id", session.sessionId.toString()).put("device_id", credential.deviceId.toString())
                 .put("refresh_id", session.refreshId.toString()).toString().toRequestBody("application/json".toMediaType())).build()
@@ -82,7 +82,7 @@ class PairingHttpClient(private val origin: ServerOrigin, client: OkHttpClient) 
 
     private suspend fun send(operation: String, proof: String, body: JSONObject): JSONObject {
         if (!Regex("[A-Za-z0-9_-]{43}").matches(proof)) throw PairingException()
-        val request = Request.Builder().url(origin.url.newBuilder().addPathSegments("api/pairing/$operation").build())
+        val request = Request.Builder().url(origin.endpoint("api/pairing/$operation"))
             .header("Authorization", "Pairing $proof").header("Content-Type", "application/json")
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
         return sendRequest(request)

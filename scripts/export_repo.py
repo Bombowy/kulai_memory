@@ -23,6 +23,7 @@ TEXT_EXTENSIONS = frozenset(
         ".bat",
         ".cfg",
         ".cmd",
+        ".conf",
         ".css",
         ".graphql",
         ".gradle",

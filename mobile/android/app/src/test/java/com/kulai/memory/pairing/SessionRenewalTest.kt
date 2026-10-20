@@ -164,10 +164,10 @@ class SessionRenewalTest {
         val server=MockWebServer(); val foreign=MockWebServer(); server.start(); foreign.start()
         val client=OkHttpClient(); val initial=credential()
         try {
-            val api=PairingHttpClient(ServerOrigin(server.url("/").toString(),true),client)
+            val api=PairingHttpClient(ServerOrigin(server.url("/memory/").toString(),true),client)
             server.enqueue(MockResponse().setResponseCode(307).setHeader("Location",foreign.url("/api/security/refresh")).setBody("{}"))
             try { api.renew(initial); fail() } catch (error:RenewalException) { assertEquals(RenewalFailure.UNCERTAIN,error.outcome) }
-            val request=server.takeRequest(); assertEquals("/api/security/refresh",request.path)
+            val request=server.takeRequest(); assertEquals("/memory/api/security/refresh",request.path)
             assertEquals("Refresh "+initial.session!!.secret,request.getHeader("Authorization"))
             assertFalse(request.body.readUtf8().contains(initial.session.secret)); assertEquals(0,foreign.requestCount)
             server.enqueue(MockResponse().setResponseCode(503).setBody("{\"code\":\"unavailable\",\"request_applied\":false}"))

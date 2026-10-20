@@ -1,7 +1,7 @@
 package com.kulai.memory.transport
 
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import com.kulai.memory.pairing.ServerOrigin
 import okhttp3.Request
 import java.util.UUID
 import java.time.Instant
@@ -30,7 +30,8 @@ class RequestAuthentication(
     private val credentials: CredentialProvider = CredentialProvider { null },
     private val onRejected: (UUID) -> Unit = {},
 ) {
-    private val origin = serverOrigin.toHttpUrl()
+    private val origin = try { ServerOrigin(serverOrigin, allowLocalCleartext = true) }
+        catch (_: Exception) { throw AuthenticationException() }
 
     fun rejected(request: Request) {
         try {
@@ -45,8 +46,7 @@ class RequestAuthentication(
     fun authorize(request: Request): Request {
         try {
             val url = request.url
-            if (url.scheme != origin.scheme || url.host != origin.host || url.port != origin.port ||
-                url.username.isNotEmpty() || url.password.isNotEmpty() ||
+            if (!origin.contains(url) ||
                 url.queryParameterNames.any { it.lowercase() in QUERY_CREDENTIALS } ||
                 request.header("Authorization") != null || request.header("X-Kulai-Device-ID") != null) {
                 throw AuthenticationException()
@@ -61,7 +61,7 @@ class RequestAuthentication(
                 return request
             }
             if (credential.expiresAt <= Instant.now() || credential.serverOrigin != null &&
-                credential.serverOrigin != origin.toString().removeSuffix("/")) throw AuthenticationException()
+                ServerOrigin(credential.serverOrigin, allowLocalCleartext = true).value != origin.value) throw AuthenticationException()
             return request.newBuilder().header("Authorization", credential.bearerValue())
                 .header("X-Kulai-Device-ID", credential.deviceId.toString()).build()
         } catch (_: Exception) {

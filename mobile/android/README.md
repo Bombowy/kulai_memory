@@ -109,12 +109,23 @@ selects `SECURE` and refuses private requests without credentials. The shared
 `CredentialProvider` supplies a nonblocking, thread-safe credential snapshot to
 HTTP and both WS clients. Tokens are sent only in `Authorization: Bearer`;
 `X-Kulai-Device-ID` is a public identity claim validated against the token owner.
-No pairing screen or persistent credential storage is implemented yet.
+Server Connection supports administrator-approved pairing and encrypted credential
+storage. For the shared demo host, enter `https://demo.kulai.eu/memory/`, disable
+LOCAL_DEV, and apply the server before pairing. Root URLs remain supported.
 
-`RequestAuthentication` binds credentials to the configured server origin and
+`ServerOrigin` accepts a root URL or the literal `/memory/` service prefix (also
+accepted without its trailing slash). Other paths, encoded/ambiguous paths,
+userinfo, queries and fragments are rejected. HTTP, NOTE/ASK WebSockets, pairing,
+session refresh and TTS speech-plan all append to that same service base.
+`RequestAuthentication` binds credentials to the configured scheme, host, port
+and service prefix. It blocks requests outside that prefix, including other
+paths on the same domain, and
 rejects credentials in URL query parameters. HTTP/WS redirects are disabled.
 Remote cleartext and remote `LOCAL_DEV` are rejected. Loopback HTTP/WS remain
-available for this phase and ADB reverse; TLS/WSS deployment is future work.
+available for ADB reverse. The `/memory/` Nginx candidate consists of
+`ops/remote_access/nginx/memory-path.http.conf` (existing `http {}`) and
+`memory-path.server.conf` (existing demo HTTPS `server {}`). Deployment still
+requires separate approval; backend `public_origin` stays pathless.
 Provider errors and 401/403 produce authored, secret-free errors. Credential
 objects redact their string representation. No token appears in BuildConfig,
 resources or logs; `SECURITY_MODE` contains only the public mode name.
