@@ -22,8 +22,15 @@ It reuses the current AI lane and Qwen/BGE clients, reads at most 12 complete tu
 (24k history characters; 48k total prompt characters), and commits one complete
 pair after generation. Stored request UUIDs replay without Qwen. Conversation mode
 works with no Memories and validates optional Memory references; classic V1 ASK
-keeps its grounded-only policy. HTTP, WebSocket and Android integration are deferred
-to V2.4; this branch still does not migrate or restart the running V1.
+keeps its grounded-only policy.
+
+V2.4 exposes conversation creation, paginated history and text questions under
+`/api/conversations`, plus optional conversation/request UUIDs in `/ws/assistant`.
+Text and voice share durable history, credentials and idempotency; the V1 protocol
+is unchanged. See the [conversation API contract](docs/CONVERSATION_API.md),
+including the exact routes required by a future Nginx allowlist update. This branch
+does not migrate or restart the running V1 or deploy proxy changes. Android
+integration remains for V2.5.
 
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
 The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader

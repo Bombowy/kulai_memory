@@ -43,8 +43,8 @@ class CheckedQwen(ConversationalLLM):
 
 
 @asynccontextmanager
-async def running_conversations(monkeypatch, *, real=False):
-    async with owned_store(security=False) as (owned, config, target, factory, _):
+async def running_conversations(monkeypatch, *, real=False, security=False):
+    async with owned_store(security=security) as (owned, config, target, factory, _):
         engine = factory.kw["bind"]
         bge, llm = CheckedProvider(engine), CheckedQwen(factory)
         kwargs = {}

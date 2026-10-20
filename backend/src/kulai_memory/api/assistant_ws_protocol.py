@@ -1,12 +1,13 @@
-"""Separate question v1 protocol; canonical voice-note v1 stays unchanged."""
+"""Question v1 with optional conversation IDs; canonical voice notes unchanged."""
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from kulai_memory.application.events import (
     ErrorEvent, RagStartedEvent, SessionReadyEvent, TranscriptFinalEvent,
 )
+from kulai_memory.conversations import TurnWrite
 from .assistant_contract import AssistantResponse
 from .memory_ws_protocol import PcmAudioContract, ProtocolMessageError
 
@@ -20,6 +21,14 @@ class QuestionStartCommand(_Command):
     type: Literal["question.start"]
     audio: PcmAudioContract
     top_k: int = Field(default=5, ge=1, le=20, strict=True)
+    conversation_id: UUID | None = None
+    request_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def conversation_identity_pair(self):
+        if (self.conversation_id is None) != (self.request_id is None):
+            raise ValueError("Both conversation identities are required.")
+        return self
 
 
 class QuestionStopCommand(_Command):
@@ -48,4 +57,13 @@ class AssistantAnswerEvent(BaseModel):
     payload: AssistantResponse
 
 
-AssistantEvent = SessionReadyEvent | TranscriptFinalEvent | RagStartedEvent | AssistantAnswerEvent | ErrorEvent
+class ConversationAnswerEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    schema_version: Literal[1] = 1
+    type: Literal["conversation.completed"] = "conversation.completed"
+    session_id: UUID
+    sequence: int = Field(ge=1)
+    payload: TurnWrite
+
+
+AssistantEvent = SessionReadyEvent | TranscriptFinalEvent | RagStartedEvent | AssistantAnswerEvent | ConversationAnswerEvent | ErrorEvent

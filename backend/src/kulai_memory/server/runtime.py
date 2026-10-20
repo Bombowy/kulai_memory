@@ -364,15 +364,41 @@ class VoiceMemoryServerRuntime:
 
     async def ask_conversation(self, *, conversation_id: UUID, request_id: UUID,
                                question: str, input_kind: str):
-        """Internal V2 service only; no HTTP/WebSocket route is installed here."""
-        from kulai_memory.conversation_persistence import PostgresConversationRepository
+        """One durable V2 turn in the existing AI lane."""
         from kulai_memory.conversations.service import ConversationService
         self._require_started()
         if self._rag is None or self._session_factory is None:
             raise ServerRuntimeError()
-        return await ConversationService(repository=PostgresConversationRepository(self._session_factory),
+        return await ConversationService(repository=self._conversation_repository(),
             generate_answer=self._rag.answer_conversation, run_ai=self._run_ai).ask(
                 conversation_id=conversation_id, request_id=request_id, question=question, input_kind=input_kind)
+
+    def _conversation_repository(self):
+        from kulai_memory.conversation_persistence import PostgresConversationRepository
+        self._require_started()
+        if self._session_factory is None:
+            raise ServerRuntimeError()
+        return PostgresConversationRepository(self._session_factory)
+
+    async def create_conversation(self, *, title=None):
+        return await self._conversation_repository().create(title=title)
+
+    async def list_conversations(self, *, limit=20, cursor=None):
+        return await self._conversation_repository().list_conversations(limit=limit, cursor=cursor)
+
+    async def conversation_messages(self, *, conversation_id, limit=50, before_sequence=None):
+        return await self._conversation_repository().recent_messages(conversation_id=conversation_id,
+            limit=limit, before_sequence=before_sequence)
+
+    async def replay_conversation_voice(self, *, conversation_id, request_id):
+        """A voice request UUID identifies the original recording, not new audio."""
+        from kulai_memory.conversations import IdempotencyConflict, InputKind, TurnWrite
+        stored = await self._conversation_repository().get_turn(request_id=request_id)
+        if stored is None:
+            return None
+        if stored.conversation_id != conversation_id or stored.user.input_kind != InputKind.VOICE:
+            raise IdempotencyConflict()
+        return TurnWrite(turn=stored, created=False)
 
     async def plan_speech(self, *, answer: str) -> SpeechPlan:
         """Final answer data only; reuse Qwen and the AI lane, without DB reads."""

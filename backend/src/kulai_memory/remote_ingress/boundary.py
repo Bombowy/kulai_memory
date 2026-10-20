@@ -104,8 +104,12 @@ class RemoteBinding:
             allowed = path in _WS
         else:
             method = scope.get("method")
+            conversation = re.fullmatch(r"/api/conversations/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/(messages|ask)", path)
+            conversation_allowed = (method in ("GET", "POST") and path == "/api/conversations" or
+                conversation is not None and (method, conversation[1]) in (("GET", "messages"), ("POST", "ask")))
             allowed = (method == "POST" and path in _POST or method == "GET" and
-                       (path == "/api/memories" or re.fullmatch(r"/api/memories/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", path)))
+                       (path == "/api/memories" or re.fullmatch(r"/api/memories/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", path))
+                       or conversation_allowed)
         return bool(allowed)
 
 

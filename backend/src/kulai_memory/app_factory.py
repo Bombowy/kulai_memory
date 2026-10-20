@@ -12,6 +12,7 @@ from .api.memory_ws import RuntimeFactory, create_memory_ws_router
 from .api.memory_http import create_memory_http_router
 from .api.speech_http import create_speech_http_router
 from .api.assistant_ws import create_assistant_ws_router
+from .api.conversations_http import create_conversations_router
 from .settings import get_settings
 from .security import Authenticator, AuthorizationPolicy, SecurityConfig, SecurityMode, SecurityReader
 from .security.storage import DenyAllSecurityReader
@@ -66,7 +67,7 @@ def create_app(*, voice_runtime_factory: RuntimeFactory | None = None,
         redoc_url="/redoc" if config.mode is SecurityMode.LOCAL_DEV else None,
         routers=(create_health_router(), memory_router, create_memory_http_router(), create_assistant_ws_router(),
                  create_speech_http_router(), create_pairing_router(service=pairing_service),
-                 create_session_router(service=session_service)),
+                 create_session_router(service=session_service), create_conversations_router()),
     )
     # PL: logger vendor ufa nagłówkom klienta. EN: replace at the host boundary;
     # log only fixed operation/status fields, without modifying the submodule.

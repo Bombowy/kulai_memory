@@ -8,9 +8,11 @@ from kulai_memory.application.events import (
     ErrorEvent, ErrorPayload, RagStartedEvent, SessionReadyEvent, TranscriptFinalEvent, TranscriptFinalPayload,
 )
 from kulai_memory.server.runtime import ServerRuntimeError
+from kulai_memory.conversations import ConversationNotFound, ConversationPersistenceError, IdempotencyConflict
+from kulai_memory.conversations.domain import ConversationGenerationError
 from .assistant_contract import AssistantResponse
 from .assistant_ws_protocol import (
-    AssistantAnswerEvent, QuestionStartCommand, QuestionStopCommand, parse_question_command,
+    AssistantAnswerEvent, ConversationAnswerEvent, QuestionStartCommand, QuestionStopCommand, parse_question_command,
 )
 from .cancellation import ClientDisconnected, until_disconnect
 from .memory_ws_protocol import ProtocolMessageError
@@ -42,9 +44,24 @@ class _QuestionConnection:
         if wav is not None:
             wav.cleanup()
 
-    async def process(self, runtime, top_k):
+    async def process(self, runtime, start):
         """Keep disconnect monitoring active across STT, events and RAG."""
         path = self.wav.finish()
+        if start.conversation_id is not None:
+            replay = await runtime.replay_conversation_voice(conversation_id=start.conversation_id,
+                                                            request_id=start.request_id)
+            if replay is not None:
+                self.cleanup()
+                await self.emit(TranscriptFinalEvent, payload=TranscriptFinalPayload(text=replay.turn.user.content))
+                await self.emit(RagStartedEvent)
+                await self.emit(ConversationAnswerEvent, payload=replay)
+                await self.socket.close(code=1000)
+                return
+            if self.wav.byte_count == 0:
+                self.cleanup()
+                await self.emit(TranscriptFinalEvent, payload=TranscriptFinalPayload(text=""))
+                await self.socket.close(code=1000)
+                return
         result = await runtime.transcribe_question(audio_path=path)
         # Whisper has stopped reading. Audio is gone before RAG starts.
         self.cleanup()
@@ -53,14 +70,19 @@ class _QuestionConnection:
             await self.socket.close(code=1000)
             return
         await self.emit(RagStartedEvent)
-        answer = await runtime.ask_memory(query=result.text, top_k=top_k)
-        await self.emit(AssistantAnswerEvent, payload=AssistantResponse.from_result(answer))
+        if start.conversation_id is None:
+            answer = await runtime.ask_memory(query=result.text, top_k=start.top_k)
+            await self.emit(AssistantAnswerEvent, payload=AssistantResponse.from_result(answer))
+        else:
+            answer = await runtime.ask_conversation(conversation_id=start.conversation_id,
+                request_id=start.request_id, question=result.text, input_kind="voice")
+            await self.emit(ConversationAnswerEvent, payload=answer)
         await self.socket.close(code=1000)
 
     async def run(self):
         try:
             runtime = server_runtime(self.socket.app)
-            top_k = None
+            start = None
             while True:
                 message = await self.socket.receive()
                 if message["type"] == "websocket.disconnect":
@@ -79,17 +101,17 @@ class _QuestionConnection:
                     if self.wav is not None:
                         raise ProtocolMessageError()
                     self.wav = OwnedPcmWav()
-                    top_k = command.top_k
+                    start = command
                     await self.emit(SessionReadyEvent)
                 elif isinstance(command, QuestionStopCommand):
                     if self.wav is None:
                         raise ProtocolMessageError()
-                    if self.wav.byte_count == 0:
+                    if self.wav.byte_count == 0 and start.conversation_id is None:
                         self.cleanup()
                         await self.emit(TranscriptFinalEvent, payload=TranscriptFinalPayload(text=""))
                         await self.socket.close(code=1000)
                         return
-                    await until_disconnect(self.process(runtime, top_k), self.socket.receive,
+                    await until_disconnect(self.process(runtime, start), self.socket.receive,
                                            protocol_error=ProtocolMessageError)
                     return
         except PcmAudioLimitError:
@@ -98,6 +120,14 @@ class _QuestionConnection:
             await self.fail(code="protocol.invalid_message", message="Invalid assistant request.", close=1002)
         except ServerRuntimeError:
             await self.fail(code="server.unavailable", message="Memory assistant is unavailable.", close=1013)
+        except ConversationNotFound:
+            await self.fail(code="conversation.not_found", message="Conversation not found.", close=1008)
+        except IdempotencyConflict:
+            await self.fail(code="conversation.request_conflict", message="Request identity conflicts with an existing turn.", close=1008)
+        except ConversationPersistenceError:
+            await self.fail(code="conversation.unavailable", message="Conversation service is unavailable.", close=1013)
+        except ConversationGenerationError:
+            await self.fail(code="conversation.generation_failed", message="Conversation answer could not be generated.", close=1011)
         except (WebSocketDisconnect, ClientDisconnected):
             pass
         except asyncio.CancelledError:

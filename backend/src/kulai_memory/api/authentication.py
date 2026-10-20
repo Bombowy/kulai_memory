@@ -51,6 +51,10 @@ def _action(scope: Scope) -> Action | None:
     method = scope.get("method")
     if method == "GET" and (path == "/api/memories" or re.fullmatch(r"/api/memories/[^/]+", path)):
         return Action.MEMORY_READ
+    if method == "GET" and (path == "/api/conversations" or re.fullmatch(r"/api/conversations/[^/]+/messages", path)):
+        return Action.MEMORY_READ
+    if method == "POST" and (path == "/api/conversations" or re.fullmatch(r"/api/conversations/[^/]+/ask", path)):
+        return Action.ASSISTANT_ASK
     if method == "POST":
         return {"/api/assistant/ask": Action.ASSISTANT_ASK,
                 "/api/assistant/speech-plan": Action.SPEECH_PLAN}.get(path)
