@@ -111,6 +111,18 @@ class PostgresConversationRepository:
         except Exception:
             raise ConversationPersistenceError() from None
 
+    async def get_turn(self, *, request_id: UUID) -> Turn | None:
+        identity(request_id)
+        try:
+            async with self._sessions() as db, db.begin():
+                await db.execute(sa.text("SET TRANSACTION READ ONLY"))
+                exists = await db.scalar(sa.select(turns.c.request_id).where(turns.c.request_id == request_id))
+                return None if exists is None else await self._stored_turn(db, request_id)
+        except ConversationError:
+            raise
+        except Exception:
+            raise ConversationPersistenceError() from None
+
     async def recent_messages(self, *, conversation_id: UUID, limit: int = 50,
                               before_sequence: int | None = None) -> MessagePage:
         identity(conversation_id)

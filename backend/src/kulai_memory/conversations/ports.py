@@ -3,11 +3,15 @@
 from typing import Protocol
 from uuid import UUID
 
-from .domain import CompletedTurn, Conversation, ConversationCursor, ConversationPage, MessagePage, TurnWrite
+from .domain import CompletedTurn, Conversation, ConversationCursor, ConversationPage, MessagePage, Turn, TurnWrite
 
 
 class ConversationRepository(Protocol):
     async def create(self, *, title: str | None = None) -> Conversation: ...
+
+    async def get_turn(self, *, request_id: UUID) -> Turn | None:
+        """Read a committed pair by global request identity, without a write."""
+        ...
 
     async def append_turn(self, *, conversation_id: UUID, completed: CompletedTurn) -> TurnWrite:
         """Commit both messages together; identical request/payload returns original.

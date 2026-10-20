@@ -101,3 +101,15 @@ class MemoryRagRuntime:
             query=query, retrieval=retrieval, llm_provider=self._llm,
         )
         return result, context
+
+    async def answer_conversation(self, *, query, history):
+        """Borrow the same BGE/Qwen clients; V1's grounded ASK is unchanged."""
+        from .conversations.generation import bounded_history, generate_conversation, retrieval_query
+        from .conversations.domain import ConversationGenerationError
+        if self._stack is None:
+            raise ConversationGenerationError()
+        history = bounded_history(history)
+        retrieval = await retrieve_memories(query=retrieval_query(query, history),
+            top_k=5, service=self._retrieval, session_factory=self._factory)
+        return await generate_conversation(query=query, history=history,
+            context=build_memory_context(retrieval), llm_provider=self._llm)

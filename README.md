@@ -17,6 +17,14 @@ backup/restore commands require explicit `--pre-migration-from kulai_memory_0004
 strict mode requires `0005`. Restore verification uses marker-owned temporary
 databases and compares all conversation fingerprints, including empty tables.
 
+V2.3 adds `ConversationService` and the internal runtime method `ask_conversation`.
+It reuses the current AI lane and Qwen/BGE clients, reads at most 12 complete turns
+(24k history characters; 48k total prompt characters), and commits one complete
+pair after generation. Stored request UUIDs replay without Qwen. Conversation mode
+works with no Memories and validates optional Memory references; classic V1 ASK
+keeps its grounded-only policy. HTTP, WebSocket and Android integration are deferred
+to V2.4; this branch still does not migrate or restart the running V1.
+
 TASK 4D.1 adds a neutral security core and shared HTTP/WebSocket enforcement.
 The ASGI app defaults to `SECURE` and uses a managed PostgreSQL credential reader
 only after strict schema verification. TASK 4D.2A adds an independent security

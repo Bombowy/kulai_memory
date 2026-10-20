@@ -194,3 +194,23 @@ class ConversationNotFound(ConversationError):
 
 class IdempotencyConflict(ConversationError):
     safe_message = "The request identifier was already used for a different turn."
+
+
+class ConversationQuestion(Value):
+    conversation_id: UUID
+    request_id: UUID
+    question: str = Field(strict=True, max_length=10_000)
+    input_kind: InputKind
+
+    _text = field_validator("question")(valid_text)
+
+
+class ConversationAnswer(Value):
+    answer: str = Field(strict=True, max_length=6000)
+    memory_ids: tuple[UUID, ...] = Field(default=(), max_length=MAX_MEMORY_REFERENCES)
+
+    _text = field_validator("answer")(valid_text)
+
+
+class ConversationGenerationError(ConversationError):
+    safe_message = "The conversation answer could not be generated."

@@ -362,6 +362,18 @@ class VoiceMemoryServerRuntime:
                                          session_factory=self._session_factory,
                                          repository_factory=self._repository_factory)
 
+    async def ask_conversation(self, *, conversation_id: UUID, request_id: UUID,
+                               question: str, input_kind: str):
+        """Internal V2 service only; no HTTP/WebSocket route is installed here."""
+        from kulai_memory.conversation_persistence import PostgresConversationRepository
+        from kulai_memory.conversations.service import ConversationService
+        self._require_started()
+        if self._rag is None or self._session_factory is None:
+            raise ServerRuntimeError()
+        return await ConversationService(repository=PostgresConversationRepository(self._session_factory),
+            generate_answer=self._rag.answer_conversation, run_ai=self._run_ai).ask(
+                conversation_id=conversation_id, request_id=request_id, question=question, input_kind=input_kind)
+
     async def plan_speech(self, *, answer: str) -> SpeechPlan:
         """Final answer data only; reuse Qwen and the AI lane, without DB reads."""
         validate_speech_text(answer)

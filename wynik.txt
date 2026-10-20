@@ -1,99 +1,60 @@
-TASK V2.2/8 — MIGRACJA HISTORII ROZMÓW
-Data: 2026-10-21 (Europe/Warsaw)
-Wynik: ZREALIZOWANE. Kod i testy wyłącznie w C:\Bombowy\Projekty\kulai_memory.
+TASK V2.3/8 — KONTEKST ROZMOWY W QWEN
+2026-10-21 | C:\Bombowy\Projekty\kulai_memory
+WYNIK: ZREALIZOWANE, bez wdrażania zmian do działającej V1.
 
-IMPLEMENTACJA
-- Alembic kulai_memory_0005 po 0004: wyłącznie kulai_conversations,
-  kulai_conversation_turns i kulai_conversation_messages, z ograniczeniami i indeksami V2.1.
-- db_doctor sprawdza wersję, tabele, kolumny, typy, domyślne wartości, ograniczenia,
-  indeksy i kompletność par wypowiedzi. Odrzuca częściowy lub niewersjonowany schemat.
-- Istniejący pg_dump/pg_restore, weryfikacja kopii i Recovery obejmują również
-  metadane rozmów, UUID żądań i wszystkie pola wiadomości. Odciski czytane strumieniowo.
-- Zachowano jawny backup/restore sprzed migracji: --pre-migration-from kulai_memory_0004
-  (również dotychczasowe 0002/0003). Tryb strict wymaga 0005.
-- Istniejący drill zawiera rozmowę PL/EN, tekst/głos i referencje Memory.
-  Testowy punkt odniesienia także jest bazą z potwierdzonym markerem własności.
-- Bramki zgodności wersji dopuszczają 0005; Security nadal kulai_security_0003.
-  Nie zmieniono algorytmu odcisku security. Lokalny probe odczytuje rzeczywisty head.
-- Modele i adapter V2.1 zachowane. Bez nowych API, integracji AI i zmian Androida.
+WYKONANE
+- ConversationService.ask(conversation_id, request_id, question, input_kind) oraz
+  wewnętrzne VoiceMemoryServerRuntime.ask_conversation; bez nowych endpointów.
+- Odczyt do 12 kompletnych tur, chronologicznie. Historia do 24 tys. znaków,
+  cała treść promptu do 48 tys.; odcinane tylko najstarsze pełne pary.
+- Ten sam klient Qwen/BGE i istniejąca kolejka _run_ai. Bez transakcji DB podczas AI.
+  Nowa rozmowa działa bez Memories. Klasyczny ASK nadal wymaga dowodów z Memory.
+- Istniejący RAG otrzymuje bieżące pytanie i ograniczony kontekst ostatniej tury.
+  Cytowania sprawdzane względem faktycznie przekazanych Memories i zapisywane
+  jako assistant.memory_ids. Brak automatycznych canonical Memories i audio.
+- Repozytorium rozszerzone o get_turn(request_id). Zapisana odpowiedź jest zwracana
+  bez ponownej generacji, również po utracie potwierdzenia zapisu i reconnect.
+  Konflikt treści/rozmowy/input_kind jest odrzucany.
+- append_turn dopiero po pełnym, poprawnym wyniku z finish_reason=stop.
+  Błąd, timeout, anulowanie, ucięty JSON lub obce cytowanie nie zapisują fałszywej tury.
 
-RZECZYWISTE TESTY — POSTGRESQL 18.6
-- Rozmowy V2.1/V2.2 + migracja i kopie historyczne: 20 PASS.
-  Dowody: 0004 -> 0005, downgrade/ponowny upgrade, PL/EN, trwałość po reconnect
-  i nowym procesie, współbieżność, UUID/idempotencja, rollback, limity/paginacja,
-  niezmienione Memories/pgvector/security, restore historii i tożsamości żądań,
-  wykrywanie uszkodzonego schematu/par i zmienionych odcisków.
-- Regresja NOTE/MEMORY/ASK/RAG, lifecycle, security, pairing, refresh, TLS i Recovery:
-  końcowo 222 PASS, 12 SKIP po ponownym teście poprawionego drill.
-  Pierwszy przebieg: 221 PASS, 12 SKIP, 1 FAIL starego testu czytającego skonfigurowaną
-  bazę. Poprawiono izolację; cały jego plik następnie 5 PASS, w tym pełny drill.
-- Łącznie końcowy wynik różnych scenariuszy PostgreSQL: 242 PASS, 12 SKIP.
-  SKIP obejmują opcjonalne rzeczywiste modele; użyto kontrolowanych providerów.
-  DDL i DML wykonywano WYŁĄCZNIE na marker-owned tymczasowych bazach.
-- Testy jednostkowe backend/tests + tests: 1471 PASS, 1 SKIP, 1 znany FAIL:
-  tests/test_security_schema.py::test_historical_rate_fingerprint_encoding_stays_compatible.
-  Przyczyna: stary mock Connection.stream nie obsługuje execution_options.
-  Wcześniej potwierdzony błąd V1 pozostawiono zgodnie z zakresem zadania.
-- git diff --check: PASS. Skan zmienianych plików pod kątem sekretów: PASS.
-- JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.2-20261020\
-  conversations.xml, regression.xml (pierwszy przebieg), backup-drill.xml (5 PASS), unit.xml.
+RZECZYWISTY QWEN3.5:9B + BGE-M3 — PASS (17,92 s)
+Wyłącznie fikcyjne dane w marker-owned PostgreSQL, żadnej prywatnej bazy:
+1. Projekt Niebieska Latarnia: notes A5, cena 30 zł, koszt 12 zł, promocja 300 zł.
+2. „A ile zarobimy na 10 sztukach?” — odpowiedź 180 zł po kosztach produkcji.
+3. „Jak to promować?” — trzy pomysły w ustalonym budżecie.
+4. Po NOWYM połączeniu/engine DB: rozwinięcie pierwszego pomysłu (ulotki)
+   z poprawną nazwą projektu i odniesieniem do notesów A5.
+5. Przypomnienie kwot: cena 30 zł, koszt 12 zł, budżet 300 zł.
+W tych pięciu turach canonical Memories=0 i vectors=0.
+Druga rozmowa Zielony Most nie przejęła kontekstu pierwszej.
+Następnie jawnie dodana syntetyczna Memory Aurora=79 zł: poprawna cena i dokładny UUID
+cytowania. Ponowienie żądania nie wywołało modelu: łącznie 7 wywołań, a nie 8.
 
-STAN DZIAŁAJĄCEJ V1
-- Bez migracji i zapisów do kulai_memory_mvp ani starej kulai_memory.
-  Końcowy odczyt READ ONLY: obie nadal 0004, bez tabel rozmów.
-  kulai_memory_mvp nadal Security 0003.
-- Ten sam most PID 35288, uruchomiony 2026-10-20 20:15:55 UTC;
-  nadal nasłuchuje 127.0.0.1:8443 i 10.77.77.2:8443.
-  Publiczne anonimowe /memory/api/memories: oczekiwane HTTP 401.
-- Nie restartowano backendu, mostu ani usług. Bez zmian VPS/Nginx/WireGuard,
-  produkcyjnych certyfikatów, telefonu i innych projektów. Fact Intelligence zamrożony.
-- Produkcyjne przejście 0004 -> 0005 pozostaje do kontrolowanego przełączenia pełnej V2.
-  Nie dodano migracji przy starcie aplikacji.
+TESTY
+- Serwis/repozytorium PostgreSQL: 20 PASS; dodatkowy test okna ostatnich 12 tur: 1 PASS.
+- Obowiązkowy rzeczywisty Qwen/BGE + PostgreSQL: 1 PASS, opis powyżej.
+- Regresja NOTE/MEMORY/ASK/RAG, lifecycle, backup/migracja i security: 39 PASS, 4 SKIP
+  opcjonalnych testów rzeczywistych modeli. Obowiązkowy test Qwena wykonano osobno.
+- Wszystkie jednostkowe backend/tests + tests: 1487 PASS, 1 SKIP, 1 wcześniej znany FAIL:
+  test_security_schema.py::test_historical_rate_fingerprint_encoding_stays_compatible
+  (stary mock stream nie obsługuje execution_options). Bez zmian niezwiązanych mechanizmów.
+- git diff --check i skan sekretów: PASS.
+- JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.3-20261021\
+  service.xml, history-window.xml, qwen-real.xml, regression.xml, unit.xml.
 
-PROBLEMY ROZWIĄZANE / OBSERWACJE
-- pg_dump/restore upraszcza nawiasy CHECK z BETWEEN. Doctor akceptuje dwa dokładne,
-  równoważne zapisy; test realnego restore przechodzi.
-- Stary drill zależał od skonfigurowanej bazy. Test używa teraz istniejącego mechanizmu
-  marker-owned, bez obejścia walidacji bezpieczeństwa backupu.
-- Nie pozostały bazy z tych testów. Istnieje stara baza testowa utworzona 2026-10-10,
-  bez poprawnego markera własności, nieaktywna; nie należy do zadania i nie była usuwana.
-- Nie ma blokad implementacji V2.2. Znany błąd mocka security opisano wyżej.
+V1 / POZOSTAŁE PROBLEMY
+Bez migracji i zapisów do kulai_memory_mvp i starej kulai_memory. Końcowy READ ONLY:
+obie nadal 0004, bez tabel rozmów; MVP Security nadal 0003. Bazy testów usunięte.
+Most nadal PID 35288, ten sam czas uruchomienia i port 8443; anonimowe publiczne API: 401.
+Bez restartu V1, zmian mostu/VPS/Nginx/WireGuard/certyfikatów/telefonu.
+Brak nowych problemów. Znany błąd testu fingerprintu opisano wyżej.
+API HTTP/WebSocket i Android pozostają do V2.4; Fact Intelligence nadal wyłączony.
 
-GIT I ARTEFAKTY
-Gałąź: feature/kulai-memory-v2-conversations.
-Zwykły commit zadania zawiera ten raport; jego SHA: git rev-parse HEAD.
-Publikacja wyłącznie origin/feature/kulai-memory-v2-conversations, bez force push i merge.
-main pozostaje fbf77dae3e96efbf4f71084f73da2eac3f7b6f16.
-Jeden katalog projektu, bez nowych worktree/kopii repo.
+GIT / PLIKI
+Gałąź: feature/kulai-memory-v2-conversations; jeden katalog i zwykły commit/push.
+Commit: Add bounded Qwen conversations using existing AI lane.
+Raport jest częścią commita; dokładny SHA tego zadania: git rev-parse HEAD.
+Bez merge, force push i zmian main (fbf77dae3e96efbf4f71084f73da2eac3f7b6f16).
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
-Eksport z scripts/export_repo.py: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
-Eksport jest artefaktem ignorowanym przez Git; bez .env, kluczy i raportów.
-
-PLIKI ZADANIA
-- README.md
-- backend/migrations/versions/kulai_memory_0005_conversations.py
-- backend/src/kulai_memory/backup_service.py
-- backend/src/kulai_memory/conversation_persistence/__init__.py
-- backend/src/kulai_memory/conversation_persistence/integrity.py
-- backend/src/kulai_memory/conversation_persistence/schema.py
-- backend/src/kulai_memory/database_safety.py
-- backend/src/kulai_memory/security_persistence/runtime.py
-- backend/src/kulai_memory/security_recovery/gate.py
-- backend/src/kulai_memory/security_recovery/recovery.py
-- backend/tests/integration/test_conversations_migration_postgres.py
-- backend/tests/integration/test_conversations_postgres.py
-- backend/tests/integration/test_memory_lifecycle_postgres.py
-- backend/tests/integration/test_pre_migration_backup_postgres.py
-- backend/tests/integration/test_recovery_startup.py
-- backend/tests/integration/test_remote_ingress_tls.py
-- backend/tests/integration/test_security_postgres.py
-- backend/tests/integration/test_tombstone_backup_postgres.py
-- backend/tests/test_conversations.py
-- backend/tests/test_desktop_delete.py
-- backend/tests/test_fact_memory_contract.py
-- backend/tests/test_memory_persistence.py
-- ops/remote_access/validator.py
-- scripts/db_backup_restore_drill.py
-- tests/test_security_schema.py
-- tests/test_tombstone_fingerprint.py
-- wynik.txt
+Świeży eksport z scripts/export_repo.py: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
