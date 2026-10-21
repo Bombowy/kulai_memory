@@ -1,67 +1,49 @@
-TASK V2.8/8 — GALAXY S25 ULTRA, TESTY W TOKU
+TASK V2.8/8 — WERYFIKACJA GALAXY I SCALENIE V2
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-V2.8 ZAKOŃCZONE: NIE — aktualizacja etykiet czeka na USB, pozostały testy ręczne.
 
-AKTUALNA POPRAWKA — TEMATY NA LIŚCIE CHAT
-- Użytkownik potwierdził historię po zamknięciu i ponownym otwarciu: PASS.
-  Zgłosił identyczne etykiety „Rozmowa z KulAI” przy rozmowach bez tytułu.
-- Poprawiono wyłącznie Androida: dla rozmowy bez tytułu lista pokazuje początek
-  pierwszego pytania, tekstowego lub głosowego. Zapisany tytuł ma pierwszeństwo;
-  dla pustej rozmowy pozostaje „Nowa rozmowa”. Temat ograniczony do 80 znaków
-  Unicode, widok do 2 wierszy. Późniejsze pytania nie nadpisują pierwszego tematu.
-- Istniejące rozmowy: GET messages?limit=1&before_sequence=2 przez obecne API.
-  Odczytywana tylko pierwsza wiadomość, bez ładowania całej historii. Lista pojawia
-  się przed pobraniem tematów; błąd podglądu jej nie blokuje. Anulowanie i zmiana
-  generacji chronią przed spóźnionymi wynikami. Tematy można odtworzyć po restarcie.
-- Bez nowych endpointów, bazy lokalnej, generowania tytułów przez Qwen,
-  zapisów metadanych do PostgreSQL i zmian backendu/Nginx.
-- Pliki: ChatController.kt, ChatScreen.kt, testy ChatControllerTest.kt,
-  ChatTestFixtures.kt, ChatTransportTest.kt; dodatkowo raport i eksport.
-- Test reprodukcji: 3 FAIL przed poprawką; po poprawce testDebugUnitTest
-  231 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS. Pokryto PL/EN, głos/tekst,
-  dwie rozmowy, restart, długą historię, Unicode, awarię/anulowanie oraz HTTP
-  z /memory/, autoryzacją i dokładnymi parametrami ograniczonego odczytu.
-  SKIP: dotychczasowy opt-in Android/PostgreSQL wymagający osobnego backendu testowego.
+STATUS
+- V2 działa na fizycznym Galaxy S25 Ultra. Użytkownik potwierdził działanie
+  i polecił commit, scalenie do main oraz push.
+- Nie ma osobnego potwierdzenia kontrolowanej utraty LTE i ponowienia bez
+  duplikatów; ten przypadek pozostaje NOT CONFIRMED. Ogólne „działa wszystko”
+  nie zastępuje opisu wykonania tego testu.
+
+TESTY FIZYCZNE
+- PASS użytkownika: NOTE Saved, odczyt notatki w MEMORY po odłączeniu USB,
+  ASK tekstowy i głosowy, CHAT tekst/głos ze wspólnym kontekstem,
+  historia po ponownym otwarciu, tematy rozmów, odczyt PL i EN.
+- PASS: SPEAK, auto-read i STOP AUDIO na Galaxy przez ADB; odczyt PL/EN
+  i końcowe działanie potwierdzone przez użytkownika. STOP AUDIO objęte jego
+  końcowym ogólnym potwierdzeniem po prośbie o sprawdzenie tego przycisku.
+- Aktualizacja install -r: Success, podpis zgodny, rekord parowania zachowany.
+  Server https://demo.kulai.eu/memory/, SECURE, LOCAL_DEV OFF, Paired.
+- Tematy sprawdzone także technicznie przez ADB na LTE, Wi-Fi OFF, reverse pusty.
+  Osobnego testu tematów przy odłączonym USB nie potwierdzono.
+
+KOD I REGRESJA
+- Android: CHAT z trwałą historią tekst/głos i tematami z pierwszego pytania.
+  Poprawki TTS usuwają metadane Memory i Markdown wyłącznie z tekstu mowy.
+  Można wyjść z Server Connection bez parowania; identyczne APPLY zachowuje sesję.
+- Ostatnia pełna regresja Androida: 231 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
+  Wynik ponownie zweryfikowany w zapisanym XML, bez powtarzania testów dla raportu.
+  SKIP: istniejący opt-in test Android/PostgreSQL wymagający testowego backendu.
 - Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
-  v2.8-chat-topics-before-fix.xml i v2.8-chat-topics-final.xml.
-- APK przygotowany, podpis zgodny z poprzednią wersją; JESZCZE NIE ZAINSTALOWANY:
-  telefon niepodłączony do ADB. SHA-256:
-  1D36A249BEE4ABCEE5229E7A9984BE04BE933376EBF11842B4229A2B342B3C7D
+  v2.8-chat-topics-final.xml, v2.8-chat-topics-phone.json i raporty TTS.
+- Kontrola nazw plików i sygnatur sekretów w 74 plikach różnicy V2/main: PASS.
+  git diff --check: PASS. Bez nowych zmian kodu przy końcowym scalaniu.
 
-ZACHOWANE POPRAWKI / WYNIKI FIZYCZNE
-- Na telefonie ostatnio zainstalowany APK TTS:
-  29C0E5EF017B715443CB8244412113D3BDBBD0A6856CBBC5206F425B550FE3C3.
-- PASS: CHAT TTS nie czyta memory_id; projekcja mowy usuwa Markdown, dzięki czemu
-  strict speech-plan przeszedł dla syntetycznej odpowiedzi. Treść/historia bez zmian.
-  SPEAK, auto-read i STOP AUDIO sprawdzone na Galaxy przez ADB.
-- PASS: nawigacja BACK TO MEMORY/systemowe Wstecz także bez parowania;
-  chronione dane pozostają niedostępne bez credentials. APPLY SERVER przy tych samych
-  ustawieniach zachowuje parowanie i nie anuluje refresh.
-- Wcześniejsze ponowne parowanie wykonano po osobnej zgodzie użytkownika przez
-  pairing_admin z Recovery Gate i porównaniem kodu telefonu. Od tego czasu aktualizacje
-  przez install -r zachowały identyczny zaszyfrowany rekord i podpis aplikacji.
-
-RĘCZNE LTE/5G — POTWIERDZONE PRZEZ UŻYTKOWNIKA
-- PASS: NOTE Saved — fikcyjny pakiet Rubin / 47 zł; MEMORY po odłączeniu USB.
-- PASS: ASK tekstowy i ASK głosowy.
-- PASS: CHAT odpowiedź oraz głosowe dopowiedzenie z kontekstem i automatycznym odczytem PL.
-- PASS: historia rozmowy widoczna po zamknięciu i ponownym otwarciu aplikacji.
-- NOT CONFIRMED: automatyczny odczyt EN.
-- NOT RUN ręcznie: etykiety tematów po nowej aktualizacji, pełne SPEAK/STOP/auto,
-  utrata LTE/reconnect/brak duplikatów, końcowa regresja i dłuższa stabilność sesji.
-  Testy ADB nie zastępują potwierdzeń ręcznych.
-
-USŁUGI / GIT / NASTĘPNY KROK
-- Bez restartów backendu, mostu, Nginx, PostgreSQL i Ollamy; bez migracji, restore,
-  zmian VPS/WireGuard/certyfikatów i kasowania danych. Most ostatnio PID 32348,
-  start UTC 2026-10-21T03:12:45.3247371Z. Baza 0005 / security 0003; ostatni
-  strict doctor i Recovery Gate OPEN/match PASS przy zatwierdzonym parowaniu.
-- Jeden katalog, gałąź feature/kulai-memory-v2-conversations; bez merge do main.
-  Zwykły commit/push wyłącznie poprawki Androida, jej testów i raportu.
-  Eksport odświeżony istniejącym scripts/export_repo.py.
-- Następny krok: podłączyć Galaxy przez USB, wgrać przygotowany APK przez install -r,
-  potwierdzić etykiety istniejących rozmów i wrócić do testów LTE/5G.
+GIT I USŁUGI
+- Zgoda użytkownika obejmuje teraz main. Zweryfikowano, że main jest przodkiem V2;
+  scalenie fast-forward zachowuje całą historię i identyczny kod w katalogu roboczym.
+- Kod V2 przed końcowym raportem: 44885afd34b15c93e50ed0c1f3b5d5d5f582f15d.
+  Końcowy commit raportu: git log -1; lokalne i zdalne main/V2 sprawdzane po push.
+- Jeden katalog projektu; bez worktree, force push i usuwania gałęzi V2.
+- Bez restartów mostu/backendu/Nginx/PostgreSQL/Ollamy, migracji, restore,
+  zmian VPS/WireGuard/certyfikatów oraz kasowania danych aplikacji.
+  Most PID 32348 działa od 2026-10-21T03:12:45Z. Ostatnio zweryfikowany schemat
+  kulai_memory_mvp: memory 0005 / security 0003; legacy kulai_memory bez zmian.
 
 APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+SHA-256: 1D36A249BEE4ABCEE5229E7A9984BE04BE933376EBF11842B4229A2B342B3C7D
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
 Eksport: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
