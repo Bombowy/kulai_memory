@@ -1,81 +1,82 @@
-TASK V2.6/8 — KOŃCOWA WERYFIKACJA V2.1–V2.5
+TASK V2.7/8 — WDROŻENIE BACKENDU V2
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-GOTOWE DO WDROŻENIA V2.7: TAK
-Dotyczy przygotowania do kontrolowanego wdrożenia; V2.7 NIE rozpoczęto.
+V2.7 WDROŻONE: TAK
+Możemy instalować przygotowany APK na Galaxy S25 Ultra w osobnym V2.8.
+APK NIE instalowano, danych aplikacji nie czyszczono; V2.8 nie rozpoczęto.
 
-TESTY KOŃCOWE
-- Backend unit: 1488 PASS, 0 FAIL, 1 SKIP (symlinki niedostępne na Windows).
-- Integracja: 457 unikalnych PASS, 0 FAIL, 32 SKIP. Wszystkie 56 plików testów
-  integracyjnych uruchomiono: dwa zestawy dały 407 PASS / 82 SKIP; osobne,
-  rzeczywiste uruchomienia zastąpiły 48 pominiętych testów Nginx i 2 modeli.
-  Pozostałe 32 SKIP to dodatkowe scenariusze wymagające osobnych opt-in
-  (Desktop/TTS oraz warianty testów modeli); nie są zaliczone jako PASS.
-- Android testDebugUnitTest: 225 PASS, 0 FAIL, 0 SKIP. assembleDebug: PASS.
-  Pełne Gradle --rerun-tasks; klient OkHttp HTTP/WS z testowym PostgreSQL 0005.
-  CHAT tekst/głos, historia po ponownym otwarciu, retry UUID, błędy/anulowanie;
-  regresje NOTE, ASK, MEMORY, TTS, pairing, refresh i prefiks /memory/: PASS.
-- Migracja 0004 → 0005, doctor i backup/restore: 9 PASS na marker-owned bazach.
-  Zachowane canonical Memories, wektory pgvector i dane/sesje security;
-  odtworzone rozmowy i idempotencja. Sprawdzony również downgrade na bazie testowej.
-- 48 testów rzeczywistego, izolowanego Nginx: PASS. Istniejący zweryfikowany
-  binarny Nginx, wyłącznie losowe porty loopback; bez zmian VPS.
-- Po zakończeniu: 0 baz z prawidłowym markerem własności testów.
+MIGRACJA / DANE / BACKUP
+- Po potwierdzeniu WDRAŻAJ V2.7 zatrzymano wyłącznie most Memory PID 35288,
+  z ochroną istniejącego mutexu Recovery Gate przed przerwaniem operacji security.
+- Bezpośrednio przed migracją sprawdzono current_database()=kulai_memory_mvp
+  i źródło 0004. Wykonano WYŁĄCZNIE kulai_memory_0004 → kulai_memory_0005.
+- Strict db_doctor: PASS po migracji i ponownie po wszystkich testach.
+  Security nadal kulai_security_0003; Recovery Gate OPEN, zgodny z bazą.
+- Pełne fingerprinty Memories, wektorów, tombstones i security po migracji
+  IDENTYCZNE z migawką po zatrzymaniu V1. Dotychczasowe parowanie/sesje zachowane.
+  Legacy kulai_memory nadal 0004 bez tabel rozmów; nie wykonywano na niej zapisów.
+- Pełny backup, bez --force, poza repo, z --pre-migration-from kulai_memory_0004:
+  C:\Users\patry\AppData\Local\KulAI-Memory-Deploy\kulai_memory_mvp-pre-v2.7-20261021T023649Z.dump
+  46404 bajty, pg_dump 18.6.
+  SHA-256: f1480370da7beb786dd38f9332bbea7149e525b818a278a62e9fc0933ee52e71
+- Rzeczywisty restore do marker-owned bazy: PASS, pełne fingerprinty identyczne;
+  baza kontrolna usunięta PRZED migracją. Końcowa kontrola archiwum SHA/rozmiaru PASS.
+  Pozostałych baz z prawidłowym markerem testów: 0.
 
-RZECZYWISTE MODELE — BEZ PODSTAWIONYCH ODPOWIEDZI
-- 2 PASS: lokalny qwen3.5:9b, BGE-M3 bge-m3:567m-fp16, Whisper large-v3
-  CUDA int8_float16 na RTX 5060 Ti. Wyłącznie syntetyczne dane i testowe bazy.
-  Whisper użył istniejącego cache w trybie offline; niczego nie pobierano.
-- Polska rozmowa min. 5 tur, odniesienia do poprzednich odpowiedzi,
-  ponowne połączenie PostgreSQL, niezależne rozmowy i rozmowa bez Memories: PASS.
-- SECURE HTTP/WS: tekst/głos/tekst, odtworzenie historii, retry bez generacji,
-  głosowy NOTE → MEMORY → klasyczny ASK oraz CHAT z prawidłowym cytowaniem,
-  speech-plan TTS i refresh: PASS. 2 rozmowy / 5 tur / 10 wiadomości;
-  7 rzeczywistych wywołań Qwena, 7 BGE, 2 Whispera. Po NOTE: 1 Memory / 1 wektor.
+MOST / MTLS / NGINX
+- Istniejący remote_bridge.py --enable działa jako PID 32348,
+  start UTC 2026-10-21T03:12:45.3247371Z; ten sam chroniony JSON:
+  C:\ProgramData\KulAI-Memory-Remote\config\ingress-bridge.json
+  SECURE, 127.0.0.1/10.77.77.2:8443, peer 10.77.77.1; certyfikaty/WireGuard bez zmian.
+- Rzeczywisty mTLS VPS 57.128.226.91 → PC: PASS. Bez certyfikatu klienta TLS
+  odmówił połączenia; bez app credentials HTTP 401. Przed zmianą Nginx rzeczywiste
+  uwierzytelnione list/create/ask/history przez mTLS: PASS, z prawdziwym Qwenem.
+- Zmieniono WYŁĄCZNIE /etc/nginx/snippets/kulai-memory-path.http.conf,
+  dokładnie zatwierdzone 7 dodanych linii; pozostałe 3 hashe konfiguracji bez zmian.
+  Diff SHA-256: b8509cbdeb409cb55c69e2df53ac4248f2bd7b7bf2af48622d175577ab66faf9
+  Nowy plik SHA-256: 7355fcd429b09d7cc307f25cb2fdf83ddcb895a3764fe9b639f251ee70575a64
+- nginx -t PASS, następnie jeden reload WYŁĄCZNIE Nginx; status active.
+  Bez nowych vhostów/include i zmian innych ścieżek, domen lub publicznego certyfikatu.
+- Kopie Nginx:
+  /var/backups/kulai-memory-v1/v2.7-20261021T023649Z-nginx.tar
+  C:\Users\patry\AppData\Local\KulAI-Memory-Deploy\v2.7-20261021T023649Z-nginx.tar
+  SHA-256 obu: 8981c17e7b5f34654463887c2f76b0d224f3f31dfaf3bfd121052d146b0281a3
 
-MINIMALNE POPRAWKI
-- Znany fingerprint FAIL był błędnym mockiem stream SQLAlchemy. Naprawiono
-  wyłącznie mock; identyczny historyczny SHA potwierdzony także w PostgreSQL.
-- Naprawiono test kontroli usunięcia bazy: katalog maintenance zamiast źródłowej DB.
-- Izolowany fixture demo akceptuje bazowy schemat 0005; bez zmian logiki
-  Fact Intelligence, instalacji produkcyjnej ani włączania tego modułu.
-- Dodano rzeczywisty test całego przepływu i docs/V2_7_PREFLIGHT.md.
+RZECZYWISTE TESTY PUBLICZNE — PASS
+- https://demo.kulai.eu/memory/: nowe API rozmów 201/200 z autoryzacją,
+  tekst → głos → tekst w tej samej historii; Qwen3.5:9b, BGE-M3 i Whisper large-v3.
+- Kontynuacja kontekstu, ponowne połączenie HTTP, listowanie/paginacja historii,
+  dwie niezależne rozmowy; retry pierwotnego UUID w HTTP i WS bez duplikatów.
+- Głosowy NOTE → Saved, MEMORY odczyt, klasyczny ASK tekstowy i głosowy V1,
+  CHAT z rzeczywistym cytowaniem syntetycznej Memory, speech-plan TTS: PASS.
+- Prawdziwe pairing/request/status/claim; zatwierdzenie wyłącznie lokalnym
+  pairing_admin.py z Recovery Gate. Refresh PASS: nowe access działa, stare odrzucone.
+- Nowe endpointy bez credentials: 401; błędne metody/UUID/ścieżki/parametry: 404.
+- Oddzielny klient kontrolny został odwołany przez pairing_admin.py.
+  Nie używano ani nie resetowano credentials telefonu. Bez ujawniania prywatnych treści.
+- Pozostawiono jawnie opisane dane syntetyczne: 2 rozmowy, 5 kompletnych tur,
+  10 wiadomości oraz 1 NOTE/1 wektor. Audio testowe usunięte, nie zapisano go w bazie.
+- Dodatkowe izolowane testy fragmentu Nginx przed wdrożeniem: 7 PASS / 0 FAIL.
 
-V1 / GOTOWOŚĆ WDROŻENIA — TYLKO ODCZYT
-- kulai_memory_mvp nadal 0004, security 0003; stara kulai_memory nadal 0004.
-  Brak tabel rozmów w obu bazach. Recovery Gate OPEN, zgodny z bazą.
-- Ten sam most SECURE: PID 35288, start UTC 2026-10-20T20:15:55.7286080Z.
-  Bez restartu, migracji produkcyjnej, zapisów danych lub zmian infrastruktury.
-- Rzeczywiste mTLS VPS → PC przez WireGuard: 401 bez credentials, poprawny TLS.
-  Publiczne /memory/api/memories: 401; /memory/api/conversations: 404 (V1).
-- nginx -t: PASS bez reload. Hashe aktywnych konfiguracji bez zmian.
-  Wszystkie 6 zapisanych adresów demo/mentor/propertly/mrkacyk/printet3d/default
-  zachowało statusy i hashe odpowiedzi z baseline; propertly ma oczekiwane 401.
-- Dokładne ścieżki Nginx, hashe, krótki plan V2.7 i rollback do V1 oraz checklistę
-  Galaxy S25 Ultra zapisano w docs/V2_7_PREFLIGHT.md. Rollback uwzględnia,
-  że V1 wymaga schematu 0004; bez automatycznego downgrade/resetu bazy.
+POZOSTAŁE STRONY
+Przed zmianą i NATYCHMIAST po reload: 6/6 statusów ORAZ hashy odpowiedzi
+zgodnych z baseline: demo / 200, /mentor/ 200, chronione /propertly/ 401,
+mrkacyk / 200, https://mrkacyk.kulai.eu/printet3d/ 200, default HTTP VPS 200.
+Bez regresji, bez rollbacku. Nie restartowano PostgreSQL/Ollamy ani innych usług.
 
-APK / POZOSTAŁA WERYFIKACJA
-C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
-SHA-256: FC5670FD31FB30D8872896F4B7A1E4509D48DFB6C13C1776C58946E5E2415BD6
-apksigner: PASS; com.kulai.memory, minSdk 26, targetSdk 36, podpis debug.
-Nie instalowano APK. Brak telefonu w ADB. Fizyczny mikrofon, lokalne głosy TTS,
-układ ekranu i LTE Galaxy S25 Ultra wymagają testu po osobno zatwierdzonym wdrożeniu.
-Brak blokerów zakresu V2.6; pominięcia i test fizyczny wyszczególniono powyżej.
-
-GIT / DOWODY
-Gałąź: feature/kulai-memory-v2-conversations. Jeden katalog, bez worktree.
-Commit zweryfikowanych zmian: bb60d28e99036462e77049e642d7fe8a03f9e047
-Commit ten jest na origin/feature/kulai-memory-v2-conversations; raport osobno.
-Main bez zmian: fbf77dae3e96efbf4f71084f73da2eac3f7b6f16. Bez merge/force push.
-Kontrola zakresu, skan sekretów i git diff --check: PASS.
-Zmienione pliki: tests/test_security_schema.py;
-backend/tests/integration/test_security_postgres.py;
-backend/tests/integration/test_remote_acceptance_network.py;
-backend/tests/integration/test_conversation_real_models.py;
-backend/src/kulai_memory/desktop/fact_review/demo.py;
-docs/V2_7_PREFLIGHT.md; wynik.txt.
-JUnit/logi: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.6-*
-(unit-final.xml, integration-final-a/b.xml, models-final.xml,
-nginx-isolated.xml, android-gradle.log). Starsze nieudane próby nie są wynikiem końcowym.
+GIT / ARTEFAKTY / OGRANICZENIA
+- Gałąź feature/kulai-memory-v2-conversations, jeden katalog, bez worktree/merge/main.
+  Wdrożono zweryfikowany kod 9c1d92cd94e31fd1ff1eaa7939d61973e6dece97.
+  Zmiany zadania obejmują tylko fragment http, jego testy, dokumentację API/wdrożenia
+  i ten raport; zwykły commit/push na tej samej gałęzi, SHA w odpowiedzi końcowej.
+- APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+  SHA-256: FC5670FD31FB30D8872896F4B7A1E4509D48DFB6C13C1776C58946E5E2415BD6
+  Fizyczny mikrofon/TTS/UI i LTE Galaxy pozostają do V2.8; teraz niczego nie instalowano.
+- Procedura i rollback: docs/V2_7_PREFLIGHT.md. V1 NIE wolno uruchamiać na 0005.
+  Nie wykonywano automatycznego downgrade, pełnego restore produkcji ani recovery/release.
+  Nie włączano Fact Intelligence, nie dodawano funkcji, modeli lub infrastruktury.
+- Dowody poza repo: C:\Users\patry\AppData\Local\KulAI-Memory-Deploy\v2.7-20261021T023649Z-*
+  (quiesced-before, backup-verified, migration-complete, backend-authenticated,
+  public-smoke, final-health, sites.after-reload; prywatny plik klienta nie trafia do Git).
+- Brak krytycznych błędów wdrożenia lub nierozwiązanych blokerów V2.7.
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
-Eksport istniejącym skryptem: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
+Eksport: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt

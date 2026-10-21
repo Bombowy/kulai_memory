@@ -1,10 +1,49 @@
-# V2.7 deployment checklist — preparation only
+# V2.7 deployment record and rollback checklist
 
-Read-only inspection on 2026-10-21. No cutover, production migration, APK
-installation, configuration write or service reload was performed by V2.6.
-The final test verdict and verification commit are recorded in `wynik.txt`.
+V2.7 was deployed on 2026-10-21 after the operator explicitly confirmed
+`WDRAŻAJ V2.7`. V2.6 had performed read-only production verification only.
+No APK was installed; physical Galaxy/LTE testing remains V2.8.
+The current result is recorded in `wynik.txt`.
 
-## Observed running V1
+## Verified deployed V2
+
+- Only `kulai_memory_mvp` was upgraded, 0004 -> 0005. Strict database doctor PASS;
+  security remains 0003 and Recovery Gate OPEN/matching. Immediately after
+  migration, full Memories/vector/tombstone/security fingerprints equaled the
+  quiesced 0004 baseline. Legacy `kulai_memory` remains 0004 without CHAT tables.
+- Full pre-migration archive, outside Git, never overwritten:
+  `C:/Users/patry/AppData/Local/KulAI-Memory-Deploy/kulai_memory_mvp-pre-v2.7-20261021T023649Z.dump`.
+  Size 46,404 bytes; SHA-256
+  `f1480370da7beb786dd38f9332bbea7149e525b818a278a62e9fc0933ee52e71`.
+  Existing backup/restore tools used pre-migration-from 0004. Actual restore
+  fingerprints matched in full; the marker-owned database was removed before migration.
+- Only the old Memory bridge PID 35288 was stopped, under the existing gate's
+  checkpoint mutex. The same SECURE command/config now runs as PID 32348,
+  started UTC `2026-10-21T03:12:45.3247371Z`, on loopback/WireGuard TCP 8443.
+  No PostgreSQL/Ollama/other application service was restarted.
+- Real VPS mTLS passed CA/SAN/client-certificate validation. Missing client
+  certificate failed at TLS; missing app credentials returned 401. Before proxy
+  activation, authenticated direct mTLS list/create/Qwen ask/history all passed.
+- Only `/etc/nginx/snippets/kulai-memory-path.http.conf` changed: exactly the
+  approved seven added lines. Its SHA-256 is now
+  `7355fcd429b09d7cc307f25cb2fdf83ddcb895a3764fe9b639f251ee70575a64`.
+  The other three configuration hashes below remain unchanged. `nginx -t` PASS,
+  then one Nginx reload. All six demo statuses/body hashes matched immediately
+  before and after reload; no rollback was necessary.
+- Actual public HTTP/WSS passed: local-admin pairing/claim, text and real Whisper
+  voice CHAT with Qwen/BGE, fresh-client history, pagination, identical UUID retries
+  across HTTP/WS, two independent conversations, NOTE/MEMORY, classic text/voice
+  ASK, a valid synthetic Memory citation, speech-plan and session refresh.
+  Old access was denied after refresh; invalid methods/UUIDs/query names were denied.
+- The separate synthetic verification device was revoked using local
+  `pairing_admin.py`; phone credentials were never used or reset. Two clearly
+  titled test conversations (5 turns/10 messages) and one synthetic NOTE/vector
+  remain as verification data. Final strict doctor/gate PASS, zero owned test DBs.
+- Protected evidence files use the prefix
+  `C:/Users/patry/AppData/Local/KulAI-Memory-Deploy/v2.7-20261021T023649Z-`.
+  Only their sanitized results belong in Git; no archive/credentials/audio do.
+
+## Observed V1 before deployment
 
 - VPS: `ubuntu@57.128.226.91`; existing HTTPS vhost
   `/etc/nginx/sites-available/demo-kulai` (enabled as `demo-kulai`).
@@ -30,7 +69,7 @@ The final test verdict and verification commit are recorded in `wynik.txt`.
   SHA-256: demo root 200, mentor 200, protected propertly 401, mrkacyk root 200,
   `https://mrkacyk.kulai.eu/printet3d/` 200, default `http://57.128.226.91/` 200.
 
-Configuration SHA-256 before verification (recheck immediately before cutover):
+Configuration SHA-256 before deployment (the old http fragment is retained in backup):
 
 | File | SHA-256 |
 | --- | --- |
@@ -39,7 +78,48 @@ Configuration SHA-256 before verification (recheck immediately before cutover):
 | `/etc/nginx/snippets/kulai-memory-path.http.conf` | `c6f78b72826604a65f0cc42bfa1b4b68a2ced4f8408496b21f5b7b7b0b77d90d` |
 | `/etc/nginx/snippets/kulai-memory-path.server.conf` | `0eeb3f0b13caa9dfd4b7be3784a248987ccd560b994cc81c03a4ef6dac8704cd` |
 
-## Later V2.7, only after authorization
+## Reviewed V2.7 procedure
+
+### Prepared phase 1, 2026-10-21 — approved with `WDRAŻAJ V2.7`
+
+- Verified V2 commit: `9c1d92cd94e31fd1ff1eaa7939d61973e6dece97`, same feature
+  branch and one checkout. All four active Nginx hashes above still match.
+  The V1 PID/start time, schema 0004/security 0003 and OPEN gate still match.
+- New immutable backup of those four Nginx files:
+  `/var/backups/kulai-memory-v1/v2.7-20261021T023649Z-nginx.tar` and
+  `C:/Users/patry/AppData/Local/KulAI-Memory-Deploy/v2.7-20261021T023649Z-nginx.tar`.
+  Both SHA-256: `8981c17e7b5f34654463887c2f76b0d224f3f31dfaf3bfd121052d146b0281a3`.
+- Proposed change touches only `/etc/nginx/snippets/kulai-memory-path.http.conf`:
+  seven added lines allowing the documented conversation method/path pairs.
+  Pagination names are restricted; existing API validation checks values and
+  paired list cursors. The server fragment, includes, TLS and other routes stay as is.
+  Exact diff: `C:/Users/patry/AppData/Local/KulAI-Memory-Deploy/v2.7-20261021T023649Z-nginx.diff`.
+  Diff SHA-256: `b8509cbdeb409cb55c69e2df53ac4248f2bd7b7bf2af48622d175577ab66faf9`.
+  Candidate SHA-256: `7355fcd429b09d7cc307f25cb2fdf83ddcb895a3764fe9b639f251ee70575a64`.
+  The adjacent `-manifest.json` records guarded paths/hashes; recheck before use.
+- Real isolated TLS/mTLS Nginx tests: 7 PASS, including valid pagination,
+  prefix removal, invalid UUIDs/paths/methods/queries and the existing V1 behavior.
+  All six live demos match the saved V1 status/body hashes. No active config changed.
+- Planned new database archive (not created before approval):
+  `C:/Users/patry/AppData/Local/KulAI-Memory-Deploy/kulai_memory_mvp-pre-v2.7-20261021T023649Z.dump`.
+  Its existing parent directory passed PRIVATE ACL validation. Never use `--force`.
+  After stopping only Memory writers/bridge, take a fresh snapshot, run existing
+  `scripts/db_backup.py --output <that exact archive> --pre-migration-from kulai_memory_0004`,
+  then `scripts/db_restore_smoke.py <that exact archive> --pre-migration-from kulai_memory_0004`
+  with the backend interpreter. Require equal full fingerprints and owned DB cleanup.
+  Recheck `current_database() = kulai_memory_mvp`, source 0004 and the sole local
+  head 0005 immediately before the existing Alembic upgrade; keep security at 0003.
+- Restart only the existing bridge command with its current protected JSON and
+  backend interpreter. Require strict doctor, unchanged canonical/security
+  fingerprints and OPEN gate before reopening Memory. Then apply only the hashed
+  diff, test/reload Nginx and repeat all six demo checks. A separate synthetic
+  verification client will exercise authenticated pairing/refresh, NOTE/MEMORY/ASK,
+  speech-plan and text/voice CHAT without using the phone's credentials or private text.
+- Estimated interruption: approximately 5–10 minutes for Memory only, longer if
+  a critical check fails. Stop further changes on failure. Database downgrade/full
+  restore requires a separate decision as described below; never start V1 on 0005.
+
+### Approved-window procedure
 
 1. Agree on the brief Memory maintenance window and rollback, retain the V1
    commit `fbf77dae3e96efbf4f71084f73da2eac3f7b6f16`, protected bridge settings,
@@ -63,8 +143,8 @@ Configuration SHA-256 before verification (recheck immediately before cutover):
    existing pagination queries; UUID matching and all other restrictions stay
    strict. See `CONVERSATION_API.md`. After approval and hash recheck: write only
    the approved files, `nginx -t`, then reload only Nginx on PASS. Compare all demos.
-6. After backend/proxy checks pass, install the separately approved, verified APK
-   without clearing application data, preserve pairing, and execute the phone checks.
+6. Leave APK installation to separately authorized V2.8. Preserve application
+   data/pairing and execute the phone checks then; V2.7 does not install an APK.
 
 ## Rollback decision
 

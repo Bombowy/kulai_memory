@@ -221,6 +221,54 @@ def test_raw_path_and_method_allowlist_blocks_normalization_and_browser(certific
     asyncio.run(bounded_test(run()))
 
 
+def test_conversation_allowlist_strips_prefix_and_preserves_pagination(certificates, tmp_path):
+    """Real TLS/proxy routing; durable API/model behavior is tested separately."""
+    async def run():
+        async with isolated_gateway(certificates, tmp_path) as (client, _, _, _, received, _, _):
+            identity = '00000000-0000-4000-8000-000000000001'
+            base = '/memory/api/conversations'
+            cursor = 'before_activity_at=2026-10-21T12%3A30%3A00.123456%2B02%3A00&before_id='+identity
+            routes = [('GET', base), ('POST', base), ('GET', base+'?limit=20'),
+                ('GET', base+'?limit=20&'+cursor), ('GET', base+'?'+cursor),
+                ('GET', base+'/'+identity+'/messages'),
+                ('GET', base+'/'+identity+'/messages?limit=40&before_sequence=3'),
+                ('POST', base+'/'+identity+'/ask')]
+            for method, path in routes:
+                count = len(received)
+                response = await client.request(method, path, json={} if method == 'POST' else None)
+                assert response.status_code == 401  # Existing SECURE auth, not a routing 404/503.
+                assert len(received) == count+1
+                raw, query, headers = received[-1]
+                target, _, args = path.removeprefix('/memory').partition('?')
+                assert raw == target.encode() and query == args.encode()
+                assert headers[b'host'] == b'demo.kulai.eu'
+            assert (await client.get('/mentor/')).text == 'mentor-unchanged'
+    asyncio.run(bounded_test(run()))
+
+
+def test_conversation_allowlist_rejects_other_methods_paths_and_queries(certificates, tmp_path):
+    async def run():
+        async with isolated_gateway(certificates, tmp_path) as (client, _, _, _, received, _, _):
+            identity = 'abcdef01-2345-4000-8000-000000000001'
+            base = '/memory/api/conversations'
+            denied = [('DELETE', base), ('HEAD', base), ('PUT', base),
+                ('POST', base+'?limit=20'), ('GET', base+'/'),
+                ('GET', base+'?access_token=synthetic'), ('GET', base+'?limit=20&unknown=1'),
+                ('GET', base+'/'+identity.upper()+'/messages'),
+                ('GET', base+'/'+identity[:-1]+'/messages'),
+                ('GET', base+'/'+identity+'/messages/'),
+                ('POST', base+'/'+identity+'/messages'), ('GET', base+'/'+identity+'/ask'),
+                ('POST', base+'/'+identity+'/ask?limit=20'),
+                ('GET', base+'/'+identity+'/messages?before_id='+identity),
+                ('GET', base+'/'+identity+'/messages?limit=not-a-number'),
+                ('GET', base+'/'+identity+'/messages?limit=20&access_token=synthetic'),
+                ('GET', '/memory/api/%63onversations')]
+            for method, path in denied:
+                assert (await client.request(method, path)).status_code == 404
+            assert received == []
+    asyncio.run(bounded_test(run()))
+
+
 @pytest.mark.parametrize('fault', ['ca', 'name', 'client'])
 def test_mtls_fails_closed_without_upstream_requests_or_retries(certificates, tmp_path, fault):
     async def run():

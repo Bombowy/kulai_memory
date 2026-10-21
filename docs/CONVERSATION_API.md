@@ -3,7 +3,8 @@
 This is the transport for the existing V2.3 `ConversationService`. It requires
 canonical schema `kulai_memory_0005` and existing SECURE pairing/session
 credentials (security `kulai_security_0003`). No migration runs at startup.
-The running V1 and its Nginx configuration have not been updated by this task.
+V2.7 deployed this backend and the reviewed conversation allowlist under
+`https://demo.kulai.eu/memory/`. See `V2_7_PREFLIGHT.md` for the deployment record.
 
 All requests use the existing `Authorization: Bearer ...` and optional
 `X-Kulai-Device-ID` headers. Credentials never belong in URLs or WebSocket
@@ -103,10 +104,10 @@ is `conversation.not_found` (1008), generation failure is
 acceptance and again when receiving frames, including after credential revocation.
 Temporary WAVs are cleaned up; audio is never stored in conversation tables.
 
-## Future Nginx allowlist change — not deployed
+## Public Nginx allowlist — deployed by V2.7
 
-Only the following new public rules will be required, after separate review and
-approval of the actual Nginx diff:
+The operator reviewed and approved the exact diff enabling only these new public
+method/path pairs in the existing demo HTTPS server:
 
 | Method | Public path | Upstream path |
 | --- | --- | --- |
@@ -120,7 +121,11 @@ payload. The backend mTLS ingress permits precisely the new HTTP method/path
 pairs, rejecting other methods, trailing slashes, unknown subpaths and encoded
 path aliases. Public prefix removal, mTLS verification, header filtering,
 authentication and disabled automatic proxy retries must retain the V1 behavior.
-No existing Nginx fragment, production process, Android client or database was
-changed for this transport task. NOTE, MEMORY, classic ASK and TTS retain their
-existing endpoints and behavior. Conversation text never becomes canonical
-Memory automatically.
+Only the existing `kulai-memory-path.http.conf` allowlist changed in V2.7.
+List queries allow `limit`, `before_activity_at`, `before_id`; message queries
+allow `limit`, `before_sequence`. The API validates their values, bounds and
+paired list cursors. POST conversation endpoints accept no query string through
+this public proxy. Other paths, methods and query names remain denied.
+NOTE, MEMORY, classic ASK and TTS retain their existing endpoints and behavior.
+Conversation text never becomes canonical Memory automatically. Android APK
+installation and the physical LTE test remain the separate V2.8 step.
