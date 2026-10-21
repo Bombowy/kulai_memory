@@ -36,5 +36,11 @@ fun ChatMessage.speechAnswer(): AssistantAnswer {
             .replace(Regex("""[ \t]{2,}"""), " ")
             .replace(Regex("""[ \t]+([,.;:!?])"""), "$1").trim()
     }
+    // Formatting is for display. Send readable prose to the exact-text speech planner.
+    val plain = spoken.replace(Regex("""(?m)^ {0,3}#{1,6}[ \t]+"""), "")
+        .replace(Regex("""\*\*([^\n]+?)\*\*"""), "$1")
+        .replace(Regex("""__([^\n]+?)__"""), "$1")
+        .replace(Regex("""`([^`\n]+)`"""), "$1")
+    if (plain != spoken) spoken = plain.replace(Regex("""\s+"""), " ").trim()
     return AssistantAnswer(AssistantStatus.ANSWERED, spoken, emptyList())
 }

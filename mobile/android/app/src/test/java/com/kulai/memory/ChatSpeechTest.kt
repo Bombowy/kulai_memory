@@ -17,6 +17,11 @@ class ChatSpeechTest {
     @Test fun `CHAT and ASK share one TTS auto switch stops audio and never reads metadata`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val api = FakeMemoryApi(); val conversations = FakeConversationApi(); val gate = MicrophoneGate()
+        api.planner = { text ->
+            // The strict planner rejected the formatted CHAT answer on the real phone.
+            require("**" !in text && '\n' !in text)
+            SpeechPlan(listOf(SpeechSegment(text, SpeechLanguage.PL)))
+        }
         val engine = FakeLocalSpeechEngine(); val speech = MemorySpeechController(backgroundScope, api, engine)
         val note = VoiceMemoryController(backgroundScope, "ws://127.0.0.1/ws/memory", QuestionSockets(), QuestionRecorder(),
             PendingAudioCacheStore(folder.root), dispatcher, microphoneGate = gate)
@@ -29,7 +34,7 @@ class ChatSpeechTest {
         conversations.before = {
             if (conversations.turns.isEmpty()) {
                 val turn = chatTurn(chat.state.value.selected!!.conversationId, conversations.requests.last().first,
-                    answer = "Cena: 79 zł [memory_id: $memoryId]. This is the price.")
+                    answer = "**Cena:** 79 zł [memory_id: $memoryId].\n\n**This is the price.**")
                 conversations.turns += turn.copy(assistant = turn.assistant.copy(memoryIds = listOf(memoryId)))
             }
         }
@@ -44,7 +49,7 @@ class ChatSpeechTest {
         root.selectTab(MemoryTab.CHAT); root.chatAnswerRendered(answer); runCurrent(); assertEquals(2, api.speechRequests.size)
         speech.setAutoSpeak(false); chat.setQuery("Next question"); root.sendChat(); runCurrent()
         root.chatAnswerRendered(chat.state.value.latestAnswer!!); runCurrent(); assertEquals(2, api.speechRequests.size)
-        val referenced = chat.state.value.latestAnswer!!.copy(content = "Delivery is free. (memory_id: $memoryId)", memoryIds = listOf(memoryId))
+        val referenced = chat.state.value.latestAnswer!!.copy(content = "**Delivery is free.** (memory_id: $memoryId)", memoryIds = listOf(memoryId))
         root.speakChat(referenced); runCurrent(); assertEquals("Delivery is free.", api.speechRequests.last())
         assertFalse(api.speechRequests.last().contains(referenced.memoryIds.single().toString()))
         val requestsBeforeEmpty = api.speechRequests.size
@@ -72,6 +77,9 @@ class ChatSpeechTest {
             "[memory_id: $id]" to "",
             "Zysk: 180 zł.\nBudget: 300 PLN." to "Zysk: 180 zł.\nBudget: 300 PLN.",
             "Pole memory_id identyfikuje Memory." to "Pole memory_id identyfikuje Memory.",
+            "## Warsztaty\n\n**Cena:** 47 zł.\n\n__Budget:__ 200 PLN. Kod: `RUBIN`." to
+                "Warsztaty Cena: 47 zł. Budget: 200 PLN. Kod: RUBIN.",
+            "C# oraz 3 * 5 = 15.\nPlain English answer." to "C# oraz 3 * 5 = 15.\nPlain English answer.",
             "  Odpowiedź PL.\n\nEnglish  answer.  " to "  Odpowiedź PL.\n\nEnglish  answer.  ",
         )
         for ((raw, spoken) in cases) {
