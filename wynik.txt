@@ -1,55 +1,57 @@
 TASK V2.8/8 — GALAXY S25 ULTRA, TEST FIZYCZNY W TOKU
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-V2.8 ZAKOŃCZONE: NIE — zgłoszone Not paired blokuje dalsze testy.
+V2.8 ZAKOŃCZONE: NIE — pozostały ręczne testy funkcji przez LTE/5G.
 
-INSTALACJA / RZECZYWISTE TESTY
-- PASS: Galaxy S25 Ultra / SM_S938B, autoryzowane ADB.
-- PASS: aktualizacje wyłącznie adb install -r, Success; ten sam podpis APK.
-  Bez uninstall, pm clear, resetu Keystore i nowego parowania. ADB reverse pusty.
-- PASS wcześniej (użytkownik): Paired, https://demo.kulai.eu/memory/,
-  LOCAL_DEV OFF; testy przy odłączonym USB i wyłączonym Wi-Fi, przez LTE/5G.
-- PASS (użytkownik): CHAT nie czyta już memory_id po poprawce TTS.
+NAPRAWIONA NAWIGACJA / PAROWANIE
+- Zgłoszenie: Server Connection / Not paired bez możliwości powrotu.
+- Poprawiono MemoryClientScreen.kt i pairing/ServerConnectionScreen.kt:
+  zawsze widoczny BACK TO MEMORY u góry i systemowe Wstecz; brak wymuszonego
+  ponownego wejścia do ustawień. Powrót działa niezależnie od stanu parowania.
+- Bez parowania ekran główny jest dostępny, ale zawartość i operacje wymagające
+  uwierzytelnienia pozostają zablokowane. HTTP/WS/autoryzacja bez zmian.
+- PASS na fizycznym Galaxy przez ADB PRZED parowaniem: BACK TO MEMORY,
+  systemowe Wstecz, widoczne cztery zakładki, brak dostępu do chronionej zawartości.
+  Zaszyfrowany zapis połączenia pozostał identyczny.
+- Użytkownik osobno zatwierdził ponowne parowanie. PASS: nowe zaproszenie
+  z lokalnego pairing_admin.py, wprowadzenie do aplikacji przez ADB bez wydruku
+  sekretu, porównanie kodu z rzeczywistego ekranu telefonu z kodem administratora,
+  zatwierdzenie wyłącznie zgodnej sesji i odebranie credentials przez aplikację.
+- PASS: Paired, https://demo.kulai.eu/memory/, LOCAL_DEV OFF, powrót do aplikacji.
+  Dotychczasowe urządzenia i sesje nie były unieważniane. Nie kasowano danych.
+  Jednorazowy sekret usunięty z chronionego pliku po zakończeniu parowania.
+- Wcześniejsze poprawki zachowane: CHAT nie czyta memory_id; APPLY SERVER
+  przy identycznych ustawieniach zachowuje credentials i nie przerywa refresh.
+
+INSTALACJA / TESTY
+- Aktualizacja istniejącej aplikacji przez adb install -r: Success.
+  Podpis zgodny z poprzednim APK; bez uninstall, pm clear i resetu Keystore.
+  ADB reverse pusty; FLAG_SECURE i blokada nagrywania ekranu bez zmian.
+- APK SHA-256: 124722B1A518C26BBC7BE7C5A3B623FB71E5225488AC770D3BE0BB5678FFA7DF
+- testDebugUnitTest: 227 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
+  SKIP: istniejący opt-in Android/PostgreSQL wymagający osobnego testowego backendu.
+- Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
+  v2.8-navigation-final.xml, v2.8-connection-navigation.json.
+
+TESTY RĘCZNE LTE/5G — RZECZYWISTY STAN
+- PASS (użytkownik wcześniej): prawidłowy serwer / SECURE oraz gotowość LTE.
+- PASS (użytkownik): poprawka CHAT TTS — brak czytania memory_id.
 - PASS (użytkownik): NOTE — fikcyjny pakiet Rubin, 47 zł; pojawiło się Saved.
-- FAIL (użytkownik): następnie Server Connection / Not paired, brak powrotu.
-- NOT RUN: MEMORY tej notatki; ASK tekst/głos; CHAT wiele tur tekst/głos;
-  historia po restarcie; pełne TTS PL/EN/SPEAK/STOP/auto;
+- NOT RUN: MEMORY tej notatki; ASK tekst/głos; CHAT kilka tur tekst/głos
+  i kontekst; historia po zamknięciu aplikacji; pełne TTS PL/EN/SPEAK/STOP/auto;
   utrata LTE/reconnect/brak duplikatów; końcowa regresja i stabilność parowania.
+  Testy ADB na USB nie zastępują powyższych ręcznych testów LTE/5G.
 
-POPRAWKI ANDROIDA
-- Poprzednia poprawka CHAT TTS: tylko projekcja do mowy usuwa inline memory_id
-  i UUID referencji; treść/historia/źródła oraz klasyczny ASK pozostają bez zmian.
-  Commit ef9e5e333206709095df1baa93c7aad9df46c979, wysłany na gałąź V2.
-- Znaleziony i odtworzony błąd: APPLY SERVER usuwał lokalne credentials także
-  przy tym samym adresie. Potrafił też anulować trwające odświeżanie sesji.
-- Poprawka: porównanie znormalizowanego adresu i trybu PRZED anulowaniem operacji.
-  Identyczne ustawienia zachowują parowanie i refresh. Zmiana serwera lub trybu
-  nadal usuwa stare credentials. Nie obchodzono blokady dostępu bez uwierzytelnienia.
-- Rzeczywista przyczyna kliknięcia na telefonie niepotwierdzona; oczekujemy
-  dokładnego komunikatu użytkownika. Nie wykonywano ponownego parowania.
-- Zmienione: pairing/PairingController.kt, testy PairingTest.kt,
-  SessionRenewalTest.kt; raport i odświeżony eksport istniejącym skryptem.
-- Testy reprodukujące: 2 FAIL przed poprawką.
-  Po poprawce testDebugUnitTest: 227 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
-  SKIP: dotychczasowy opt-in Android/PostgreSQL wymagający osobnego backendu testowego.
-  Sprawdzono zachowanie credentials po restarcie, warianty URL i aktywny refresh;
-  dotychczasowe testy NOTE/ASK/MEMORY/CHAT/TTS/pairing/auth bez regresji.
-- Dowody JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
-  v2.8-connection-before-fix.xml oraz v2.8-connection-final.xml.
-- Aktualny APK z poprawkami TTS i APPLY SERVER zainstalowany: Success.
-  SHA-256: 5C0707D48884A9D605CAFD5509F9659ACCE12589C44D289AAD4E448D3D13AD83
-  Test odzyskania dostępu na telefonie: jeszcze NOT RUN.
-
-STAN SERWERA / GIT
-- Odczyt 2026-10-21 04:17 UTC: kulai_memory_mvp 0005, security 0003.
-  Pierwotna sesja telefonu nadal trusted, bez revocation; access ważny w chwili kontroli.
-  Nie odczytywano ani nie ujawniano tokenów telefonu. Lokalny plik połączenia: 120 B.
-- Most nadal PID 32348, start UTC 2026-10-21T03:12:45.3247371Z, bez restartu.
-  Ostatnia wcześniejsza kontrola strict doctor PASS i Recovery Gate OPEN/match.
-- Bez migracji, zmian VPS/Nginx/WireGuard, usług lub kasowania danych V2.7.
+BAZA / MOST / GIT
+- PASS podczas ponownego parowania: strict db_doctor, kulai_memory_mvp 0005,
+  security 0003, Recovery Gate OPEN i zgodny z bazą przed/po operacji.
+- Most nadal PID 32348, start UTC 2026-10-21T03:12:45.3247371Z. Bez restartów.
+  Bez migracji, zmian VPS/Nginx/WireGuard/Ollamy i kasowania danych V2.7.
+  Zapis dotyczył wyłącznie zatwierdzonego parowania przez istniejący mechanizm.
 - Gałąź feature/kulai-memory-v2-conversations; jeden katalog; bez merge do main.
-  Commit/push tylko poprawki Androida, jej testów i aktualnego raportu na gałęzi V2.
-- Następny krok: dokładny komunikat z ekranu Not paired; przy utracie lokalnych
-  credentials nowe parowanie wymaga osobnego zatwierdzenia użytkownika.
+  Commit/push wyłącznie poprawki nawigacji i raportu; eksport istniejącym skryptem.
+  Poprzedni commit: 3d22bb3e9b6fb4eb0d7ff35c4c39c2b620d6cbf9.
+- Następny ręczny test: po odłączeniu USB, z Wi-Fi OFF i LTE/5G,
+  sprawdzić w MEMORY zapisaną notatkę Rubin / 47 zł.
 
 APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt

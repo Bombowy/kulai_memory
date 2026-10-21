@@ -1,5 +1,6 @@
 package com.kulai.memory.pairing
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +15,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun ServerConnectionScreen(controller: PairingController, allowLocalDev: Boolean, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
     val state by controller.state.collectAsStateWithLifecycle()
     var origin by remember(state.origin) { mutableStateOf(state.origin) }
     var localDev by remember(state.localDev) { mutableStateOf(state.localDev) }
@@ -23,6 +25,7 @@ fun ServerConnectionScreen(controller: PairingController, allowLocalDev: Boolean
     var name by remember { mutableStateOf("Android") }
     Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        TextButton(onClick = onBack) { Text("BACK TO MEMORY") }
         Text("Server Connection", style = MaterialTheme.typography.headlineMedium)
         Text(if (state.localDev) "LOCAL_DEV (loopback)" else when (state.status) {
             ConnectionStatus.NOT_PAIRED -> "Not paired"
@@ -53,6 +56,5 @@ fun ServerConnectionScreen(controller: PairingController, allowLocalDev: Boolean
         state.verificationCode?.let { Text("Compare this code with the administrator before approval:\n$it") }
         OutlinedButton(onClick = controller::refresh) { Text("CHECK / RETRY") }
         OutlinedButton(onClick = controller::forget) { Text(if (state.status == ConnectionStatus.PAIRING) "CANCEL PAIRING" else "UNPAIR / REMOVE LOCAL CREDENTIAL") }
-        if (state.privateAccess) Button(onClick = onBack) { Text("BACK TO MEMORY") }
     }
 }

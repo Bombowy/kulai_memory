@@ -21,7 +21,7 @@ import com.kulai.memory.pairing.ServerConnectionScreen
 fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermission: () -> Unit) {
     val connection by viewModel.connection.state.collectAsStateWithLifecycle()
     var showConnection by remember { mutableStateOf(false) }
-    if (showConnection || !connection.privateAccess) {
+    if (showConnection) {
         ServerConnectionScreen(viewModel.connection, BuildConfig.DEBUG) { showConnection = false }
         return
     }
@@ -38,6 +38,7 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
         NavigationBar {
             MemoryTab.entries.forEach { destination ->
                 NavigationBarItem(selected = tab == destination,
+                    enabled = connection.privateAccess,
                     onClick = { viewModel.root.selectTab(destination) },
                     icon = { Text(when (destination) { MemoryTab.NOTE -> "●"; MemoryTab.ASK -> "?"; MemoryTab.MEMORY -> "≡"; MemoryTab.CHAT -> "◇" }) },
                     label = { Text(destination.name) })
@@ -45,7 +46,14 @@ fun MemoryClientScreen(viewModel: VoiceMemoryViewModel, requestMicrophonePermiss
         }
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when (tab) {
+            if (!connection.privateAccess) {
+                Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("KulAI Memory", style = MaterialTheme.typography.headlineMedium)
+                    Text("Pair this device in Server Connection to access your memories and conversations.")
+                    connection.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Button(onClick = { showConnection = true }) { Text("OPEN SERVER CONNECTION") }
+                }
+            } else when (tab) {
                 MemoryTab.NOTE -> VoiceMemoryContent(note, viewModel::record, viewModel::stop,
                     viewModel::retrySave, viewModel::retryNote, requestMicrophonePermission, controls.noteRecordEnabled)
                 MemoryTab.ASK -> AssistantContent(ask, controls, viewModel.assistant::setQuery,
