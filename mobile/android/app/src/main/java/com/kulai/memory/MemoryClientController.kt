@@ -65,14 +65,14 @@ class MemoryClientController(
     fun chatList() { chat?.showConversations(); stopAudio() }
     fun speakChat(message: ChatMessage) {
         if (!closed && operationJob?.isActive != true && microphone.owner.value == null && chat?.state?.value?.busy == false)
-            speech?.speak(message.speechAnswer())
+            message.speechAnswer().takeIf { it.answer.isNotBlank() }?.let { speech?.speak(it) }
     }
     fun chatAnswerRendered(message: ChatMessage) {
         if (closed || tab.value != MemoryTab.CHAT || chat?.state?.value?.latestAnswer?.messageId != message.messageId ||
             handledChatAnswer == message.messageId) return
         handledChatAnswer = message.messageId
         if (speech?.state?.value?.autoSpeak == true && operationJob?.isActive != true && microphone.owner.value == null)
-            speech.speak(message.speechAnswer())
+            message.speechAnswer().takeIf { it.answer.isNotBlank() }?.let { speech.speak(it) }
     }
     fun speakAnswer() {
         if (!closed && operationJob?.isActive != true && microphone.owner.value == null)

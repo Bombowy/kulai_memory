@@ -17,5 +17,24 @@ data class ChatTurn(val requestId: UUID, val conversationId: UUID, val turnNumbe
     val user: ChatMessage, val assistant: ChatMessage)
 data class ChatTurnWrite(val turn: ChatTurn, val created: Boolean)
 
-/** Only answer prose reaches the existing speech planner, never envelope IDs/references. */
-fun ChatMessage.speechAnswer() = AssistantAnswer(AssistantStatus.ANSWERED, content, emptyList())
+private const val MEMORY_UUID = """[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"""
+private const val MEMORY_FIELD = """[*`"']*\b(?:used_)?memory_ids?\b[*`"']*"""
+private const val MEMORY_ID_TEXT = """[*`"']*$MEMORY_UUID[*`"']*"""
+private const val MEMORY_ID_VALUES = """(?:\[\s*$MEMORY_ID_TEXT(?:\s*,\s*$MEMORY_ID_TEXT)*\s*\]|$MEMORY_ID_TEXT)"""
+private const val MEMORY_FIELD_VALUE = """$MEMORY_FIELD(?:\s*[:=]\s*|\s+)$MEMORY_ID_VALUES"""
+private val memoryReferenceBlock = Regex(
+    """[\[({]\s*(?:$MEMORY_FIELD_VALUE|$MEMORY_ID_VALUES|$MEMORY_FIELD)\s*[\])}]""", RegexOption.IGNORE_CASE)
+private val memoryReferenceField = Regex(MEMORY_FIELD_VALUE, RegexOption.IGNORE_CASE)
+
+/** Speech-only projection: Qwen may also put Memory references inside answer prose. */
+fun ChatMessage.speechAnswer(): AssistantAnswer {
+    var spoken = content.replace(memoryReferenceBlock, "").replace(memoryReferenceField, "")
+    for (id in memoryIds) spoken = spoken.replace(id.toString(), "", ignoreCase = true)
+    if (spoken != content) {
+        spoken = spoken.replace(Regex("""[\[({]\s*[\])}]"""), "")
+            .replace(Regex("""(?m)^[ \t]*[-*,:;`"'{}\[\]()]+[ \t]*$"""), "")
+            .replace(Regex("""[ \t]{2,}"""), " ")
+            .replace(Regex("""[ \t]+([,.;:!?])"""), "$1").trim()
+    }
+    return AssistantAnswer(AssistantStatus.ANSWERED, spoken, emptyList())
+}
