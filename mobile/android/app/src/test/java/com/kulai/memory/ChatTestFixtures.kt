@@ -31,6 +31,8 @@ internal class FakeConversationApi : ConversationApi {
     val conversations = mutableListOf<Conversation>()
     val turns = mutableListOf<ChatTurn>()
     val requests = mutableListOf<Pair<UUID, ChatInputKind>>()
+    val messageRequests = mutableListOf<Triple<UUID, Int, Long?>>()
+    var beforeMessages: suspend () -> Unit = {}
     var before: suspend () -> Unit = {}
     var after: suspend () -> Unit = {}
     var lists = 0
@@ -38,9 +40,12 @@ internal class FakeConversationApi : ConversationApi {
     override suspend fun listConversations(limit: Int, cursor: ConversationCursor?): ConversationPage {
         lists++; return ConversationPage(conversations.toList(), null)
     }
-    override suspend fun conversationMessages(id: UUID, limit: Int, beforeSequence: Long?): ChatMessagePage =
-        ChatMessagePage(turns.filter { it.conversationId == id }.flatMap { listOf(it.user, it.assistant) }
+    override suspend fun conversationMessages(id: UUID, limit: Int, beforeSequence: Long?): ChatMessagePage {
+        messageRequests += Triple(id, limit, beforeSequence)
+        beforeMessages()
+        return ChatMessagePage(turns.filter { it.conversationId == id }.flatMap { listOf(it.user, it.assistant) }
             .filter { beforeSequence == null || it.sequence < beforeSequence }.takeLast(limit), null)
+    }
     override suspend fun askConversation(id: UUID, requestId: UUID, question: String, inputKind: ChatInputKind): ChatTurnWrite {
         requests += requestId to inputKind
         before()

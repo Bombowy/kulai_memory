@@ -32,19 +32,24 @@ class ChatTransportTest {
             server.enqueue(MockResponse().setBody(JSONObject().put("messages", JSONArray().put(chatMessageJson(turn.user)).put(chatMessageJson(turn.assistant)))
                 .put("next_before_sequence", JSONObject.NULL).toString()))
             api.conversationMessages(conversation.conversationId, beforeSequence = 9)
+            server.enqueue(MockResponse().setBody(JSONObject().put("messages", JSONArray().put(chatMessageJson(turn.user)))
+                .put("next_before_sequence", JSONObject.NULL).toString()))
+            assertEquals(listOf(turn.user), api.conversationMessages(conversation.conversationId, limit = 1, beforeSequence = 2).messages)
             active.set(DeviceCredential(device, "b".repeat(43), base))
             for (created in listOf(true, false)) {
                 server.enqueue(MockResponse().setBody(chatTurnJson(turn, created)))
                 assertEquals(created, api.askConversation(conversation.conversationId, requestId, turn.user.content).created)
             }
-            val outgoing = (1..5).map { server.takeRequest(5, TimeUnit.SECONDS)!! }
-            assertEquals(listOf("POST", "GET", "GET", "POST", "POST"), outgoing.map { it.method })
+            val outgoing = (1..6).map { server.takeRequest(5, TimeUnit.SECONDS)!! }
+            assertEquals(listOf("POST", "GET", "GET", "GET", "POST", "POST"), outgoing.map { it.method })
             assertTrue(outgoing.all { it.path!!.startsWith("/memory/api/conversations") && it.getHeader("X-Kulai-Device-ID") == device.toString() })
             assertTrue(outgoing[1].requestUrl!!.queryParameterNames.containsAll(listOf("before_activity_at", "before_id")))
             assertEquals("9", outgoing[2].requestUrl!!.queryParameter("before_sequence"))
+            assertEquals("2", outgoing[3].requestUrl!!.queryParameter("before_sequence"))
+            assertEquals("1", outgoing[3].requestUrl!!.queryParameter("limit"))
             assertTrue(outgoing[0].getHeader("Authorization")!!.endsWith("a".repeat(43)))
-            assertTrue(outgoing[3].getHeader("Authorization")!!.endsWith("b".repeat(43)))
-            assertEquals(outgoing[3].body.readUtf8(), outgoing[4].body.readUtf8())
+            assertTrue(outgoing[4].getHeader("Authorization")!!.endsWith("b".repeat(43)))
+            assertEquals(outgoing[4].body.readUtf8(), outgoing[5].body.readUtf8())
         } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll(); server.shutdown() }
     }
     @Test fun `conversation HTTP denies missing credentials redirects failures and cancels actual calls`() = runBlocking {

@@ -47,6 +47,72 @@ class ChatControllerTest {
         assertEquals(listOf(1L, 2L, 3L, 4L), second.chat.state.value.messages.map { it.sequence })
         assertNotEquals(first.api.requests[0].first, first.api.requests[1].first)
     }
+    @Test fun `untitled list topics come from only first questions and survive a new controller`() = runTest {
+        val api = FakeConversationApi()
+        val polish = conversation(); val english = conversation(); val titled = conversation().copy(title = "Existing title")
+        api.conversations += listOf(polish, english, titled)
+        api.turns += chatTurn(polish.conversationId, UUID.randomUUID(), "  Warsztaty\nceramiki  ", ChatInputKind.VOICE)
+        for (number in 2L..40L) api.turns += chatTurn(polish.conversationId, UUID.randomUUID(), "A co dalej?", number = number)
+        api.turns += chatTurn(english.conversationId, UUID.randomUUID(), "Weekend pottery promotion")
+        val first = Fixture(backgroundScope, StandardTestDispatcher(testScheduler), api)
+        first.chat.refreshIfNeeded(); runCurrent()
+        assertEquals(listOf("Warsztaty ceramiki", "Weekend pottery promotion", "Existing title"),
+            first.chat.state.value.conversations.map { it.title })
+        assertEquals(listOf(Triple(polish.conversationId, 1, 2L), Triple(english.conversationId, 1, 2L)), api.messageRequests)
+        assertTrue(first.chat.state.value.messages.isEmpty())
+        first.chat.refreshConversations(); runCurrent()
+        assertEquals(2, api.messageRequests.size) // Keep resolved labels for this controller's lifetime.
+        assertNull(api.conversations.first().title) // Presentation does not write server metadata.
+        first.chat.shutdown()
+        val second = Fixture(backgroundScope, StandardTestDispatcher(testScheduler), api)
+        second.chat.refreshIfNeeded(); runCurrent()
+        assertEquals(first.chat.state.value.conversations, second.chat.state.value.conversations)
+        assertEquals(4, api.messageRequests.size)
+        second.chat.shutdown()
+    }
+    @Test fun `first voice question names a conversation and later turns keep its topic`() = runTest {
+        val f = fixture(); val socket = voice(f)
+        transcript(socket, "Warsztaty ceramiki za 100 zł")
+        val turn = chatTurn(f.chat.state.value.selected!!.conversationId, f.chat.state.value.pendingRequestId!!,
+            "Warsztaty ceramiki za 100 zł", ChatInputKind.VOICE)
+        f.api.turns += turn
+        socket.emit(assistantEvent("conversation.completed", 4, chatTurnJson(turn))); runCurrent()
+        assertEquals("Warsztaty ceramiki za 100 zł", f.chat.state.value.selected!!.title)
+        f.chat.setQuery("Rozwiń drugi pomysł."); f.chat.sendText(); runCurrent()
+        assertEquals("Warsztaty ceramiki za 100 zł", f.chat.state.value.selected!!.title)
+        f.chat.showConversations(); runCurrent()
+        assertEquals("Warsztaty ceramiki za 100 zł", f.chat.state.value.conversations.single().title)
+        f.chat.shutdown()
+    }
+    @Test fun `topic previews cannot block the list or apply after cancellation`() = runTest {
+        val api = FakeConversationApi(); val original = conversation(); val replacement = conversation().copy(title = "Replacement")
+        api.conversations += original
+        api.turns += chatTurn(original.conversationId, UUID.randomUUID(), "Old topic")
+        val release = CompletableDeferred<Unit>()
+        api.beforeMessages = { withContext(NonCancellable) { release.await() } }
+        val f = Fixture(backgroundScope, StandardTestDispatcher(testScheduler), api)
+        f.chat.refreshConversations(); runCurrent()
+        assertTrue(f.chat.state.value.listLoaded); assertFalse(f.chat.state.value.loadingList)
+        api.conversations.clear(); api.conversations += replacement
+        f.chat.refreshConversations(); runCurrent(); release.complete(Unit); runCurrent()
+        assertEquals(listOf(replacement), f.chat.state.value.conversations)
+        f.chat.shutdown()
+        api.conversations.clear(); api.conversations += original
+        api.beforeMessages = { error("PRIVATE_PREVIEW_FAILURE") }
+        val offline = Fixture(backgroundScope, StandardTestDispatcher(testScheduler), api)
+        offline.chat.refreshConversations(); runCurrent()
+        assertTrue(offline.chat.state.value.listLoaded); assertNull(offline.chat.state.value.error)
+        assertEquals(listOf(original), offline.chat.state.value.conversations)
+        offline.chat.shutdown()
+    }
+    @Test fun `first text question yields a bounded Unicode topic without changing content`() = runTest {
+        val f = fixture(); val question = "  " + "🟢".repeat(90) + " PL and EN"
+        f.chat.setQuery(question); f.chat.sendText(); runCurrent()
+        val title = f.chat.state.value.selected!!.title!!
+        assertEquals("🟢".repeat(80) + "…", title)
+        assertEquals(question, f.api.turns.single().user.content)
+        f.chat.shutdown()
+    }
     @Test fun `uncertain commit retry keeps UUID and has no duplicate messages`() = runTest {
         val f = fixture()
         f.api.after = { error("PRIVATE RESPONSE LOST") }

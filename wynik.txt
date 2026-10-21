@@ -1,66 +1,66 @@
 TASK V2.8/8 — GALAXY S25 ULTRA, TESTY W TOKU
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-V2.8 ZAKOŃCZONE: NIE — pozostały testy ręczne LTE/5G.
+V2.8 ZAKOŃCZONE: NIE — aktualizacja etykiet czeka na USB, pozostały testy ręczne.
 
-AKTUALNA POPRAWKA CHAT TTS
-- Zgłoszone FAIL: SPEAK i automatyczny odczyt odpowiedzi CHAT nie działały.
-- Odtworzenie na telefonie: SPEAK aktywny, auto-read ON, dostępne głosy;
-  żądanie speech-plan kończyło się HTTP 500 przed lokalnym odtwarzaniem.
-- Rzeczywisty Qwen na syntetycznej odpowiedzi warsztatowej: tekst z Markdown
-  750 znaków odtworzony jako 770, strict planner słusznie odrzucił zmianę treści.
-  Po przygotowaniu tekstu do mowy: 740 -> 740, poprawny plan PL, PASS.
-- Minimalna poprawka Androida w models/ConversationModels.kt: projekcja CHAT
-  do mowy usuwa nagłówki Markdown, znaczniki pogrubienia i inline code;
-  po usunięciu formatowania porządkuje białe znaki. Dotyczy SPEAK i auto-read.
-  Widoczna/zapisana odpowiedź i źródła bez zmian. Usuwanie memory_id zachowane.
-  Backend, klasyczny ASK, walidacja dokładnego planu oraz silnik TTS bez zmian.
-- Testy ChatSpeechTest.kt: 2 FAIL przed poprawką; po poprawce pełne
-  testDebugUnitTest 227 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
-  SKIP: istniejący opt-in Android/PostgreSQL wymagający osobnego backendu testowego.
-- Fizyczny Galaxy przez ADB: odtworzono rozmowę z serwera po aktualizacji APK;
-  SPEAK -> poprawny plan HTTP 200 i SPEAKING; kolejny syntetyczny tekst
-  nawiązujący do drugiego pomysłu -> odpowiedź Qwena i AUTO_SPEAKING;
-  następnie powrót do gotowości oraz STOP AUDIO podczas aktywnego odczytu: PASS.
-  To dowód działania na USB; odsłuch użytkownika przez LTE nadal do potwierdzenia.
+AKTUALNA POPRAWKA — TEMATY NA LIŚCIE CHAT
+- Użytkownik potwierdził historię po zamknięciu i ponownym otwarciu: PASS.
+  Zgłosił identyczne etykiety „Rozmowa z KulAI” przy rozmowach bez tytułu.
+- Poprawiono wyłącznie Androida: dla rozmowy bez tytułu lista pokazuje początek
+  pierwszego pytania, tekstowego lub głosowego. Zapisany tytuł ma pierwszeństwo;
+  dla pustej rozmowy pozostaje „Nowa rozmowa”. Temat ograniczony do 80 znaków
+  Unicode, widok do 2 wierszy. Późniejsze pytania nie nadpisują pierwszego tematu.
+- Istniejące rozmowy: GET messages?limit=1&before_sequence=2 przez obecne API.
+  Odczytywana tylko pierwsza wiadomość, bez ładowania całej historii. Lista pojawia
+  się przed pobraniem tematów; błąd podglądu jej nie blokuje. Anulowanie i zmiana
+  generacji chronią przed spóźnionymi wynikami. Tematy można odtworzyć po restarcie.
+- Bez nowych endpointów, bazy lokalnej, generowania tytułów przez Qwen,
+  zapisów metadanych do PostgreSQL i zmian backendu/Nginx.
+- Pliki: ChatController.kt, ChatScreen.kt, testy ChatControllerTest.kt,
+  ChatTestFixtures.kt, ChatTransportTest.kt; dodatkowo raport i eksport.
+- Test reprodukcji: 3 FAIL przed poprawką; po poprawce testDebugUnitTest
+  231 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS. Pokryto PL/EN, głos/tekst,
+  dwie rozmowy, restart, długą historię, Unicode, awarię/anulowanie oraz HTTP
+  z /memory/, autoryzacją i dokładnymi parametrami ograniczonego odczytu.
+  SKIP: dotychczasowy opt-in Android/PostgreSQL wymagający osobnego backendu testowego.
 - Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
-  v2.8-chat-markdown-before-fix.xml, v2.8-chat-markdown-final.xml,
-  v2.8-chat-markdown-phone.json, v2.8-chat-auto-phone.json,
-  v2.8-chat-tts-phone-final.json. Bez tokenów i prywatnych Memories.
+  v2.8-chat-topics-before-fix.xml i v2.8-chat-topics-final.xml.
+- APK przygotowany, podpis zgodny z poprzednią wersją; JESZCZE NIE ZAINSTALOWANY:
+  telefon niepodłączony do ADB. SHA-256:
+  1D36A249BEE4ABCEE5229E7A9984BE04BE933376EBF11842B4229A2B342B3C7D
 
-INSTALACJA / PAROWANIE / NAWIGACJA
-- APK zainstalowany adb install -r: Success; ten sam certyfikat podpisu.
-  Zaszyfrowany zapis parowania identyczny przed/po aktualizacji; bez nowego parowania.
-  SHA-256: 29C0E5EF017B715443CB8244412113D3BDBBD0A6856CBBC5206F425B550FE3C3
-- Zachowane wcześniejsze poprawki: APPLY SERVER dla tego samego adresu nie usuwa
-  credentials ani nie przerywa refresh; BACK TO MEMORY i systemowe Wstecz działają
-  także bez parowania, a chroniona zawartość pozostaje zablokowana do uwierzytelnienia.
-- Wcześniejsze ponowne parowanie wykonano wyłącznie po osobnej zgodzie użytkownika
-  przez lokalny pairing_admin i porównanie kodu telefonu. Paired, prawidłowy
-  https://demo.kulai.eu/memory/, LOCAL_DEV OFF. Dotychczasowych urządzeń nie unieważniano.
-- Bez uninstall, pm clear, resetu Keystore, ADB reverse i zmian FLAG_SECURE.
+ZACHOWANE POPRAWKI / WYNIKI FIZYCZNE
+- Na telefonie ostatnio zainstalowany APK TTS:
+  29C0E5EF017B715443CB8244412113D3BDBBD0A6856CBBC5206F425B550FE3C3.
+- PASS: CHAT TTS nie czyta memory_id; projekcja mowy usuwa Markdown, dzięki czemu
+  strict speech-plan przeszedł dla syntetycznej odpowiedzi. Treść/historia bez zmian.
+  SPEAK, auto-read i STOP AUDIO sprawdzone na Galaxy przez ADB.
+- PASS: nawigacja BACK TO MEMORY/systemowe Wstecz także bez parowania;
+  chronione dane pozostają niedostępne bez credentials. APPLY SERVER przy tych samych
+  ustawieniach zachowuje parowanie i nie anuluje refresh.
+- Wcześniejsze ponowne parowanie wykonano po osobnej zgodzie użytkownika przez
+  pairing_admin z Recovery Gate i porównaniem kodu telefonu. Od tego czasu aktualizacje
+  przez install -r zachowały identyczny zaszyfrowany rekord i podpis aplikacji.
 
-RĘCZNE TESTY LTE/5G — POTWIERDZONE PRZEZ UŻYTKOWNIKA
-- PASS: NOTE — fikcyjny pakiet Rubin / 47 zł, pojawiło się Saved.
-- PASS: MEMORY — notatka widoczna po odłączeniu USB.
-- PASS: ASK tekstowy oraz ASK głosowy — użytkownik potwierdził działanie.
-- PASS częściowy: CHAT — dotarła odpowiedź na pytanie o promocję warsztatów.
-- PASS wcześniej: CHAT TTS nie czyta już memory_id.
-- RETEST PENDING: zgłoszony błąd SPEAK/auto-read po aktualnej poprawce.
-- NOT RUN ręcznie: CHAT kilka tur tekst/głos i kontekst, historia po zamknięciu
-  aplikacji, pełne PL/EN/SPEAK/STOP/auto, utrata LTE/reconnect/brak duplikatów,
-  końcowa regresja i dłuższa stabilność sesji. Testy ADB nie zastępują tych potwierdzeń.
+RĘCZNE LTE/5G — POTWIERDZONE PRZEZ UŻYTKOWNIKA
+- PASS: NOTE Saved — fikcyjny pakiet Rubin / 47 zł; MEMORY po odłączeniu USB.
+- PASS: ASK tekstowy i ASK głosowy.
+- PASS: CHAT odpowiedź oraz głosowe dopowiedzenie z kontekstem i automatycznym odczytem PL.
+- PASS: historia rozmowy widoczna po zamknięciu i ponownym otwarciu aplikacji.
+- NOT CONFIRMED: automatyczny odczyt EN.
+- NOT RUN ręcznie: etykiety tematów po nowej aktualizacji, pełne SPEAK/STOP/auto,
+  utrata LTE/reconnect/brak duplikatów, końcowa regresja i dłuższa stabilność sesji.
+  Testy ADB nie zastępują potwierdzeń ręcznych.
 
-STAN USŁUG / GIT
-- Most nadal PID 32348, start UTC 2026-10-21T03:12:45.3247371Z. Bez restartów.
-- Baza kulai_memory_mvp 0005 / security 0003; ostatni strict doctor i Recovery Gate
-  OPEN/match PASS przy parowaniu. Bez migracji, restore i zmian pozostałych baz.
-- Nie zmieniano VPS/Nginx/WireGuard/certyfikatów/Ollamy; jedynie odczyt safe logu.
-  Syntetyczne dopowiedzenie w CHAT zapisano zwykłą drogą aplikacji, bez canonical Memory.
-- Gałąź feature/kulai-memory-v2-conversations, jeden katalog; bez merge do main.
-  Commit/push tylko projekcji CHAT TTS, jej testu i aktualnego raportu.
+USŁUGI / GIT / NASTĘPNY KROK
+- Bez restartów backendu, mostu, Nginx, PostgreSQL i Ollamy; bez migracji, restore,
+  zmian VPS/WireGuard/certyfikatów i kasowania danych. Most ostatnio PID 32348,
+  start UTC 2026-10-21T03:12:45.3247371Z. Baza 0005 / security 0003; ostatni
+  strict doctor i Recovery Gate OPEN/match PASS przy zatwierdzonym parowaniu.
+- Jeden katalog, gałąź feature/kulai-memory-v2-conversations; bez merge do main.
+  Zwykły commit/push wyłącznie poprawki Androida, jej testów i raportu.
   Eksport odświeżony istniejącym scripts/export_repo.py.
-- Następny test ręczny: po odłączeniu USB, z Wi-Fi OFF i LTE/5G, głosowe
-  dopowiedzenie w tej samej rozmowie i potwierdzenie automatycznego odczytu.
+- Następny krok: podłączyć Galaxy przez USB, wgrać przygotowany APK przez install -r,
+  potwierdzić etykiety istniejących rozmów i wrócić do testów LTE/5G.
 
 APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt

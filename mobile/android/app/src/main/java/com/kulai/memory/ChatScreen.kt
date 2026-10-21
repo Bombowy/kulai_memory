@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kulai.memory.models.ChatRole
@@ -40,7 +41,8 @@ internal fun ChatContent(chat: ChatController, root: MemoryClientController, spe
                 items(state.conversations, key = { it.conversationId.toString() }) { conversation ->
                     Card(Modifier.fillMaxWidth().clickable(enabled = !state.busy) { root.selectChat(conversation) }) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(conversation.title ?: "Rozmowa z KulAI", style = MaterialTheme.typography.titleMedium)
+                            Text(conversation.title ?: "Nowa rozmowa", style = MaterialTheme.typography.titleMedium,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(conversation.lastActivityAt.atZoneSameInstant(java.time.ZoneId.systemDefault())
                                 .format(DateTimeFormatter.ofPattern("dd.MM.yyyy · HH:mm")), style = MaterialTheme.typography.bodySmall)
                         }

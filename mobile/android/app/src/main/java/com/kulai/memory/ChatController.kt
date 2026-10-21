@@ -65,9 +65,24 @@ class ChatController(private val scope: CoroutineScope, private val api: Convers
         listJob = scope.launch {
             try {
                 val page = api.listConversations(cursor = cursor)
-                if (!closed && listGeneration == token) mutableState.value = state.value.copy(
-                    conversations = ((if (more) state.value.conversations else emptyList()) + page.conversations)
-                        .distinctBy { it.conversationId }, nextCursor = page.nextCursor, listLoaded = true, loadingList = false)
+                if (!closed && listGeneration == token) {
+                    val knownTopics = state.value.conversations.associate { it.conversationId to it.title }
+                    val rows = page.conversations.map {
+                        if (it.title.isNullOrBlank()) it.copy(title = knownTopics[it.conversationId]) else it
+                    }
+                    mutableState.value = state.value.copy(
+                        conversations = ((if (more) state.value.conversations else emptyList()) + rows)
+                            .distinctBy { it.conversationId }, nextCursor = page.nextCursor, listLoaded = true, loadingList = false)
+                    // Show the list first; one bounded read per untitled row, never its whole history.
+                    for (row in rows.filter { it.title.isNullOrBlank() }) {
+                        val preview = try { api.conversationMessages(row.conversationId, limit = 1, beforeSequence = 2) }
+                        catch (cancel: CancellationException) { throw cancel }
+                        catch (_: Exception) { return@launch } // A failed preview must not hide the usable list.
+                        if (closed || listGeneration != token) return@launch
+                        preview.messages.firstOrNull { it.role == ChatRole.USER && it.sequence == 1L }
+                            ?.let { rememberTopic(row.conversationId, it.content) }
+                    }
+                }
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { if (!closed && listGeneration == token) mutableState.value = state.value.copy(
                 loadingList = false, error = "Nie można pobrać rozmów. Sprawdź połączenie i spróbuj ponownie.") }
@@ -130,6 +145,7 @@ class ChatController(private val scope: CoroutineScope, private val api: Convers
                     if (messages.any { it.requestId == pending[id]?.requestId && it.role == ChatRole.ASSISTANT }) pending.remove(id)
                     mutableState.value = state.value.copy(messages = messages, nextBeforeSequence = page.nextBeforeSequence,
                         loadingHistory = false, pendingRequestId = pending[id]?.requestId)
+                    messages.firstOrNull { it.role == ChatRole.USER && it.sequence == 1L }?.let { rememberTopic(id, it.content) }
                 }
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { if (owns(token)) mutableState.value = state.value.copy(loadingHistory = false,
@@ -278,6 +294,16 @@ class ChatController(private val scope: CoroutineScope, private val api: Convers
             (listOf(updated) + state.value.conversations.filterNot { it.conversationId == updated.conversationId }),
             messages = (state.value.messages + listOf(turn.user, turn.assistant)).distinctBy { it.messageId }.sortedBy { it.sequence },
             phase = ChatPhase.IDLE, query = "", error = null, pendingRequestId = null, latestAnswer = turn.assistant)
+        if (turn.user.sequence == 1L) rememberTopic(turn.conversationId, turn.user.content)
+    }
+    private fun rememberTopic(id: UUID, firstQuestion: String) {
+        val text = firstQuestion.replace(Regex("""\s+"""), " ").trim()
+        if (text.isEmpty()) return
+        val end = text.offsetByCodePoints(0, minOf(80, text.codePointCount(0, text.length)))
+        val topic = text.substring(0, end) + if (end < text.length) "…" else ""
+        fun Conversation.withTopic() = if (conversationId == id && title.isNullOrBlank()) copy(title = topic) else this
+        mutableState.value = state.value.copy(conversations = state.value.conversations.map { it.withTopic() },
+            selected = state.value.selected?.withTopic())
     }
     private fun discardUnsubmittedVoice() {
         voiceRequest?.takeIf { !submittedVoice && !replayOnly }?.let {
