@@ -1,63 +1,81 @@
-TASK V2.5/8 — ANDROID CHAT
+TASK V2.6/8 — KOŃCOWA WERYFIKACJA V2.1–V2.5
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-WYNIK: ZAIMPLEMENTOWANE, ZBUDOWANE I PRZETESTOWANE; bez instalacji i przełączenia produkcji.
+GOTOWE DO WDROŻENIA V2.7: TAK
+Dotyczy przygotowania do kontrolowanego wdrożenia; V2.7 NIE rozpoczęto.
 
-CO DZIAŁA
-- Czwarta zakładka CHAT obok zachowanych NOTE / ASK / MEMORY. Lista rozmów,
-  NOWA ROZMOWA, wybór i kontynuacja, paginacja listy i starszych wiadomości,
-  przewijane wypowiedzi, WYŚLIJ, MIKROFON/STOP i czytelne stany/błędy.
-- API V2.4 przez dotychczasowy MemoryHttpClient i OkHttpVoiceSocketFactory;
-  tekst/głos w tej samej rozmowie. Nowe pytanie ma nowy UUID; PONÓW zachowuje UUID.
-  Po transkrypcji ponowienie głosu używa HTTP z input_kind=voice, bez audio.
-  Gdy transkrypcja nie dotarła, WS start/stop sprawdza już zapisany wynik.
-- Historia po nowym uruchomieniu kontrolera pochodzi z PostgreSQL przez API.
-  Bez lokalnej bazy i cache audio CHAT. Oczekujące UUID/transkrypcje żyją w RAM;
-  po restarcie brak automatycznego ponawiania — aplikacja pobiera historię serwera.
-- Zmiana rozmowy anuluje HTTP/WS/nagrywanie, spóźnione wyniki są ignorowane.
-  Wspólna blokada mikrofonu zwalnia zasób dopiero po zakończeniu AudioRecord.
-- Jeden istniejący silnik lokalnego TTS PL/EN: SPEAK, STOP AUDIO i wspólne auto-read.
-  Odczyt treści odpowiedzi bez metadanych UUID/Memory. Dawna historia nie uruchamia TTS.
-- Zachowane pairing, refresh, SECURE i prefiks /memory/. Minimalna poprawka klienta:
-  biznesowy błąd rozmowy WS 1008 nie jest mylony z utratą autoryzacji/parowania.
+TESTY KOŃCOWE
+- Backend unit: 1488 PASS, 0 FAIL, 1 SKIP (symlinki niedostępne na Windows).
+- Integracja: 457 unikalnych PASS, 0 FAIL, 32 SKIP. Wszystkie 56 plików testów
+  integracyjnych uruchomiono: dwa zestawy dały 407 PASS / 82 SKIP; osobne,
+  rzeczywiste uruchomienia zastąpiły 48 pominiętych testów Nginx i 2 modeli.
+  Pozostałe 32 SKIP to dodatkowe scenariusze wymagające osobnych opt-in
+  (Desktop/TTS oraz warianty testów modeli); nie są zaliczone jako PASS.
+- Android testDebugUnitTest: 225 PASS, 0 FAIL, 0 SKIP. assembleDebug: PASS.
+  Pełne Gradle --rerun-tasks; klient OkHttp HTTP/WS z testowym PostgreSQL 0005.
+  CHAT tekst/głos, historia po ponownym otwarciu, retry UUID, błędy/anulowanie;
+  regresje NOTE, ASK, MEMORY, TTS, pairing, refresh i prefiks /memory/: PASS.
+- Migracja 0004 → 0005, doctor i backup/restore: 9 PASS na marker-owned bazach.
+  Zachowane canonical Memories, wektory pgvector i dane/sesje security;
+  odtworzone rozmowy i idempotencja. Sprawdzony również downgrade na bazie testowej.
+- 48 testów rzeczywistego, izolowanego Nginx: PASS. Istniejący zweryfikowany
+  binarny Nginx, wyłącznie losowe porty loopback; bez zmian VPS.
+- Po zakończeniu: 0 baz z prawidłowym markerem własności testów.
 
-TESTY
-- testDebugUnitTest: 225 PASS, 0 FAIL, 0 SKIP, w tym 15 nowych testów CHAT.
-  Regresje NOTE/ASK/MEMORY/TTS/pairing i ochrony prefiksu przeszły.
-- assembleDebug: BUILD SUCCESSFUL. Pełen końcowy build/test wykonany z --rerun-tasks.
-- Rzeczywisty klient Android OkHttp -> TCP HTTP/WS -> FastAPI SECURE -> marker-owned
-  PostgreSQL 0005: PASS. Tekst/głos/tekst, odtworzenie historii w nowym kontrolerze
-  i po zamknięciu połączeń HTTP, ponowienie UUID bez duplikatu, druga niezależna rozmowa.
-  Sprawdzone w DB: 2 rozmowy, 3 tury, 6 wiadomości, 0 Memories i 0 wektorów;
-  3 kontrolowane generacje i 1 transkrypcja, bez dodatkowej generacji przy retry.
-- 7 istniejących testów API V2.4 oraz nowy przekrojowy test Android/PostgreSQL: 8 PASS.
-  Końcowy przekrojowy test powtórzony po kontroli anulowania: PASS.
-- Kontrolowana inferencja/STT i syntetyczne dane; bez prywatnych Memories i nowych modeli.
-- git diff --check i skan sekretów: PASS. Po testach 0 marker-owned baz.
-- Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.5-20261021\
-  android-junit\, android-gradle.log, android-postgres.xml, android-postgres-final.xml.
+RZECZYWISTE MODELE — BEZ PODSTAWIONYCH ODPOWIEDZI
+- 2 PASS: lokalny qwen3.5:9b, BGE-M3 bge-m3:567m-fp16, Whisper large-v3
+  CUDA int8_float16 na RTX 5060 Ti. Wyłącznie syntetyczne dane i testowe bazy.
+  Whisper użył istniejącego cache w trybie offline; niczego nie pobierano.
+- Polska rozmowa min. 5 tur, odniesienia do poprzednich odpowiedzi,
+  ponowne połączenie PostgreSQL, niezależne rozmowy i rozmowa bez Memories: PASS.
+- SECURE HTTP/WS: tekst/głos/tekst, odtworzenie historii, retry bez generacji,
+  głosowy NOTE → MEMORY → klasyczny ASK oraz CHAT z prawidłowym cytowaniem,
+  speech-plan TTS i refresh: PASS. 2 rozmowy / 5 tur / 10 wiadomości;
+  7 rzeczywistych wywołań Qwena, 7 BGE, 2 Whispera. Po NOTE: 1 Memory / 1 wektor.
 
-APK / BRAKUJĄCY TEST
+MINIMALNE POPRAWKI
+- Znany fingerprint FAIL był błędnym mockiem stream SQLAlchemy. Naprawiono
+  wyłącznie mock; identyczny historyczny SHA potwierdzony także w PostgreSQL.
+- Naprawiono test kontroli usunięcia bazy: katalog maintenance zamiast źródłowej DB.
+- Izolowany fixture demo akceptuje bazowy schemat 0005; bez zmian logiki
+  Fact Intelligence, instalacji produkcyjnej ani włączania tego modułu.
+- Dodano rzeczywisty test całego przepływu i docs/V2_7_PREFLIGHT.md.
+
+V1 / GOTOWOŚĆ WDROŻENIA — TYLKO ODCZYT
+- kulai_memory_mvp nadal 0004, security 0003; stara kulai_memory nadal 0004.
+  Brak tabel rozmów w obu bazach. Recovery Gate OPEN, zgodny z bazą.
+- Ten sam most SECURE: PID 35288, start UTC 2026-10-20T20:15:55.7286080Z.
+  Bez restartu, migracji produkcyjnej, zapisów danych lub zmian infrastruktury.
+- Rzeczywiste mTLS VPS → PC przez WireGuard: 401 bez credentials, poprawny TLS.
+  Publiczne /memory/api/memories: 401; /memory/api/conversations: 404 (V1).
+- nginx -t: PASS bez reload. Hashe aktywnych konfiguracji bez zmian.
+  Wszystkie 6 zapisanych adresów demo/mentor/propertly/mrkacyk/printet3d/default
+  zachowało statusy i hashe odpowiedzi z baseline; propertly ma oczekiwane 401.
+- Dokładne ścieżki Nginx, hashe, krótki plan V2.7 i rollback do V1 oraz checklistę
+  Galaxy S25 Ultra zapisano w docs/V2_7_PREFLIGHT.md. Rollback uwzględnia,
+  że V1 wymaga schematu 0004; bez automatycznego downgrade/resetu bazy.
+
+APK / POZOSTAŁA WERYFIKACJA
 C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
 SHA-256: FC5670FD31FB30D8872896F4B7A1E4509D48DFB6C13C1776C58946E5E2415BD6
-ADB: brak podłączonego telefonu. APK NIE instalowano. Fizyczny test Galaxy S25 Ultra,
-mikrofonu, układu ekranu, głosów offline i LTE pozostaje do osobnej weryfikacji.
-CHAT nie został udostępniony w produkcji; wymaga późniejszego kontrolowanego V2 cutover
-oraz ścieżek Nginx opisanych w docs/CONVERSATION_API.md. Konfiguracji nie zmieniano.
+apksigner: PASS; com.kulai.memory, minSdk 26, targetSdk 36, podpis debug.
+Nie instalowano APK. Brak telefonu w ADB. Fizyczny mikrofon, lokalne głosy TTS,
+układ ekranu i LTE Galaxy S25 Ultra wymagają testu po osobno zatwierdzonym wdrożeniu.
+Brak blokerów zakresu V2.6; pominięcia i test fizyczny wyszczególniono powyżej.
 
-V1
-Bez restartu backendu/mostu, migracji/zapisów produkcyjnych, zmian VPS/Nginx/WireGuard,
-certyfikatów, telefonu, Qwena ani API V2.4. Fact Intelligence pozostaje wyłączony.
-READ ONLY: kulai_memory_mvp i kulai_memory nadal 0004, bez tabel rozmów; MVP Security 0003.
-Most: PID 35288, start 2026-10-20T20:15:55.7286080Z, listenery 127.0.0.1/10.77.77.2:8443.
-Publiczne /memory/api/memories bez credentials: 401.
-
-GIT / PLIKI
-Gałąź feature/kulai-memory-v2-conversations, jeden katalog. Zwykły commit i push;
-bez merge/force push i bez zmian main (fbf77dae3e96efbf4f71084f73da2eac3f7b6f16).
-Commit: Add Android CHAT with durable text and voice conversations.
-Raport jest częścią commita; dokładny SHA: git rev-parse HEAD i odpowiedź końcowa.
-Zmiany: modele/parser CHAT, metody istniejącego klienta, ChatController/ChatScreen,
-minimalne podłączenie nawigacji/ViewModel/TTS, testy Android i test owned PostgreSQL,
-README projektu i Androida. Bez nowych bibliotek, procesów produkcyjnych lub lokalnej bazy.
+GIT / DOWODY
+Gałąź: feature/kulai-memory-v2-conversations. Jeden katalog, bez worktree.
+Commit zweryfikowanych zmian: bb60d28e99036462e77049e642d7fe8a03f9e047
+Commit ten jest na origin/feature/kulai-memory-v2-conversations; raport osobno.
+Main bez zmian: fbf77dae3e96efbf4f71084f73da2eac3f7b6f16. Bez merge/force push.
+Kontrola zakresu, skan sekretów i git diff --check: PASS.
+Zmienione pliki: tests/test_security_schema.py;
+backend/tests/integration/test_security_postgres.py;
+backend/tests/integration/test_remote_acceptance_network.py;
+backend/tests/integration/test_conversation_real_models.py;
+backend/src/kulai_memory/desktop/fact_review/demo.py;
+docs/V2_7_PREFLIGHT.md; wynik.txt.
+JUnit/logi: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.6-*
+(unit-final.xml, integration-final-a/b.xml, models-final.xml,
+nginx-isolated.xml, android-gradle.log). Starsze nieudane próby nie są wynikiem końcowym.
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
-Eksport istniejącym scripts/export_repo.py: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
+Eksport istniejącym skryptem: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt
