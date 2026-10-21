@@ -156,11 +156,10 @@ def test_restart_ingress_revalidates_same_gate_and_authenticates_new_connection(
 
 def test_real_harness_cancellation_drops_owned_database_and_removes_audio(monkeypatch):
     async def run():
-        from sqlalchemy.ext.asyncio import create_async_engine
         from backend.tests import security_postgres_fixtures as fixtures
         from backend.tests import security_stream_benchmark as benchmark
         from kulai_memory.api import memory_ws
-        from kulai_memory.database_safety import database_config
+        from kulai_memory.database_safety import database_config, database_exists
         created=asyncio.Event(); paths=[]; databases=[]
         real_wav=memory_ws.OwnedPcmWav
         def observe_wav():
@@ -180,11 +179,5 @@ def test_real_harness_cancellation_drops_owned_database_and_removes_audio(monkey
             task.cancel(); await asyncio.gather(task,return_exceptions=True)
         assert paths and all(not path.exists() for path in paths)
         assert len(databases)==1
-        engine=create_async_engine(database_config().async_url,echo=False,hide_parameters=True)
-        try:
-            async with engine.connect() as db:
-                await db.execute(sa.text('SET TRANSACTION READ ONLY'))
-                assert not await db.scalar(sa.text('SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=:name)'),{'name':databases[0].name})
-                await db.rollback()
-        finally: await engine.dispose()
+        assert not await database_exists(databases[0].name, config=database_config())
     asyncio.run(asyncio.wait_for(run(),35))

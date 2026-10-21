@@ -34,6 +34,26 @@ async def credential(store):
     return manager, device, await manager.issue(device.id)
 
 
+def test_historical_rate_fingerprint_with_real_sqlalchemy_stream():
+    """The old golden bytes remain unchanged with actual mappings/partitions."""
+    import hashlib
+    from kulai_memory.security_persistence.integrity import _fingerprint
+    from kulai_memory.security_persistence.schema_v2 import RATE_TABLE
+    async def run():
+        async with owned_store() as (_, _, _, factory, _):
+            async with factory.begin() as session:
+                await session.execute(sa.text(f'DELETE FROM public.{RATE_TABLE}'))
+                await session.execute(sa.text(f'INSERT INTO public.{RATE_TABLE} (id, attempts, window_start) VALUES (1, 1, :at)'),
+                    {'at': datetime(2026, 1, 1, tzinfo=timezone.utc)})
+            async with factory() as session:
+                await session.execute(sa.text('SET TRANSACTION READ ONLY'))
+                result = await _fingerprint(await session.connection(), RATE_TABLE)
+            payload = b'{"attempts":1,"id":"1","window_start":"2026-01-01T00:00:00+00:00"}'
+            assert result.count == 1
+            assert result.sha256 == hashlib.sha256(len(payload).to_bytes(8, 'big') + payload).hexdigest()
+    asyncio.run(run())
+
+
 def test_persistence_adapter_recreation_trust_revocation_scopes_and_no_plaintext():
     async def scenario():
         async with owned_store() as (_, _, target, factory, store):

@@ -127,9 +127,10 @@ async def install_demo_canonical(owned, *, config):
                 cfg = Config(str(Path(__file__).resolve().parents[4] / "alembic.ini"))
                 cfg.cmd_opts = Namespace(x=["kulai_vector_dimension=1024"])
                 script = ScriptDirectory.from_config(cfg)
-                if script.get_heads() != ["kulai_memory_0004"]:
+                # Provision the host's reviewed canonical base in this owned demo DB only.
+                if script.get_heads() not in (["kulai_memory_0004"], ["kulai_memory_0005"]):
                     raise FactMemoryError("schema_required")
-                with EnvironmentContext(cfg, script, fn=lambda rev, ctx: script._upgrade_revs("kulai_memory_0004", rev)) as env:
+                with EnvironmentContext(cfg, script, fn=lambda rev, ctx: script._upgrade_revs(script.get_current_head(), rev)) as env:
                     env.configure(connection=sync, transactional_ddl=True)
                     env.run_migrations()
             await connection.run_sync(migrate)

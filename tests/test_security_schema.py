@@ -33,16 +33,24 @@ def test_historical_rate_fingerprint_encoding_stays_compatible():
     import asyncio
     import hashlib
     from datetime import datetime, timezone
-    from types import SimpleNamespace
     from kulai_memory.security_persistence.integrity import _fingerprint
     from kulai_memory.security_persistence.schema_v2 import RATE_TABLE
+    class Rows:
+        closed = False
+        def mappings(self):
+            return self
+        async def partitions(self, size):
+            assert size == 256
+            yield [{'id':1, 'attempts':1, 'window_start':datetime(2026,1,1,tzinfo=timezone.utc)}]
+        async def close(self):
+            self.closed = True
+    rows = Rows()
     class Connection:
-        async def stream(self, statement):
-            async def rows():
-                yield SimpleNamespace(_mapping={'id':1, 'attempts':1,
-                    'window_start':datetime(2026,1,1,tzinfo=timezone.utc)})
-            return rows()
+        async def stream(self, statement, *, execution_options):
+            assert execution_options == {'yield_per': 256}
+            return rows
     # Golden historical payload: v2 encoded the integer primary key as a string.
     payload=b'{"attempts":1,"id":"1","window_start":"2026-01-01T00:00:00+00:00"}'
     result=asyncio.run(_fingerprint(Connection(),RATE_TABLE))
     assert result.count==1 and result.sha256==hashlib.sha256(len(payload).to_bytes(8,'big')+payload).hexdigest()
+    assert rows.closed
