@@ -1,56 +1,56 @@
 TASK V2.8/8 — GALAXY S25 ULTRA, TEST FIZYCZNY W TOKU
 2026-10-21 | C:\Bombowy\Projekty\kulai_memory
-V2.8 ZAKOŃCZONE: NIE — pozostały ręczne testy telefonu.
+V2.8 ZAKOŃCZONE: NIE — zgłoszone Not paired blokuje dalsze testy.
 
-INSTALACJA / ZACHOWANE POŁĄCZENIE
-- PASS: Galaxy RFCY40ZL0SK / SM_S938B podłączony i autoryzowany przez ADB.
-- PASS: pierwotny APK FC5670FD31FB30D8872896F4B7A1E4509D48DFB6C13C1776C58946E5E2415BD6
-  zainstalowano przez adb install -r, wynik Success.
-- PASS (użytkownik): Paired, https://demo.kulai.eu/memory/, LOCAL_DEV OFF / SECURE.
-- PASS (użytkownik): gotowość LTE/5G przy odłączonym USB i wyłączonym Wi-Fi.
-  Następnie telefon ponownie podłączono przez USB w celu wgrania poprawki TTS.
-- PASS: poprawiony APK zainstalowano na tym samym Galaxy przez install -r, Success.
-  SHA-256: FC9667F8C6C0C9472B6610D5BDBDA96F2CC0E96754ECC9C12D21D18EB54B5F38
-  apksigner PASS, ten sam certyfikat podpisu co pierwotna zainstalowana wersja.
-  ADB reverse pusty; aplikację uruchomiono po aktualizacji.
-- Nie używano uninstall, pm clear, resetu Keystore ani nowego parowania.
-  FLAG_SECURE, blokada nagrywania ekranu i ustawienia bezpieczeństwa bez zmian.
+INSTALACJA / RZECZYWISTE TESTY
+- PASS: Galaxy S25 Ultra / SM_S938B, autoryzowane ADB.
+- PASS: aktualizacje wyłącznie adb install -r, Success; ten sam podpis APK.
+  Bez uninstall, pm clear, resetu Keystore i nowego parowania. ADB reverse pusty.
+- PASS wcześniej (użytkownik): Paired, https://demo.kulai.eu/memory/,
+  LOCAL_DEV OFF; testy przy odłączonym USB i wyłączonym Wi-Fi, przez LTE/5G.
+- PASS (użytkownik): CHAT nie czyta już memory_id po poprawce TTS.
+- PASS (użytkownik): NOTE — fikcyjny pakiet Rubin, 47 zł; pojawiło się Saved.
+- FAIL (użytkownik): następnie Server Connection / Not paired, brak powrotu.
+- NOT RUN: MEMORY tej notatki; ASK tekst/głos; CHAT wiele tur tekst/głos;
+  historia po restarcie; pełne TTS PL/EN/SPEAK/STOP/auto;
+  utrata LTE/reconnect/brak duplikatów; końcowa regresja i stabilność parowania.
 
-ZGŁOSZONY BŁĄD / MINIMALNA POPRAWKA ANDROIDA
-- FAIL (użytkownik, pierwotny APK): CHAT odczytywał na głos memory_id.
-- Przyczyna: lista źródeł była pomijana, lecz surowa treść odpowiedzi mogła
-  zawierać wpisane przez Qwena memory_id/UUID i trafiała bezpośrednio do TTS.
-- Poprawiono wyłącznie projekcję CHAT do mowy: usuwanie takich pól/referencji
-  inline, wariantów nawiasów/Markdown i UUID wskazanych Memories.
-  Działa dla SPEAK i auto-read; odpowiedź zawierająca same metadane jest pomijana.
-  Widoczna/zapisana odpowiedź, źródła, klasyczny ASK, silnik i ustawienia TTS bez zmian.
-- Test reprodukujący: 2 FAIL przed poprawką. Po poprawce:
-  testDebugUnitTest 225 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS (--rerun-tasks).
-  SKIP: istniejący opt-in Android/PostgreSQL, wymagający osobnego testowego backendu;
-  dla poprawki Androida nie uruchamiano migracji ani nowej bazy.
-- Regresja: auto/manual CHAT, PL/EN i liczby, brak metadanych w plannerze/native TTS,
-  zachowane treści/źródła, STOP AUDIO oraz wspólny TTS ASK/CHAT: PASS w testach JVM.
-- Ponowny fizyczny odsłuch poprawki: NOT RUN. Nie uznaję błędu za potwierdzony
-  jako naprawiony na telefonie przed odsłuchem użytkownika.
-- JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\v2.8-chat-tts-final.xml
-  Reprodukcja przed poprawką: v2.8-chat-tts-before-fix.xml w tym samym katalogu.
+POPRAWKI ANDROIDA
+- Poprzednia poprawka CHAT TTS: tylko projekcja do mowy usuwa inline memory_id
+  i UUID referencji; treść/historia/źródła oraz klasyczny ASK pozostają bez zmian.
+  Commit ef9e5e333206709095df1baa93c7aad9df46c979, wysłany na gałąź V2.
+- Znaleziony i odtworzony błąd: APPLY SERVER usuwał lokalne credentials także
+  przy tym samym adresie. Potrafił też anulować trwające odświeżanie sesji.
+- Poprawka: porównanie znormalizowanego adresu i trybu PRZED anulowaniem operacji.
+  Identyczne ustawienia zachowują parowanie i refresh. Zmiana serwera lub trybu
+  nadal usuwa stare credentials. Nie obchodzono blokady dostępu bez uwierzytelnienia.
+- Rzeczywista przyczyna kliknięcia na telefonie niepotwierdzona; oczekujemy
+  dokładnego komunikatu użytkownika. Nie wykonywano ponownego parowania.
+- Zmienione: pairing/PairingController.kt, testy PairingTest.kt,
+  SessionRenewalTest.kt; raport i odświeżony eksport istniejącym skryptem.
+- Testy reprodukujące: 2 FAIL przed poprawką.
+  Po poprawce testDebugUnitTest: 227 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
+  SKIP: dotychczasowy opt-in Android/PostgreSQL wymagający osobnego backendu testowego.
+  Sprawdzono zachowanie credentials po restarcie, warianty URL i aktywny refresh;
+  dotychczasowe testy NOTE/ASK/MEMORY/CHAT/TTS/pairing/auth bez regresji.
+- Dowody JUnit: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
+  v2.8-connection-before-fix.xml oraz v2.8-connection-final.xml.
+- Aktualny APK z poprawkami TTS i APPLY SERVER zainstalowany: Success.
+  SHA-256: 5C0707D48884A9D605CAFD5509F9659ACCE12589C44D289AAD4E448D3D13AD83
+  Test odzyskania dostępu na telefonie: jeszcze NOT RUN.
 
-POZOSTAŁE TESTY RĘCZNE — NOT RUN
-NOTE → Saved; MEMORY odczyt; ASK tekst/głos; CHAT kilka tur tekst/głos i kontekst;
-historia po zamknięciu aplikacji; TTS PL/EN SPEAK/STOP/auto po poprawce;
-utrata LTE/reconnect/brak duplikatów; końcowa regresja NOTE/ASK/MEMORY/parowania.
+STAN SERWERA / GIT
+- Odczyt 2026-10-21 04:17 UTC: kulai_memory_mvp 0005, security 0003.
+  Pierwotna sesja telefonu nadal trusted, bez revocation; access ważny w chwili kontroli.
+  Nie odczytywano ani nie ujawniano tokenów telefonu. Lokalny plik połączenia: 120 B.
+- Most nadal PID 32348, start UTC 2026-10-21T03:12:45.3247371Z, bez restartu.
+  Ostatnia wcześniejsza kontrola strict doctor PASS i Recovery Gate OPEN/match.
+- Bez migracji, zmian VPS/Nginx/WireGuard, usług lub kasowania danych V2.7.
+- Gałąź feature/kulai-memory-v2-conversations; jeden katalog; bez merge do main.
+  Commit/push tylko poprawki Androida, jej testów i aktualnego raportu na gałęzi V2.
+- Następny krok: dokładny komunikat z ekranu Not paired; przy utracie lokalnych
+  credentials nowe parowanie wymaga osobnego zatwierdzenia użytkownika.
 
-BACKEND / GIT / NASTĘPNY KROK
-- Tylko odczyt: kulai_memory_mvp 0005, security 0003, strict doctor PASS,
-  Recovery Gate OPEN i zgodny z bazą.
-- Ten sam most PID 32348, start UTC 2026-10-21T03:12:45.3247371Z. Bez restartów.
-  Bez migracji, zmian VPS/Nginx/WireGuard lub usuwania danych syntetycznych V2.7.
-- Gałąź feature/kulai-memory-v2-conversations, jeden katalog, bez merge do main.
-  Kod poprawki: models/ConversationModels.kt, MemoryClientController.kt,
-  test ChatSpeechTest.kt. Dodatkowo aktualny wynik.txt i eksport istniejącym skryptem.
-  Zwykły commit/push poprawki na tej samej gałęzi; SHA podany w odpowiedzi.
-- APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
-- Następna pojedyncza czynność: ponownie odłączyć USB, pozostawić Wi-Fi OFF i LTE/5G,
-  potwierdzić gotowość do fizycznego odsłuchu poprawki.
+APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
 Eksport: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt

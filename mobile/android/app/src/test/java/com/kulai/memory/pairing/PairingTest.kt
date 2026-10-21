@@ -209,6 +209,34 @@ class PairingTest {
         assertEquals(ConnectionStatus.REVOKED, controller.state.value.status); assertNull(controller.current()); controller.shutdown()
     }
 
+    @Test fun `applying the same normalized server preserves pairing across restart`() = runTest {
+        val store = Store(); val api = Api().apply { phase = "claimed" }
+        val pending = PendingPairing(UUID.randomUUID(), PairingController.randomSecret(), "", UUID.randomUUID(), "Phone", registered = true)
+        val saved = ConnectionRecord("https://demo.kulai.eu/memory/", false, pending,
+            StoredCredential(api.device, UUID.randomUUID(), PairingController.randomSecret(), Instant.now().plusSeconds(3600)))
+        store.saved = saved
+        var changed = 0
+        val io = StandardTestDispatcher(testScheduler)
+        val controller = PairingController(this, store, saved.origin, false, true, { api },
+            onConnectionChanged = { _, _ -> changed++ }, io = io)
+        controller.startup(); runCurrent()
+        assertEquals(ConnectionStatus.PAIRED, controller.state.value.status)
+        val startupChanges = changed
+        for (url in listOf("https://demo.kulai.eu/memory", "https://demo.kulai.eu/memory/", "https://DEMO.kulai.eu:443/memory/")) {
+            controller.configure(url, false); runCurrent()
+            assertSame(saved, store.saved)
+            assertEquals(ConnectionStatus.PAIRED, controller.state.value.status)
+            assertNotNull(controller.current())
+            assertEquals(startupChanges, changed)
+        }
+        controller.shutdown()
+        val restarted = PairingController(this, store, saved.origin, false, true, { api }, io = io)
+        restarted.startup(); runCurrent()
+        assertEquals(ConnectionStatus.PAIRED, restarted.state.value.status)
+        assertNotNull(restarted.current()); assertEquals(0, api.claims)
+        restarted.shutdown()
+    }
+
     @Test fun `changing server atomically removes credentials and forbids old origin`() = runTest {
         val store = Store(); val api = Api().apply { phase = "approved" }
         val controller = PairingController(this, store, "http://127.0.0.1:8000", false, true, { api }, io = StandardTestDispatcher(testScheduler))

@@ -53,14 +53,22 @@ class PairingController(private val scope: CoroutineScope, private val store: Co
         resume(configured)
     }
 
-    fun configure(value: String, localDev: Boolean) = launch {
-        val origin = validate(value, localDev)
-        snapshot.set(null); expiry?.cancel()
-        val changed = ConnectionRecord(origin.value, localDev)
-        withContext(io) { store.write(changed) }
-        record = changed
-        mutableState.value = ConnectionState(origin.value, localDev)
-        onConnectionChanged(origin.value, localDev)
+    fun configure(value: String, localDev: Boolean) {
+        val saved = record
+        // Re-applying the same service must neither erase credentials nor cancel a rotation.
+        // Compare normalized URLs before launch(), which cancels the previous operation.
+        if (saved != null && saved.localDev == localDev && runCatching {
+                validate(value, localDev).value == validate(saved.origin, saved.localDev).value
+            }.getOrDefault(false)) return
+        launch {
+            val origin = validate(value, localDev)
+            snapshot.set(null); expiry?.cancel()
+            val changed = ConnectionRecord(origin.value, localDev)
+            withContext(io) { store.write(changed) }
+            record = changed
+            mutableState.value = ConnectionState(origin.value, localDev)
+            onConnectionChanged(origin.value, localDev)
+        }
     }
 
     fun begin(session: String, invitation: String, name: String) = launch {

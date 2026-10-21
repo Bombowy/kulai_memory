@@ -64,6 +64,19 @@ class SessionRenewalTest {
         controller.shutdown()
     }
 
+    @Test fun `applying unchanged server does not cancel in flight renewal`() = runTest {
+        val initial=credential(); val store=Store(record(initial)); val api=Api(initial).apply { gate=CompletableDeferred() }
+        val controller=PairingController(this,store,origin,false,true,{api},io=StandardTestDispatcher(testScheduler),clock={now})
+        controller.startup(); runCurrent()
+        assertTrue(store.saved!!.renewing); assertEquals(1,api.calls)
+        controller.configure("$origin/",false); runCurrent()
+        assertTrue(store.saved!!.renewing); assertEquals(1,api.calls)
+        api.gate!!.complete(Unit); runCurrent()
+        assertEquals(ConnectionStatus.PAIRED,controller.state.value.status)
+        assertFalse(store.saved!!.renewing); assertNotNull(controller.current())
+        controller.shutdown()
+    }
+
     @Test fun `restart with unfinished intent never retransmits old refresh`() = runTest {
         val initial=credential(); val store=Store(record(initial,renewing=true)); val api=Api(initial)
         val controller=PairingController(this,store,origin,true,true,{api},io=StandardTestDispatcher(testScheduler),clock={now})
