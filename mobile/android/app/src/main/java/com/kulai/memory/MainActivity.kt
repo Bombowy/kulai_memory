@@ -3,6 +3,7 @@ package com.kulai.memory
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,7 +20,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        window.setFlags(screenCaptureWindowFlags(BuildConfig.DEBUG), WindowManager.LayoutParams.FLAG_SECURE)
         viewModel.setMicrophonePermission(
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED,
@@ -44,3 +45,6 @@ class MainActivity : ComponentActivity() {
         )
     }
 }
+
+internal fun screenCaptureWindowFlags(isDebug: Boolean): Int =
+    if (isDebug) 0 else WindowManager.LayoutParams.FLAG_SECURE

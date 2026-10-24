@@ -402,32 +402,19 @@ content. Archive is the reversible removal flow; permanent DELETE is also availa
 for both Active and Archived Memories.
 Voice/RAG functionality remains available alongside optional Desktop speech.
 
-Desktop **DELETE** shows the selected UUID, revision and Active/Archived status
-without displaying content. Cancel is the default; type exactly `DELETE` to enable
-the destructive action. Choose a **new `.dump` path outside the repository**, with
-an existing parent and no symlink/junction traversal. Existing files are rejected.
+Desktop **DELETE** immediately submits the selected Memory's UUID and revision
+to the existing atomic delete operation. It works for Active and Archived Memories
+without confirmation dialogs, typed confirmation, a file chooser, backup or restore.
 
-Every delete requires strict **db_doctor PASS**, a full PostgreSQL custom-format
-backup with size/SHA-256, and an **actual restore into an owned temporary database**.
-The restored complete Memory/vector/tombstone snapshot must match the source;
-source changes or verification failures prevent deletion. The dump is retained
-after success and after failure (a failed dump may be incomplete and unverified).
-After verified backup creation returns, Desktop rechecks the complete source
-snapshot and the retained regular file's size/SHA-256 immediately before delete.
-Any change, including archive/restore or another Memory, blocks deletion; pending
-cancellation also prevents starting the delete transaction.
-Recovery requires the retained verified backup; there is no Undo or automatic
-restore into the source. Keep the backup in a safe location.
-
-Only then does the existing atomic delete run with `expected_revision`, checked
+The existing atomic delete uses `expected_revision`, checked
 under the canonical row lock in the same transaction. A stale selection cannot
 delete a newer revision: **Memory changed. Reload it before deleting.** Deletion
 removes canonical Memory and its exact vector and writes an ingestion tombstone;
 the retired ingestion identity cannot replay, even with different content. Library
-and Recent refresh after success. DELETE makes no Whisper/BGE/Qwen requests.
-Backup/subprocess/DB work runs on the existing worker, with conflicting actions
-disabled. Closing drains backup/restore work without starting delete; cancellation
-before commit rolls back, while an already committed deletion remains durable.
+and Recent refresh after success and the status reads **Memory deleted**.
+DELETE makes no Whisper/BGE/Qwen requests. Database work runs on the existing
+worker, with conflicting actions disabled. Errors and cancellation before commit
+roll back the Memory, vector and tombstone together; a committed deletion remains durable.
 
 ## Local WebSocket voice-memory adapter
 
@@ -1193,7 +1180,7 @@ content/revision. A repeated restore can repair a missing vector. Prepared vecto
 are checked against active canonical revision under FOR UPDATE in every host write
 path, including manual reindex. Stale/archived vectors are never written; unexpected
 archived or revision-incompatible search hits fail safely. Desktop Memory Library
-provides EDIT, ARCHIVE, and RESTORE controls, plus verified-backup hard DELETE.
+provides EDIT, ARCHIVE, and RESTORE controls, plus immediate atomic DELETE.
 There is no public HTTP/WebSocket lifecycle endpoint yet.
 
 `scripts/manage_memory.py` provides `show`, `edit`, `archive`, and `restore`:

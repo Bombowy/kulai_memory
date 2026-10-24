@@ -48,9 +48,6 @@ from kulai_memory.application.memory import Memory
 from kulai_memory.application.lifecycle import MemoryRevisionConflictError
 from kulai_memory.library_persistence import read_memory_library
 from kulai_memory.lifecycle_persistence import change_memory
-from kulai_memory.backup_service import (
-    create_verified_backup, revalidate_verified_backup, validate_delete_backup_output, VerifiedBackupResult,
-)
 from kulai_memory.deletion_persistence import delete_memory as delete_canonical_memory
 from kulai_memory.application.deletion import MemoryDeletionRevisionConflictError
 from kulai_memory.application.rag import INSUFFICIENT_CONTEXT_ANSWER, MemoryRagError, MemoryRagResult
@@ -95,7 +92,7 @@ from .models import (
     DesktopMemoryItem, DesktopMemoryFilter, DesktopMemoryChangeStatus, DesktopMemoryChangeResult,
     DesktopLibraryInputError, DesktopLibraryReadError, DesktopMemoryChangeError,
     DesktopMemoryEditInputError, DesktopMemoryConflictError, DesktopMemoryArchivedError,
-    DesktopDeleteInputError, DesktopBackupError, DesktopDeleteError, DesktopDeleteConflictError,
+    DesktopDeleteInputError, DesktopDeleteError, DesktopDeleteConflictError,
     DesktopDeleteProgress, DesktopDeleteProgressState, DesktopMemoryDeleteResult,
     DesktopSpeechProgress, DesktopSpeechProgressState, DesktopSpeechError, DesktopSpeechUnavailableError,
 )
@@ -211,7 +208,6 @@ class DesktopController:
         indexer_factory: RuntimeIndexerFactory = AutomaticMemoryIndexer,
         embedding_provider_factory: EmbeddingProviderFactory = create_embedding_provider,
         rag_runtime_factory: RagRuntimeFactory = MemoryRagRuntime,
-        verified_backup_factory: Callable[..., Awaitable[VerifiedBackupResult]] | None = None,
         speech_runtime_factory: Callable[..., SpeechRuntime | None] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
@@ -226,11 +222,9 @@ class DesktopController:
         self._indexer_factory = indexer_factory
         self._embedding_provider_factory = embedding_provider_factory
         self._rag_runtime_factory = rag_runtime_factory
-        self._verified_backup_factory = verified_backup_factory or create_verified_backup
         self._speech_runtime_factory = speech_runtime_factory or create_speech_runtime
         self._speech: SpeechRuntime | None = None
         self._speech_task: asyncio.Task[Any] | None = None
-        self._db_config: DbConfig | None = None
         self._delete_task: asyncio.Task[Any] | None = None
         self._embedding_provider: OwnedEmbeddingProvider | None = None
         self._rag: DesktopMemoryRag | None = None
@@ -278,7 +272,6 @@ class DesktopController:
             self._validate_canonical_stt()
             try:
                 config = self._database_config_factory()
-                self._db_config = config
                 report = await self._doctor(config.async_url)
             except asyncio.CancelledError:
                 raise
@@ -639,13 +632,9 @@ class DesktopController:
         return await self._change_library_memory(action="restore", memory_id=memory_id)
 
     async def delete_memory(
-        self, *, memory_id: UUID, expected_revision: int, backup_output: Path,
+        self, *, memory_id: UUID, expected_revision: int,
     ) -> DesktopMemoryDeleteResult:
         if not isinstance(memory_id, UUID) or type(expected_revision) is not int or expected_revision < 1:
-            raise DesktopDeleteInputError from None
-        try:
-            output = validate_delete_backup_output(backup_output)
-        except Exception:
             raise DesktopDeleteInputError from None
         if self._operation_lock.locked():
             raise DesktopStateError
@@ -653,22 +642,9 @@ class DesktopController:
             self._require_library_idle()
             self._delete_task = asyncio.current_task()
             try:
-                self._progress_callback(DesktopDeleteProgress(DesktopDeleteProgressState.PREPARING_BACKUP))
-                try:
-                    if self._db_config is None or not (await self._doctor(self._db_config.async_url)).ok:
-                        raise DesktopBackupError()
-                    backup = await self._verified_backup_factory(output, config=self._db_config,
-                        app_env=self._settings.app_env, on_verifying=lambda: self._progress_callback(
-                            DesktopDeleteProgress(DesktopDeleteProgressState.VERIFYING_BACKUP)))
-                    if self._closing or asyncio.current_task().cancelling():
-                        raise asyncio.CancelledError
-                    await revalidate_verified_backup(backup, config=self._db_config)
-                except Exception:
-                    raise DesktopBackupError from None
-                # Administrative cancellation must never advance into the delete transaction.
+                self._progress_callback(DesktopDeleteProgress(DesktopDeleteProgressState.DELETING))
                 if self._closing or asyncio.current_task().cancelling():
                     raise asyncio.CancelledError
-                self._progress_callback(DesktopDeleteProgress(DesktopDeleteProgressState.DELETING))
                 try:
                     result = await delete_canonical_memory(memory_id=memory_id, expected_revision=expected_revision,
                                                          session_factory=self._session_factory)
@@ -676,8 +652,7 @@ class DesktopController:
                     raise DesktopDeleteConflictError from None
                 except Exception:
                     raise DesktopDeleteError from None
-                return DesktopMemoryDeleteResult(result.memory_id, backup.path, backup.size_bytes, backup.sha256,
-                                                 result.memory_deleted, result.vector_deleted_count)
+                return DesktopMemoryDeleteResult(result.memory_id, result.memory_deleted, result.vector_deleted_count)
             finally:
                 self._delete_task = None
 

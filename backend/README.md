@@ -176,29 +176,20 @@ Library DB/model work stays on the existing worker and is serialized with Voice
 Note/Text ASK/Ask by Voice. No schema change is required. Lifecycle/RAG tests use
 owned synthetic DBs, never main mutations. Optional Desktop speech is described below.
 
-Desktop **DELETE** works for Active and Archived Memories. Its confirmation shows
-UUID/revision/status, defaults to Cancel and requires exactly `DELETE`. Archive
-remains the reversible alternative; hard delete is permanent in the canonical DB.
-Choose a new `.dump` outside the repo (no overwrite or symlink/junction traversal).
-Strict doctor PASS, full `pg_dump`, size/SHA-256 and an actual `pg_restore` into an
-owned temporary DB are mandatory. Complete restored/source snapshots must match
-and source must remain unchanged throughout verification. Any failure prevents
-delete and retains any dump, including incomplete/unverified output after a failure.
-
-The shared host `backup_service` is also used by backup/restore CLI tooling.
-After backup creation returns, `revalidate_verified_backup` checks the complete
-source snapshot plus the retained regular file's size/SHA-256 again, immediately
-before delete. Archive/restore, unrelated Memory changes or archive tampering
-block deletion. A cancellation guard follows this check.
-Desktop then calls the existing deletion helper with `expected_revision`: check
+Desktop **DELETE** immediately submits the selected Active or Archived Memory's
+UUID and revision to the existing deletion helper. There is no confirmation
+dialog, typed `DELETE`, file chooser, dump, backup or restore during DELETE.
+The helper uses `expected_revision`: check
 under canonical lock, Memory/vector delete and ingestion tombstone all share one
 transaction. A stale revision cannot delete newer content. Retired ingestion IDs
-cannot replay, including different content. Backups remain after success; recovery
-requires a retained verified dump, with no automatic source restore or Undo.
-DELETE calls no models, runs on the existing asyncio worker, offloads subprocesses,
-serializes all Desktop actions and refreshes Library/Recent after success. Closing
-drains backup/restore without advancing to delete; pre-commit cancellation rolls
-back, and completed commits remain durable. There is no public lifecycle endpoint.
+cannot replay, including different content. Errors and cancellation before commit
+roll back Memory, vector and tombstone together; a completed commit remains durable.
+After success the UI shows **Memory deleted** and refreshes both Memory Library
+and Recent Memory. The existing worker awaits the Library and Recent reads in
+one coroutine, sequentially, respecting the controller's shared `asyncio.Lock`;
+the UI does not submit a competing Recent request. DELETE calls no models.
+Archive remains the reversible alternative. Separate backup/restore CLI tooling
+is unchanged; Desktop DELETE does not depend on it. There is no public lifecycle endpoint.
 
 Local PostgreSQL is started only through `scripts/postgres.py`, which passes
 `backend/.env` explicitly to Compose. `scripts/db_doctor.py` performs read-only

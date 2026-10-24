@@ -1,49 +1,59 @@
-TASK V2.8/8 — WERYFIKACJA GALAXY I SCALENIE V2
-2026-10-21 | C:\Bombowy\Projekty\kulai_memory
+TASK — SCREENSHOTY ANDROIDA W DEBUG, OCHRONA W RELEASE
+2026-10-24 | C:\Bombowy\Projekty\kulai_memory
 
-STATUS
-- V2 działa na fizycznym Galaxy S25 Ultra. Użytkownik potwierdził działanie
-  i polecił commit, scalenie do main oraz push.
-- Nie ma osobnego potwierdzenia kontrolowanej utraty LTE i ponowienia bez
-  duplikatów; ten przypadek pozostaje NOT CONFIRMED. Ogólne „działa wszystko”
-  nie zastępuje opisu wykonania tego testu.
+WYKONANE
+- Znaleziono jedno ustawienie FLAG_SECURE: MainActivity.onCreate. W kodzie
+  aplikacji nie znaleziono innych blokad przechwytywania ani nadpisań securePolicy.
+- MainActivity ustawia tylko bit FLAG_SECURE przez window.setFlags z maską.
+  BuildConfig.DEBUG=true: bit wyczyszczony, standardowe screenshoty i nagrywanie
+  dozwolone. RELEASE: FLAG_SECURE pozostaje aktywne dla wszystkich ekranów.
+  Inne flagi okna pozostają zachowane. Bez przycisku ani ustawienia screenshotów.
+- Polityka zależy od typu buildu; nie zmienia trybu SECURE/LOCAL_DEV, autoryzacji,
+  parowania, URL serwera, danych ani UI NOTE/MEMORY/ASK/CHAT.
+- Zaktualizowano opis ochrony ekranów w docs/LOCAL_ASSISTANT_TRANSPORT.md.
 
-TESTY FIZYCZNE
-- PASS użytkownika: NOTE Saved, odczyt notatki w MEMORY po odłączeniu USB,
-  ASK tekstowy i głosowy, CHAT tekst/głos ze wspólnym kontekstem,
-  historia po ponownym otwarciu, tematy rozmów, odczyt PL i EN.
-- PASS: SPEAK, auto-read i STOP AUDIO na Galaxy przez ADB; odczyt PL/EN
-  i końcowe działanie potwierdzone przez użytkownika. STOP AUDIO objęte jego
-  końcowym ogólnym potwierdzeniem po prośbie o sprawdzenie tego przycisku.
-- Aktualizacja install -r: Success, podpis zgodny, rekord parowania zachowany.
-  Server https://demo.kulai.eu/memory/, SECURE, LOCAL_DEV OFF, Paired.
-- Tematy sprawdzone także technicznie przez ADB na LTE, Wi-Fi OFF, reverse pusty.
-  Osobnego testu tematów przy odłączonym USB nie potwierdzono.
-
-KOD I REGRESJA
-- Android: CHAT z trwałą historią tekst/głos i tematami z pierwszego pytania.
-  Poprawki TTS usuwają metadane Memory i Markdown wyłącznie z tekstu mowy.
-  Można wyjść z Server Connection bez parowania; identyczne APPLY zachowuje sesję.
-- Ostatnia pełna regresja Androida: 231 PASS / 0 FAIL / 1 SKIP; assembleDebug PASS.
-  Wynik ponownie zweryfikowany w zapisanym XML, bez powtarzania testów dla raportu.
-  SKIP: istniejący opt-in test Android/PostgreSQL wymagający testowego backendu.
-- Dowody: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
-  v2.8-chat-topics-final.xml, v2.8-chat-topics-phone.json i raporty TTS.
-- Kontrola nazw plików i sygnatur sekretów w 74 plikach różnicy V2/main: PASS.
-  git diff --check: PASS. Bez nowych zmian kodu przy końcowym scalaniu.
-
-GIT I USŁUGI
-- Zgoda użytkownika obejmuje teraz main. Zweryfikowano, że main jest przodkiem V2;
-  scalenie fast-forward zachowuje całą historię i identyczny kod w katalogu roboczym.
-- Kod V2 przed końcowym raportem: 44885afd34b15c93e50ed0c1f3b5d5d5f582f15d.
-  Końcowy commit raportu: git log -1; lokalne i zdalne main/V2 sprawdzane po push.
-- Jeden katalog projektu; bez worktree, force push i usuwania gałęzi V2.
-- Bez restartów mostu/backendu/Nginx/PostgreSQL/Ollamy, migracji, restore,
-  zmian VPS/WireGuard/certyfikatów oraz kasowania danych aplikacji.
-  Most PID 32348 działa od 2026-10-21T03:12:45Z. Ostatnio zweryfikowany schemat
-  kulai_memory_mvp: memory 0005 / security 0003; legacy kulai_memory bez zmian.
-
+TESTY / APK
+- testDebugUnitTest: 234 PASS / 0 FAIL / 1 SKIP.
+  SKIP: istniejący opt-in ChatPostgresBackendTest wymagający izolowanego backendu
+  i PostgreSQL; nie uruchamiano integracji z produkcyjną bazą.
+- testReleaseUnitTest --tests com.kulai.memory.ScreenCapturePolicyTest:
+  3 PASS / 0 FAIL. Nowe testy obejmują DEBUG, RELEASE i rzeczywisty BuildConfig
+  wybranego wariantu. Te same 3 testy przeszły także w pełnej regresji DEBUG.
+- assembleDebug: PASS. apksigner verify: PASS.
 APK: C:\Bombowy\Projekty\kulai_memory\mobile\android\app\build\outputs\apk\debug\app-debug.apk
-SHA-256: 1D36A249BEE4ABCEE5229E7A9984BE04BE933376EBF11842B4229A2B342B3C7D
+SHA-256: 03B434DAC1DF6178479C977E2F58EE505FEDA6F70108BA5FC94F8C23C7486908
+
+INSTALACJA / TELEFON
+- Przed instalacją wykonano adb devices -l. Każdorazowo wybierano dynamicznie
+  jedyne urządzenie ze stanem device; bez hardkodowania numeru seryjnego.
+  Początkowo podłączony SM-S916B sprawdzono tylko odczytowo. Właściwą aktualizację
+  wykonano na później podłączonym Galaxy S25 Ultra / SM-S938B.
+- adb install -r: Success. UID, dataDir i firstInstallTime identyczne przed/po.
+  Bez uninstall, pm clear, resetu Keystore, nowego parowania i zmian konfiguracji.
+- Aplikację uruchomiono. Odczyt okna MainActivity po aktualizacji:
+  fl=81810100, bit 0x2000 (FLAG_SECURE) nieaktywny; okno widoczne.
+- Końcowy adb screencap, nagrywanie oraz ręczny Power+Volume Down: NOT RUN.
+  Aplikacja nie była już widoczna w UI, następnie ADB nie widziało telefonu;
+  nie przechwytywano innych aplikacji.
+  Statusu „Paired” nie potwierdzono ponownie w UI po aktualizacji; tożsamość instalacji
+  i katalog danych zachowane. Dane i kod przechowywania parowania nie były zmieniane.
+- Dowód instalacji: C:\Users\patry\AppData\Local\KulAI-Memory-Tests\
+  screenshots-20261024-install.json. Nie zapisywano zrzutów prywatnej zawartości.
+
+PLIKI / GIT / USŁUGI
+- Zmienione w tym zadaniu:
+  mobile/android/app/src/main/java/com/kulai/memory/MainActivity.kt
+  mobile/android/app/src/test/java/com/kulai/memory/ScreenCapturePolicyTest.kt (nowy)
+  docs/LOCAL_ASSISTANT_TRANSPORT.md
+  wynik.txt
+- Użytkownik zatwierdził commit i push na main. Zakres obejmuje także wcześniejsze
+  poprawki Desktop DELETE bez backupu, odświeżanie Library/Recent i dokumentację.
+  Ich przetestowany kod zachowany — porównano SHA-256. Wyniki wcześniejszych
+  kontroli: Desktop/Qt 219 PASS; PostgreSQL na bazach testowych 18 PASS.
+- git diff --check i kontrola sygnatur sekretów/nazw plików: PASS.
+  Publikacja zwykłym commit/push; wynik synchronizacji weryfikowany po push.
+- Bez restartów backendu/mostu i zmian VPS, bazy, certyfikatów lub usług.
+  Most PID 32348 nadal działa od 2026-10-21T03:12:45.3247371Z.
+- Eksport odświeżony istniejącym scripts/export_repo.py.
 Raport: C:\Bombowy\Projekty\kulai_memory\wynik.txt
 Eksport: C:\Bombowy\Projekty\kulai_memory\kod_repo_do_analizy.txt

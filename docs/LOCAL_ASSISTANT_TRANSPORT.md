@@ -564,7 +564,8 @@ publishing a credential. Ciphertext version is authenticated as AAD. Android bac
 disabled and that directory is excluded from automatic backup/transfer. See the
 [Keystore key-generation contract](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec)
 and [Android backup exclusions](https://developer.android.com/identity/data/autobackup?hl=en).
-FLAG_SECURE protects sensitive screens. JVM tests use injected crypto/storage ports;
+FLAG_SECURE protects sensitive screens in RELEASE builds. DEBUG builds allow standard
+screenshots and screen recording for portfolio/demo use. JVM tests use injected crypto/storage ports;
 actual AndroidKeyStore persistence was also tested on a physical SM-S938B (Android 16).
 No device attestation, hardware-key guarantee or protection against a compromised
 OS/administrator is asserted.
